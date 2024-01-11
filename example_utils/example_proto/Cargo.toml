@@ -1,0 +1,15 @@
+[package]
+name = "example_proto"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+prost = "0.12"
+prost-types = "0.12"
+
+[build-dependencies]
+prost-build = { version = "0.12" }
+protoc-bin-vendored = { version = "3" }
+ureq = "2.7"
