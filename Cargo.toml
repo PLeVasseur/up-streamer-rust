@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "src/ustreamer",
+    "src/udiscovery",
+    "src/usubscription",
+    "src/utwin",
+]
+resolver = "2"
