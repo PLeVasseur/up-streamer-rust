@@ -24,6 +24,7 @@ use uprotocol_sdk::{
 };
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::config::Config;
+use zenoh::prelude::WhatAmI;
 
 use example_proto::proto::example::hello_world::v1::*;
 
@@ -77,7 +78,13 @@ async fn main() {
     // Your example code goes here
     println!("This is an example client for uStreamer.");
 
-    let ulink = ULinkZenoh::new(Config::default()).await.unwrap();
+    let mut config = Config::default();
+    // TODO: Need to implement basic uStreamer so that we can connect as a Client
+    // config.set_mode(Some(WhatAmI::Client)).expect("Setting as Peer failed");
+    config
+        .set_mode(Some(WhatAmI::Peer))
+        .expect("Setting as Peer failed");
+    let ulink = ULinkZenoh::new(config).await.unwrap();
     let timer_hour_uuri = UUri {
         authority: None,
         entity: Option::from(UEntity {
