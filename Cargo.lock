@@ -2928,6 +2928,7 @@ dependencies = [
 name = "ustreamer"
 version = "0.1.0"
 dependencies = [
+ "async-std",
  "example-proto",
  "uprotocol-sdk",
  "uprotocol_zenoh_rust",
