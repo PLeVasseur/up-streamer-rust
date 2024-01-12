@@ -1,5 +1,5 @@
 [package]
-name = "example_proto"
+name = "example-proto"
 version = "0.1.0"
 edition = "2021"
 

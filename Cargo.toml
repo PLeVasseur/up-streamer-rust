@@ -4,6 +4,6 @@ members = [
     "src/udiscovery",
     "src/usubscription",
     "src/utwin",
-    "example_utils/example_proto",
+    "example-utils/example-proto",
 ]
 resolver = "2"

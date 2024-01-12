@@ -11,17 +11,21 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+#[allow(non_snake_case)]
+pub mod proto {
+    // protoc-generated stubs, see build.rs
+    pub mod google {
+        pub mod r#type {
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+            include!(concat!(env!("OUT_DIR"), "/google.r#type.rs"));
+        }
+    }
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
+    pub mod example {
+        pub mod hello_world {
+            pub mod v1 {
+                include!(concat!(env!("OUT_DIR"), "/example.hello_world.v1.rs"));
+            }
+        }
     }
 }

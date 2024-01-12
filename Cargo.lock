@@ -792,7 +792,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "example_proto"
+name = "example-proto"
 version = "0.1.0"
 dependencies = [
  "prost",
@@ -2928,6 +2928,7 @@ dependencies = [
 name = "ustreamer"
 version = "0.1.0"
 dependencies = [
+ "example-proto",
  "uprotocol-sdk",
  "uprotocol_zenoh_rust",
  "zenoh",

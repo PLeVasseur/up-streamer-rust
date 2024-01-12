@@ -9,3 +9,6 @@ edition = "2021"
 uprotocol-sdk = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust.git", branch = "support_rpcserver" }
 zenoh = { version = "0.10.1-rc", features = ["unstable"]}
 uprotocol_zenoh_rust = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust-ulink-zenoh.git", branch = "support_rpcserver" }
+
+[dev-dependencies]
+example-proto = { path = "../../example-utils/example-proto"}
