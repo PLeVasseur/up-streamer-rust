@@ -1,3 +1,16 @@
+/********************************************************************************
+ * Copyright (c) 2023 Contributors to the Eclipse Foundation
+ *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Apache License Version 2.0 which is available at
+ * https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ ********************************************************************************/
+
 extern crate example_proto;
 extern crate prost;
 extern crate uprotocol_sdk;
@@ -16,6 +29,15 @@ use zenoh::config::Config;
 
 use example_proto::proto::example::hello_world::v1::*;
 use example_proto::proto::google::r#type::*;
+
+fn print_time(timer: &Timer) {
+    if let Some(ref time) = timer.time {
+        println!(
+            "Timer: H: {} M: {} S: {} NS: {}",
+            time.hours, time.minutes, time.seconds, time.nanos
+        );
+    }
+}
 
 #[async_std::main]
 async fn main() {
@@ -136,13 +158,8 @@ async fn main() {
         task::sleep(Duration::from_secs(1)).await;
 
         println!("Attempting send of timers...");
-        if let Some(ref mut time) = second_timer.time {
-            println!(
-                "Second Timer: H: {} M: {} S: {} NS: {}",
-                time.hours, time.minutes, time.seconds, time.nanos
-            );
-        }
 
+        // ---- hour_timer ----
         let mut hour_timer_buf = Vec::new();
         hour_timer
             .encode(&mut hour_timer_buf)
@@ -163,7 +180,8 @@ async fn main() {
             .await
         {
             Ok(_) => {
-                println!("Sending timer_hour succeeded")
+                println!("Sending timer_hour succeeded");
+                print_time(&hour_timer);
             }
             Err(status) => {
                 println!("Seconding timer_hour failed: {:?}", status)
@@ -174,6 +192,7 @@ async fn main() {
             time.hours += 1;
         }
 
+        // ---- minute_timer ----
         let mut minute_timer_buf = Vec::new();
         minute_timer
             .encode(&mut minute_timer_buf)
@@ -194,7 +213,8 @@ async fn main() {
             .await
         {
             Ok(_) => {
-                println!("Sending timer_minute succeeded")
+                println!("Sending timer_minute succeeded");
+                print_time(&minute_timer);
             }
             Err(status) => {
                 println!("Seconding timer_minute failed: {:?}", status)
@@ -205,6 +225,7 @@ async fn main() {
             time.minutes += 1;
         }
 
+        // ---- second_timer ----
         let mut second_timer_buf = Vec::new();
         second_timer
             .encode(&mut second_timer_buf)
@@ -225,7 +246,8 @@ async fn main() {
             .await
         {
             Ok(_) => {
-                println!("Sending timer_second succeeded")
+                println!("Sending timer_second succeeded");
+                print_time(&second_timer);
             }
             Err(status) => {
                 println!("Seconding timer_second failed: {:?}", status)
@@ -236,6 +258,7 @@ async fn main() {
             time.seconds += 1;
         }
 
+        // ---- nanosecond_timer ----
         let mut nanosecond_timer_buf = Vec::new();
         nanosecond_timer
             .encode(&mut nanosecond_timer_buf)
@@ -256,7 +279,8 @@ async fn main() {
             .await
         {
             Ok(_) => {
-                println!("Sending timer_nanosecond succeeded")
+                println!("Sending timer_nanosecond succeeded");
+                print_time(&nanosecond_timer);
             }
             Err(status) => {
                 println!("Seconding timer_nanosecond failed: {:?}", status)
