@@ -3,41 +3,19 @@ extern crate prost;
 extern crate uprotocol_sdk;
 extern crate uprotocol_zenoh_rust;
 
-use async_std::task::{self, block_on};
+use async_std::task::{self};
 use prost::Message;
-use std::sync::{Arc, Mutex};
-use std::time;
 use std::time::Duration;
 use uprotocol_sdk::uprotocol::{u_payload, UAttributes};
 use uprotocol_sdk::{
-    rpc::{RpcClient, RpcServer},
-    transport::builder::UAttributesBuilder,
     transport::datamodel::UTransport,
-    uprotocol::{
-        Data, UCode, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UPriority,
-        UResource, UStatus, UUri, Uuid,
-    },
-    uri::builder::resourcebuilder::UResourceBuilder,
+    uprotocol::{UEntity, UMessageType, UPayload, UResource, UUri},
 };
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::config::Config;
 
 use example_proto::proto::example::hello_world::v1::*;
 use example_proto::proto::google::r#type::*;
-
-fn second_timer_listener(result: Result<UMessage, UStatus>) {
-    match result {
-        Ok(message) => {
-            println!("second_timer_listener returned UMessage");
-        }
-        Err(status) => {
-            println!(
-                "second_timer_listener returned UStatus: {:?}",
-                status.get_code()
-            );
-        }
-    }
-}
 
 #[async_std::main]
 async fn main() {
@@ -85,6 +63,12 @@ async fn main() {
     loop {
         task::sleep(Duration::from_secs(1)).await;
         println!("Attempting send of timer_second...");
+        if let Some(ref mut time) = second_timer.time {
+            println!(
+                "Time: H: {} M: {} S: {} NS: {}",
+                time.hours, time.minutes, time.seconds, time.nanos
+            );
+        }
 
         // Create a buffer to hold the serialized data
         let mut second_timer_buf = Vec::new();
