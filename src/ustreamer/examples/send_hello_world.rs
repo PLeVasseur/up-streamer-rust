@@ -19,11 +19,12 @@ extern crate uprotocol_zenoh_rust;
 use async_std::task::{self};
 use prost::Message;
 use std::time::Duration;
-use uprotocol_sdk::uprotocol::{u_payload, UAttributes};
+use uprotocol_sdk::uprotocol::{u_payload, UAttributes, UCode, UStatus};
 use uprotocol_sdk::{
     transport::datamodel::UTransport,
     uprotocol::{UEntity, UMessageType, UPayload, UResource, UUri},
 };
+use uprotocol_sdk::uri::serializer::{LongUriSerializer, UriSerializer};
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::config::Config;
 use zenoh::prelude::WhatAmI;
@@ -40,17 +41,50 @@ fn print_time(timer: &Timer) {
     }
 }
 
+fn to_zenoh_key_string(uri: &UUri) -> Result<String, UStatus> {
+    // uProtocol Uri format: https://github.com/eclipse-uprotocol/uprotocol-spec/blob/6f0bb13356c0a377013bdd3342283152647efbf9/basics/uri.adoc#11-rfc3986
+    // up://<user@><device>.<domain><:port>/<ue_name>/<ue_version>/<resource|rpc.method><#message>
+    //            UAuthority               /        UEntity       /           UResource
+    let Ok(mut uri_string) = LongUriSerializer::serialize(uri) else {
+        return Err(UStatus::fail_with_code(
+            UCode::Internal,
+            "Unable to transform to Zenoh key",
+        ));
+    };
+    if uri_string.starts_with('/') {
+        let _ = uri_string.remove(0);
+    }
+
+    // TODO: Check whether these characters are all used in UUri.
+    // TODO: We should have the # and ? in the attachment instead of Zenoh key
+    let zenoh_key = uri_string
+        .replace('*', "\\8")
+        .replace('$', "\\4")
+        .replace('?', "\\0")
+        .replace('#', "\\3")
+        .replace("//", "\\/");
+    Ok(zenoh_key)
+}
+
 #[async_std::main]
 async fn main() {
     // Your example code goes here
     println!("This is an example sender for uStreamer.");
 
+    let locator = vec![String::from("tcp/127.0.0.1:17449")];
+
     let mut config = Config::default();
     // TODO: Need to implement basic uStreamer so that we can connect as a Client
-    // config.set_mode(Some(WhatAmI::Client)).expect("Setting as Peer failed");
     config
-        .set_mode(Some(WhatAmI::Peer))
-        .expect("Setting as Peer failed");
+        .set_mode(Some(WhatAmI::Client))
+        .expect("Setting as Client failed");
+    config
+        .connect
+        .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
+        .unwrap();
+    // config
+    //     .set_mode(Some(WhatAmI::Peer))
+    //     .expect("Setting as Peer failed");
     let ulink = ULinkZenoh::new(config).await.unwrap();
     let timer_hour_uuri = UUri {
         authority: None,
@@ -112,6 +146,22 @@ async fn main() {
             id: Some(4),
         }),
     };
+
+    if let Ok(key) = to_zenoh_key_string(&timer_hour_uuri) {
+        println!("timer_hour_uuri zenoh key: {}", key);
+    }
+
+    if let Ok(key) = to_zenoh_key_string(&timer_minute_uuri) {
+        println!("timer_minute_uuri zenoh key: {}", key);
+    }
+
+    if let Ok(key) = to_zenoh_key_string(&timer_second_uuri) {
+        println!("timer_second_uuri zenoh key: {}", key);
+    }
+
+    if let Ok(key) = to_zenoh_key_string(&timer_nanosecond_uuri) {
+        println!("timer_nanosecond_uuri zenoh key: {}", key);
+    }
 
     let mut hour_timer = Timer {
         time: Some(TimeOfDay {

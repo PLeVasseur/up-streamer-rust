@@ -80,7 +80,7 @@ async fn main() {
 
     let mut config = Config::default();
     // TODO: Need to implement basic uStreamer so that we can connect as a Client
-    // config.set_mode(Some(WhatAmI::Client)).expect("Setting as Peer failed");
+    // config.set_mode(Some(WhatAmI::Client)).expect("Setting as Client failed");
     config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Peer failed");
