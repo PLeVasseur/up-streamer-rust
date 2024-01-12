@@ -139,7 +139,7 @@ async fn main() {
         }),
     };
 
-    // You might normally keep track of the registered listener's key so you can remove it later
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
     let _registered_hour_timer_key = {
         match ulink
             .register_listener(timer_hour_uuri, Box::new(timer_listener))
@@ -155,7 +155,7 @@ async fn main() {
             }
         }
     };
-    // You might normally keep track of the registered listener's key so you can remove it later
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
     let _registered_minute_timer_key = {
         match ulink
             .register_listener(timer_minute_uuri, Box::new(timer_listener))
@@ -171,7 +171,7 @@ async fn main() {
             }
         }
     };
-    // You might normally keep track of the registered listener's key so you can remove it later
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
     let _registered_second_timer_key = {
         match ulink
             .register_listener(timer_second_uuri, Box::new(timer_listener))
@@ -187,7 +187,7 @@ async fn main() {
             }
         }
     };
-    // You might normally keep track of the registered listener's key so you can remove it later
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
     let _registered_second_timer_key = {
         match ulink
             .register_listener(timer_nanosecond_uuri, Box::new(timer_listener))
