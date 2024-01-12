@@ -65,6 +65,36 @@ async fn main() {
     println!("This is an example client for uStreamer.");
 
     let ulink = ULinkZenoh::new(Config::default()).await.unwrap();
+    let timer_hour_uuri = UUri {
+        authority: None,
+        entity: Option::from(UEntity {
+            name: "timer_service".to_string(),
+            id: Option::Some(123),
+            version_major: Some(1),
+            version_minor: None,
+        }),
+        resource: Option::from(UResource {
+            name: "timer".to_string(),
+            instance: None,
+            message: Some("hour".to_string()),
+            id: Some(1),
+        }),
+    };
+    let timer_minute_uuri = UUri {
+        authority: None,
+        entity: Option::from(UEntity {
+            name: "timer_service".to_string(),
+            id: Option::Some(123),
+            version_major: Some(1),
+            version_minor: None,
+        }),
+        resource: Option::from(UResource {
+            name: "timer".to_string(),
+            instance: None,
+            message: Some("minute".to_string()),
+            id: Some(2),
+        }),
+    };
     let timer_second_uuri = UUri {
         authority: None,
         entity: Option::from(UEntity {
@@ -77,10 +107,57 @@ async fn main() {
             name: "timer".to_string(),
             instance: None,
             message: Some("second".to_string()),
-            id: Some(1),
+            id: Some(3),
+        }),
+    };
+    let timer_nanosecond_uuri = UUri {
+        authority: None,
+        entity: Option::from(UEntity {
+            name: "timer_service".to_string(),
+            id: Option::Some(123),
+            version_major: Some(1),
+            version_minor: None,
+        }),
+        resource: Option::from(UResource {
+            name: "timer".to_string(),
+            instance: None,
+            message: Some("nanosecond".to_string()),
+            id: Some(4),
         }),
     };
 
+    // You might normally keep track of the registered listener's key so you can remove it later
+    let _registered_hour_timer_key = {
+        match ulink
+            .register_listener(timer_hour_uuri, Box::new(timer_listener))
+            .await
+        {
+            Ok(registered_key) => registered_key,
+            Err(status) => {
+                println!(
+                    "Failed to register timer_hour listener: {:?}",
+                    status.get_code()
+                );
+                return;
+            }
+        }
+    };
+    // You might normally keep track of the registered listener's key so you can remove it later
+    let _registered_minute_timer_key = {
+        match ulink
+            .register_listener(timer_minute_uuri, Box::new(timer_listener))
+            .await
+        {
+            Ok(registered_key) => registered_key,
+            Err(status) => {
+                println!(
+                    "Failed to register timer_minute listener: {:?}",
+                    status.get_code()
+                );
+                return;
+            }
+        }
+    };
     // You might normally keep track of the registered listener's key so you can remove it later
     let _registered_second_timer_key = {
         match ulink
@@ -90,7 +167,23 @@ async fn main() {
             Ok(registered_key) => registered_key,
             Err(status) => {
                 println!(
-                    "Failed to register second_timer_listener: {:?}",
+                    "Failed to register timer_second listener: {:?}",
+                    status.get_code()
+                );
+                return;
+            }
+        }
+    };
+    // You might normally keep track of the registered listener's key so you can remove it later
+    let _registered_second_timer_key = {
+        match ulink
+            .register_listener(timer_nanosecond_uuri, Box::new(timer_listener))
+            .await
+        {
+            Ok(registered_key) => registered_key,
+            Err(status) => {
+                println!(
+                    "Failed to register timer_nanosecond listener: {:?}",
                     status.get_code()
                 );
                 return;
