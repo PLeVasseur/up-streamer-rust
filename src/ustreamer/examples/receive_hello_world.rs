@@ -3,6 +3,7 @@ extern crate uprotocol_sdk;
 extern crate uprotocol_zenoh_rust;
 
 use async_std::task::{self, block_on};
+use prost::Message;
 use std::sync::{Arc, Mutex};
 use std::time;
 use uprotocol_sdk::{
@@ -25,6 +26,32 @@ fn second_timer_listener(result: Result<UMessage, UStatus>) {
     match result {
         Ok(message) => {
             println!("second_timer_listener returned UMessage");
+
+            let payload = match message.payload {
+                Some(payload) => payload,
+                None => return,
+            };
+
+            let data = match payload.data {
+                Some(data) => data,
+                None => return,
+            };
+
+            if let Data::Value(buf) = data {
+                println!("We got some data");
+
+                let timer = match Timer::decode(&*buf) {
+                    Ok(timer) => timer,
+                    Err(_) => return,
+                };
+
+                if let Some(time) = timer.time {
+                    println!(
+                        "Time: H: {} M: {} S: {} NS: {}",
+                        time.hours, time.minutes, time.seconds, time.nanos
+                    );
+                }
+            }
         }
         Err(status) => {
             println!(
@@ -34,6 +61,36 @@ fn second_timer_listener(result: Result<UMessage, UStatus>) {
         }
     }
 }
+
+// fn second_timer_listener(result: Result<UMessage, UStatus>) {
+//     match result {
+//         Ok(message) => {
+//             println!("second_timer_listener returned UMessage");
+//
+//             if let Some(payload) = message.payload {
+//                 if let Some(data) = payload.data {
+//                     if let Data::Value(buf) = data {
+//                         println!("We got some data");
+//
+//                         if let Ok(timer) = Timer::decode(&*buf) {
+//
+//                             if let Some(time) = timer.time {
+//                                 println!("Time: H: {} M: {} S: {} NS: {}", time.hours, time.minutes, time.seconds, time.nanos);
+//                             }
+//
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//         Err(status) => {
+//             println!(
+//                 "second_timer_listener returned UStatus: {:?}",
+//                 status.get_code()
+//             );
+//         }
+//     }
+// }
 
 #[async_std::main]
 async fn main() {

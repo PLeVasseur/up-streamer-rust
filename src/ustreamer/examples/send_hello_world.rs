@@ -115,5 +115,9 @@ async fn main() {
                 println!("Seconding timer_second failed: {:?}", status)
             }
         }
+
+        if let Some(ref mut time) = second_timer.time {
+            time.seconds += 1;
+        }
     }
 }
