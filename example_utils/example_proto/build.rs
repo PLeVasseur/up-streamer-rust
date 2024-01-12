@@ -55,7 +55,7 @@ fn get_and_build_protos(urls: &[&str]) -> core::result::Result<(), Box<dyn std::
             file_path_buf.push("google/protobuf");
         }
 
-        if url.contains("hello_world_topics.proto") {
+        if url.contains("example/hello_world/v1") {
             file_path_buf.push("example/hello_world/v1")
         }
 
@@ -78,11 +78,8 @@ fn get_and_build_protos(urls: &[&str]) -> core::result::Result<(), Box<dyn std::
     let mut config = Config::new();
     config.disable_comments(["."]);
 
-    // No need to convert to OsString, keep it as PathBuf
-    let google_type_dir = Path::new(&out_dir).join("google/type");
-
     // Use references to PathBuf directly
-    config.compile_protos(&proto_files, &[&PathBuf::from(out_dir), &google_type_dir])?;
+    config.compile_protos(&proto_files, &[&PathBuf::from(out_dir)])?;
 
     Ok(())
 }
