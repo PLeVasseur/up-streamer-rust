@@ -102,8 +102,8 @@ async fn main() {
         resource: Option::from(UResource {
             name: "timer".to_string(),
             instance: None,
-            message: Some("hour/retransmit".to_string()),
-            id: Some(1),
+            message: Some("hour535".to_string()),
+            id: Some(1535),
         }),
     };
     let timer_minute_uuri = UUri {
@@ -117,8 +117,8 @@ async fn main() {
         resource: Option::from(UResource {
             name: "timer".to_string(),
             instance: None,
-            message: Some("minute/retransmit".to_string()),
-            id: Some(2),
+            message: Some("minute535".to_string()),
+            id: Some(2535),
         }),
     };
     let timer_second_uuri = UUri {
@@ -132,8 +132,8 @@ async fn main() {
         resource: Option::from(UResource {
             name: "timer".to_string(),
             instance: None,
-            message: Some("second/retransmit".to_string()),
-            id: Some(3),
+            message: Some("second535".to_string()),
+            id: Some(3535),
         }),
     };
     let timer_nanosecond_uuri = UUri {
@@ -147,8 +147,8 @@ async fn main() {
         resource: Option::from(UResource {
             name: "timer".to_string(),
             instance: None,
-            message: Some("nanosecond/retransmit".to_string()),
-            id: Some(4),
+            message: Some("nanosecond535".to_string()),
+            id: Some(4535),
         }),
     };
 

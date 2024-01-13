@@ -52,7 +52,12 @@ async fn main() {
             return; // Skip processing this message
         }
 
-        if key_expr.ends_with("retransmit") {
+        // TODO: Need to check this will still work after the move to micro form
+        //  Perhaps they'll just append all the numbers together with some . or /
+        //  So my guess is it'd be best to just add a number here, let's say 535
+        //  --This mechanism is only needed now because we're listening in on and transmitting
+        //  over the same transport and can be removed when we're retransmitting over SOME/IP
+        if key_expr.ends_with("535") {
             println!("Ignoring message with key expression: '{}'", key_expr);
             return; // Skip processing this message
         }
@@ -71,9 +76,7 @@ async fn main() {
 
         let session_clone = session_arc_clone_callback.clone();
 
-        let retransmit_key_expr = key_expr
-            .join("retransmit")
-            .expect("unable to append retransmit");
+        let retransmit_key_expr = key_expr.concat("535").expect("unable to append retransmit");
 
         let Ok(encoding) = sample.encoding.suffix().parse::<i32>() else {
             println!("Unable to get encoding for key expression: '{}'", key_expr);
