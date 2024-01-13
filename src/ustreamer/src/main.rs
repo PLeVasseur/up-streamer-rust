@@ -103,7 +103,7 @@ async fn main() {
         .res()
         .await;
 
-    // Infinite loop in main thread, just letting the listeners listen
+    // Infinite loop in main thread, just letting the uStreamer listen and retransmit
     loop {
         task::sleep(Duration::from_secs(10)).await;
     }

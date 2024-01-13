@@ -90,9 +90,6 @@ async fn main() {
         .connect
         .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
         .unwrap();
-    // config
-    //     .set_mode(Some(WhatAmI::Peer))
-    //     .expect("Setting as Peer failed");
     let ulink = ULinkZenoh::new(config).await.unwrap();
     let timer_hour_uuri = UUri {
         authority: None,
