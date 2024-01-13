@@ -66,8 +66,9 @@ fn timer_listener(result: Result<UMessage, UStatus>) {
         }
         Err(status) => {
             println!(
-                "second_timer_listener returned UStatus: {:?}",
-                status.get_code()
+                "second_timer_listener returned UStatus: {:?} msg: {}",
+                status.get_code(),
+                status.message()
             );
         }
     }
@@ -78,12 +79,21 @@ async fn main() {
     // Your example code goes here
     println!("This is an example client for uStreamer.");
 
+
+    let locator = vec![String::from("tcp/127.0.0.1:17449")];
+
     let mut config = Config::default();
     // TODO: Need to implement basic uStreamer so that we can connect as a Client
-    // config.set_mode(Some(WhatAmI::Client)).expect("Setting as Client failed");
     config
-        .set_mode(Some(WhatAmI::Peer))
-        .expect("Setting as Peer failed");
+        .set_mode(Some(WhatAmI::Client))
+        .expect("Setting as Client failed");
+    config
+        .connect
+        .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
+        .unwrap();
+    // config
+    //     .set_mode(Some(WhatAmI::Peer))
+    //     .expect("Setting as Peer failed");
     let ulink = ULinkZenoh::new(config).await.unwrap();
     let timer_hour_uuri = UUri {
         authority: None,
@@ -96,7 +106,7 @@ async fn main() {
         resource: Option::from(UResource {
             name: "timer".to_string(),
             instance: None,
-            message: Some("hour".to_string()),
+            message: Some("hour/retransmit".to_string()),
             id: Some(1),
         }),
     };
@@ -111,7 +121,7 @@ async fn main() {
         resource: Option::from(UResource {
             name: "timer".to_string(),
             instance: None,
-            message: Some("minute".to_string()),
+            message: Some("minute/retransmit".to_string()),
             id: Some(2),
         }),
     };
@@ -126,7 +136,7 @@ async fn main() {
         resource: Option::from(UResource {
             name: "timer".to_string(),
             instance: None,
-            message: Some("second".to_string()),
+            message: Some("second/retransmit".to_string()),
             id: Some(3),
         }),
     };
@@ -141,7 +151,7 @@ async fn main() {
         resource: Option::from(UResource {
             name: "timer".to_string(),
             instance: None,
-            message: Some("nanosecond".to_string()),
+            message: Some("nanosecond/retransmit".to_string()),
             id: Some(4),
         }),
     };
@@ -155,8 +165,9 @@ async fn main() {
             Ok(registered_key) => registered_key,
             Err(status) => {
                 println!(
-                    "Failed to register timer_hour listener: {:?}",
-                    status.get_code()
+                    "Failed to register timer_hour listener: {:?} {}",
+                    status.get_code(),
+                    status.message()
                 );
                 return;
             }
