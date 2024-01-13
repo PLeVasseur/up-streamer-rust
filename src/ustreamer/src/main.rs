@@ -11,11 +11,11 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use zenoh::prelude::*;
-use std::sync::{Arc};
-use std::time::Duration;
 use async_std::task;
+use std::sync::Arc;
+use std::time::Duration;
 use zenoh::prelude::r#async::AsyncResolve;
+use zenoh::prelude::*;
 
 #[async_std::main]
 async fn main() {
@@ -58,7 +58,10 @@ async fn main() {
         }
 
         let Some(attachment) = sample.attachment() else {
-            println!("Message missing attachment, skip key expression: '{}'", key_expr);
+            println!(
+                "Message missing attachment, skip key expression: '{}'",
+                key_expr
+            );
             return;
         };
 
@@ -68,7 +71,9 @@ async fn main() {
 
         let session_clone = session_arc_clone_callback.clone();
 
-        let retransmit_key_expr = key_expr.join("retransmit").expect("unable to append retransmit");
+        let retransmit_key_expr = key_expr
+            .join("retransmit")
+            .expect("unable to append retransmit");
 
         let Ok(encoding) = sample.encoding.suffix().parse::<i32>() else {
             println!("Unable to get encoding for key expression: '{}'", key_expr);
