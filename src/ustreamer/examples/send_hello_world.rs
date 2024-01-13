@@ -19,8 +19,7 @@ extern crate uprotocol_zenoh_rust;
 use async_std::task::{self};
 use prost::Message;
 use std::time::Duration;
-use uprotocol_sdk::uprotocol::{u_payload, UAttributes, UCode, UStatus};
-use uprotocol_sdk::uri::serializer::{LongUriSerializer, UriSerializer};
+use uprotocol_sdk::uprotocol::{u_payload, UAttributes};
 use uprotocol_sdk::{
     transport::datamodel::UTransport,
     uprotocol::{UEntity, UMessageType, UPayload, UResource, UUri},
