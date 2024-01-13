@@ -8,6 +8,12 @@ cargo run --example foo_example
 
 ## Simple example
 
+### Run the uStreamer
+
+```bash
+cargo run --bin ustreamer 
+```
+
 ### Run the example client app
 
 An example of a client app that interacts with `uStreamer`
