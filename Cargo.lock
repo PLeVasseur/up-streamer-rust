@@ -2883,7 +2883,6 @@ dependencies = [
 [[package]]
 name = "uprotocol_zenoh_rust"
 version = "0.1.0"
-source = "git+https://github.com/ZettaScaleLabs/uprotocol-rust-ulink-zenoh.git?branch=support_rpcserver#2a128c6a8d28321f732bef1ee76a607699706ee5"
 dependencies = [
  "anyhow",
  "async-std",
@@ -2929,6 +2928,8 @@ name = "ustreamer"
 version = "0.1.0"
 dependencies = [
  "async-std",
+ "chrono",
+ "env_logger",
  "example-proto",
  "prost",
  "uprotocol-sdk",

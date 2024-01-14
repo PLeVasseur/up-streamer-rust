@@ -48,7 +48,6 @@ async fn main() {
     let locator = vec![String::from("tcp/127.0.0.1:17449")];
 
     let mut config = Config::default();
-    // TODO: Need to implement basic uStreamer so that we can connect as a Client
     config
         .set_mode(Some(WhatAmI::Client))
         .expect("Setting as Client failed");

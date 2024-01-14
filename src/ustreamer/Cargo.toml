@@ -8,9 +8,14 @@ edition = "2021"
 [dependencies]
 uprotocol-sdk = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust.git", branch = "support_rpcserver" }
 zenoh = { version = "0.10.1-rc", features = ["unstable"]}
-uprotocol_zenoh_rust = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust-ulink-zenoh.git", branch = "support_rpcserver" }
+# upstream
+# uprotocol_zenoh_rust = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust-ulink-zenoh.git", branch = "support_rpcserver" }
+# local version with some changes
+uprotocol_zenoh_rust = { path = "../../../uprotocol-rust-ulink-zenoh_zettascale" }
 async-std = "1.12.0"
 prost = "0.12.3"
+env_logger = "0.10.1"
 
 [dev-dependencies]
 example-proto = { path = "../../example-utils/example-proto"}
+chrono = { version = "0.4.31", features = [] }
