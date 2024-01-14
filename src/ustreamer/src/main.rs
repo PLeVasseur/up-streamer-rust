@@ -12,15 +12,8 @@
  ********************************************************************************/
 
 use async_std::task;
-use prost::Message;
 use std::sync::Arc;
 use std::time::Duration;
-use uprotocol_sdk::rpc::RpcMapperError;
-use uprotocol_sdk::uprotocol::{
-    Data, UAttributes, UCode, UMessage, UPayload, UPayloadFormat, UStatus,
-};
-use uprotocol_zenoh_rust::ULinkZenoh;
-use zenoh::buffers::ZBuf;
 use zenoh::prelude::r#async::AsyncResolve;
 use zenoh::prelude::*;
 use zenoh::queryable::Query;
@@ -167,9 +160,9 @@ async fn main() {
                 return;
             };
 
-            // 3. If the reply was Ok, then we can reply too to the original query
+            // 3. If the reply was Ok, then we can reply to to the original query
             // TODO: Because of this back and forth, had to increase the timeout over on invoke_method
-            let reply = match replies.recv_async().await {
+            match replies.recv_async().await {
                 Ok(reply) => {
                     println!("Got reply back from server");
 
@@ -180,8 +173,6 @@ async fn main() {
                     } else {
                         // Handle the error case
                     }
-
-                    let ke = sample_res.clone().unwrap().key_expr;
 
                     let sample = match &sample_res {
                         Ok(sample) => sample,

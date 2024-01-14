@@ -18,22 +18,19 @@ extern crate uprotocol_zenoh_rust;
 
 use async_std::task::{self};
 use prost::Message;
-use std::future::Future;
 use std::time::Duration;
-use uprotocol_sdk::rpc::{RpcClient, RpcClientResult, RpcMapperError};
+use uprotocol_sdk::rpc::{RpcClient};
 use uprotocol_sdk::transport::builder::UAttributesBuilder;
-use uprotocol_sdk::uprotocol::{u_payload, Data, UAttributes, UPriority, Uuid};
+use uprotocol_sdk::uprotocol::{u_payload, Data, UPriority, Uuid};
 use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
 use uprotocol_sdk::{
-    transport::datamodel::UTransport,
-    uprotocol::{UEntity, UMessageType, UPayload, UResource, UUri},
+    uprotocol::{UEntity, UPayload, UUri},
 };
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::config::Config;
 use zenoh::prelude::WhatAmI;
 
 use example_proto::proto::example::hello_world::v1::*;
-use example_proto::proto::google::r#type::*;
 
 fn print_time(timer: &Timer) {
     if let Some(ref time) = timer.time {
@@ -61,36 +58,8 @@ async fn main() {
         .unwrap();
     let ulink = ULinkZenoh::new(config).await.unwrap();
 
-    let hello_world_sink = UUri {
-        authority: None,
-        entity: Option::from(UEntity {
-            name: "hello_world_service".to_string(),
-            id: Option::Some(111),
-            version_major: Some(1),
-            version_minor: None,
-        }),
-        resource: Option::from(UResource {
-            name: "hello".to_string(),
-            instance: None,
-            message: None,
-            id: Some(1),
-        }),
-    };
-
-    // let attributes = UAttributes {
-    //     id: None,
-    //     r#type: i32::from(UMessageType::UmessageTypeRequest),
-    //     sink: Some(hello_world_sink.clone()),
-    //     priority: 0,
-    //     ttl: Some(10),
-    //     permission_level: None,
-    //     commstatus: None,
-    //     reqid: None,
-    //     token: None,
-    // };
-
     let request_resource =
-        UResourceBuilder::for_rpc_request(Some("Hello_World".to_string()), Some(1));
+        UResourceBuilder::for_rpc_request(Some("get_hello".to_string()), Some(1));
     let hello_world_request_uuri = UUri {
         authority: None,
         entity: Option::from(UEntity {
@@ -114,7 +83,6 @@ async fn main() {
     .build();
 
     println!("hello_world_request_uuri: {:?}", hello_world_request_uuri);
-    println!("hello_world_sink: {:?}", hello_world_sink);
 
     let mut hello_attempt = 0;
 
