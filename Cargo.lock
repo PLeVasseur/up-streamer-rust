@@ -2883,6 +2883,7 @@ dependencies = [
 [[package]]
 name = "uprotocol_zenoh_rust"
 version = "0.1.0"
+source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/update_timeout#6dde78cdcd6ee3eeba79e6b64aa316b7779980cc"
 dependencies = [
  "anyhow",
  "async-std",
