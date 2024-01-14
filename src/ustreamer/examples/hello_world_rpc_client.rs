@@ -17,6 +17,7 @@ extern crate uprotocol_sdk;
 extern crate uprotocol_zenoh_rust;
 
 use async_std::task::{self};
+use example_proto::proto::example::hello_world::v1::*;
 use prost::Message;
 use std::time::Duration;
 use uprotocol_sdk::rpc::RpcClient;
@@ -27,17 +28,6 @@ use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::config::Config;
 use zenoh::prelude::WhatAmI;
-
-use example_proto::proto::example::hello_world::v1::*;
-
-fn print_time(timer: &Timer) {
-    if let Some(ref time) = timer.time {
-        println!(
-            "Timer: H: {} M: {} S: {} NS: {}",
-            time.hours, time.minutes, time.seconds, time.nanos
-        );
-    }
-}
 
 #[async_std::main]
 async fn main() {

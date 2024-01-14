@@ -198,23 +198,19 @@ async fn main() {
                         Ok(reply_builder_res) => match reply_builder_res.res().await {
                             Ok(_) => {
                                 println!("Got reply");
-                                return;
                             }
                             Err(e) => {
                                 println!("Error: didn't get reply: {:?}", e);
-                                return;
                             }
                         },
                         Err(_) => {
                             println!("Error: Unable to add attachment");
-                            return;
                         }
                     }
                 }
                 Err(e) => {
                     // 4. If the reply was not Ok... then just print an error and return
                     println!("Error while receiving Zenoh reply: {:?}", e);
-                    return;
                 }
             };
         });

@@ -78,7 +78,7 @@ async fn main() {
                 // Build the payload to send back
                 if let Data::Value(v) = payload.unwrap().data.unwrap() {
                     let value = v.into_iter().map(|c| c as char).collect::<String>();
-                    println!("Receive {} from {}", value, uuri.to_string());
+                    println!("Receive {} from {}", value, uuri);
                 }
                 let hello_response = HelloResponse {
                     message: "Hello there!".to_string(),
