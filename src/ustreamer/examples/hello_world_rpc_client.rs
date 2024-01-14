@@ -31,8 +31,7 @@ use zenoh::prelude::WhatAmI;
 
 #[async_std::main]
 async fn main() {
-    // Your example code goes here
-    println!("This is an example sender for uStreamer.");
+    println!("uProtocol RPC client example");
 
     let locator = vec![String::from("tcp/127.0.0.1:17449")];
 
