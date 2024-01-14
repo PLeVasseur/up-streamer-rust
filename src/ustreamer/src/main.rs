@@ -153,12 +153,7 @@ async fn main() {
         let retransmit_key_expr = key_expr.concat("123").expect("unable to append retransmit");
 
         task::spawn(async move {
-            // TODO:
-            //  1. Extract the relevant info from the query needed for the GetBuilder:
-            // // Send data
-            // // TODO: Query should support .encoding
-            // // TODO: Adjust the timeout
-
+            // 1. Extract the relevant info from the query needed for the GetBuilder:
             let getbuilder = session_clone
                 .get(&retransmit_key_expr)
                 .with_value(value_clone)
@@ -167,15 +162,12 @@ async fn main() {
                 .timeout(Duration::from_millis(1000));
 
             // 2. Forward the query on
-            // Send the query
-
             let Ok(replies) = getbuilder.res().await else {
                 println!("Error while sending Zenoh query");
                 return;
             };
 
-            // 3. If the reply was Ok, then we can reply... something like this
-
+            // 3. If the reply was Ok, then we can reply too to the original query
             // TODO: Because of this back and forth, had to increase the timeout over on invoke_method
             let reply = match replies.recv_async().await {
                 Ok(reply) => {
@@ -229,13 +221,7 @@ async fn main() {
                     }
                 }
                 Err(e) => {
-                    // 4. If the reply was not Ok... then we have to define how we'd return the error we got s.t.
-                    //    the client is able to fire off its logic for handling errors. I think the only logic for handling
-                    //    errors if something bad happens in an RpcServer is just to print out the below... so...
-                    //    for the simple case, I think... we'd just return, meaning we don't respond wihin the TTL, and
-                    //    I think the connection will just die and then the below kind of code would get fired under
-                    //    invoke_method()
-                    // Print out the error
+                    // 4. If the reply was not Ok... then just print an error and return
                     println!("Error while receiving Zenoh reply: {:?}", e);
                     return;
                 }
