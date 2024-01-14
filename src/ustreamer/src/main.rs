@@ -20,6 +20,7 @@ use uprotocol_sdk::uprotocol::{
     Data, UAttributes, UCode, UMessage, UPayload, UPayloadFormat, UStatus,
 };
 use uprotocol_zenoh_rust::ULinkZenoh;
+use zenoh::buffers::ZBuf;
 use zenoh::prelude::r#async::AsyncResolve;
 use zenoh::prelude::*;
 use zenoh::queryable::Query;
@@ -131,6 +132,8 @@ async fn main() {
             return;
         };
 
+        let value_clone = value.clone();
+
         let Some(attachment) = query.attachment() else {
             println!("query lacked appropriate attachment: {}", query.key_expr());
             return;
@@ -145,61 +148,98 @@ async fn main() {
 
         println!("Received on '{}': '{:?}'", &key_expr, &value);
 
-        // let session_clone = session_arc_clone_subscriber_callback.clone();
-        //
-        // let retransmit_key_expr = key_expr.concat("123").expect("unable to append retransmit");
+        let session_clone = session_arc_clone_queryable_callback.clone();
 
-        // task::spawn(async move {
-        // TODO:
-        //  1. Extract the relevant info from the query needed for the GetBuilder:
-        // // Send data
-        // // TODO: Query should support .encoding
-        // // TODO: Adjust the timeout
-        // let getbuilder = self
-        //     .session
-        //     .get(&retransmit_key_expr)
-        //     .with_value(value)
-        //     .with_attachment(attachment.build())
-        //     .target(QueryTarget::BestMatching)
-        //     .timeout(Duration::from_millis(1000));
-        // 2. Forward the query on
-        // Send the query
-        // let Ok(replies) = getbuilder.res().await else {
-        //     return Err(RpcMapperError::UnexpectedError(String::from(
-        //         "Error while sending Zenoh query",
-        //     )));
-        // };
-        // 3. If the reply was Ok, then we can reply... something like this
-        // let reply = match replies.recv_async().await {
-        //     Ok(reply) => {
-        //         // Send data
-        //         // TODO: Unable to use unwrap in with_attachment (Attachment doesn't have Debug trait)
-        //         query // original query
-        //             .reply(reply) // the reply we got back
-        //             .with_attachment(attachment_clone)
-        //             .map_err(|_| UStatus::fail_with_code(UCode::Internal, "Unable to add attachment"))?
-        //             .res()
-        //             .await
-        //             .map_err(|_| UStatus::fail_with_code(UCode::Internal, "Unable to reply with Zenoh"))?;
-        //     },
-        //     Err(e) => {
-        // 4. If the reply was not Ok... then we have to define how we'd return the error we got s.t.
-        //    the client is able to fire off its logic for handling errors. I think the only logic for handling
-        //    errors if something bad happens in an RpcServer is just to print out the below... so...
-        //    for the simple case, I think... we'd just return, meaning we don't respond wihin the TTL, and
-        //    I think the connection will just die and then the below kind of code would get fired under
-        //    invoke_method()
-        //         // Print out the error
-        //         println!("Error while receiving Zenoh reply: {:?}", e);
-        //
-        //         // Then return a custom error
-        //         return Err(RpcMapperError::UnexpectedError(format!(
-        //             "Error while receiving Zenoh reply: {:?}",
-        //             e
-        //         )));
-        //     }
-        // };
-        // });
+        let retransmit_key_expr = key_expr.concat("123").expect("unable to append retransmit");
+
+        task::spawn(async move {
+            // TODO:
+            //  1. Extract the relevant info from the query needed for the GetBuilder:
+            // // Send data
+            // // TODO: Query should support .encoding
+            // // TODO: Adjust the timeout
+
+            let getbuilder = session_clone
+                .get(&retransmit_key_expr)
+                .with_value(value_clone)
+                .with_attachment(attachment_clone)
+                .target(QueryTarget::BestMatching)
+                .timeout(Duration::from_millis(1000));
+
+            // 2. Forward the query on
+            // Send the query
+
+            let Ok(replies) = getbuilder.res().await else {
+                println!("Error while sending Zenoh query");
+                return;
+            };
+
+            // 3. If the reply was Ok, then we can reply... something like this
+
+            let reply = match replies.recv_async().await {
+                Ok(reply) => {
+                    println!("Got reply back from server");
+
+                    let mut sample_res = reply.sample;
+
+                    if let Ok(ref mut res) = sample_res {
+                        res.key_expr = key_expr;
+                    } else {
+                        // Handle the error case
+                    }
+
+                    let ke = sample_res.clone().unwrap().key_expr;
+
+                    let sample = match &sample_res {
+                        Ok(sample) => sample,
+                        Err(e) => {
+                            println!("No sample returned: {:?}", e);
+                            return;
+                        }
+                    };
+
+                    let Some(reply_attachment) = &sample.attachment else {
+                        println!("Unable to retrieve reply attachment");
+                        return;
+                    };
+
+                    let reply_attachment_clone = reply_attachment.clone();
+
+                    // Send data
+                    let result = query // original query from client
+                        .reply(sample_res) // sample we got back from the server
+                        .with_attachment(reply_attachment_clone);
+
+                    match result {
+                        Ok(reply_builder_res) => match reply_builder_res.res().await {
+                            Ok(_) => {
+                                println!("Got reply");
+                                return;
+                            }
+                            Err(e) => {
+                                println!("Error: didn't get reply: {:?}", e);
+                                return;
+                            }
+                        },
+                        Err(_) => {
+                            println!("Error: Unable to add attachment");
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    // 4. If the reply was not Ok... then we have to define how we'd return the error we got s.t.
+                    //    the client is able to fire off its logic for handling errors. I think the only logic for handling
+                    //    errors if something bad happens in an RpcServer is just to print out the below... so...
+                    //    for the simple case, I think... we'd just return, meaning we don't respond wihin the TTL, and
+                    //    I think the connection will just die and then the below kind of code would get fired under
+                    //    invoke_method()
+                    // Print out the error
+                    println!("Error while receiving Zenoh reply: {:?}", e);
+                    return;
+                }
+            };
+        });
     };
 
     // Declare a Queryable
