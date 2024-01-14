@@ -184,8 +184,11 @@ async fn main() {
         //     },
         //     Err(e) => {
         // 4. If the reply was not Ok... then we have to define how we'd return the error we got s.t.
-        //    the client is able to fire off its logic for handling errors. Have to think more on how this
-        //    would be handled...
+        //    the client is able to fire off its logic for handling errors. I think the only logic for handling
+        //    errors if something bad happens in an RpcServer is just to print out the below... so...
+        //    for the simple case, I think... we'd just return, meaning we don't respond wihin the TTL, and
+        //    I think the connection will just die and then the below kind of code would get fired under
+        //    invoke_method()
         //         // Print out the error
         //         println!("Error while receiving Zenoh reply: {:?}", e);
         //
