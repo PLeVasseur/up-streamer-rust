@@ -19,13 +19,11 @@ extern crate uprotocol_zenoh_rust;
 use async_std::task::{self};
 use prost::Message;
 use std::time::Duration;
-use uprotocol_sdk::rpc::{RpcClient};
+use uprotocol_sdk::rpc::RpcClient;
 use uprotocol_sdk::transport::builder::UAttributesBuilder;
 use uprotocol_sdk::uprotocol::{u_payload, Data, UPriority, Uuid};
+use uprotocol_sdk::uprotocol::{UEntity, UPayload, UUri};
 use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
-use uprotocol_sdk::{
-    uprotocol::{UEntity, UPayload, UUri},
-};
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::config::Config;
 use zenoh::prelude::WhatAmI;

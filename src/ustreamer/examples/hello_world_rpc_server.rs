@@ -12,9 +12,10 @@
  ********************************************************************************/
 
 use async_std::task::{self, block_on};
+use example_proto::proto::example::hello_world::v1::HelloResponse;
+use prost::Message;
 use std::sync::{Arc, Mutex};
 use std::time;
-use prost::Message;
 use uprotocol_sdk::{
     rpc::RpcServer,
     transport::datamodel::UTransport,
@@ -23,7 +24,6 @@ use uprotocol_sdk::{
 };
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::config::{Config, WhatAmI};
-use example_proto::proto::example::hello_world::v1::HelloResponse;
 
 #[async_std::main]
 async fn main() {
@@ -80,7 +80,9 @@ async fn main() {
                     let value = v.into_iter().map(|c| c as char).collect::<String>();
                     println!("Receive {} from {}", value, uuri.to_string());
                 }
-                let hello_response = HelloResponse{ message: "Hello there!".to_string() };
+                let hello_response = HelloResponse {
+                    message: "Hello there!".to_string(),
+                };
                 let mut hello_response_buf = Vec::new();
                 hello_response
                     .encode(&mut hello_response_buf)
@@ -100,7 +102,7 @@ async fn main() {
                         .unwrap()
                         .send(uuri, upayload, uattributes),
                 )
-                    .unwrap();
+                .unwrap();
             }
             Err(ustatus) => {
                 println!("Internal Error: {:?}", ustatus);
