@@ -11,11 +11,8 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use retransmitter::Retransmitter;
-pub struct RetransmitterZenoh {}
+use uprotocol_sdk::uprotocol::UMessage;
 
-impl Retransmitter for RetransmitterZenoh {
-    fn retransmit(msg: uprotocol_sdk::uprotocol::UMessage) {
-        todo!()
-    }
+pub trait Retransmitter {
+    fn retransmit(message: UMessage);
 }

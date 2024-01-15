@@ -2072,6 +2072,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08c74e62047bb2de4ff487b251e4a92e24f48745648451635cec7d591162d9f"
 
 [[package]]
+name = "retransmitter"
+version = "0.1.5-SNAPSHOT"
+dependencies = [
+ "uprotocol-sdk",
+]
+
+[[package]]
 name = "ring"
 version = "0.16.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3687,6 +3694,10 @@ dependencies = [
 [[package]]
 name = "zenoh-retransmitter"
 version = "0.1.5-SNAPSHOT"
+dependencies = [
+ "retransmitter",
+ "uprotocol-sdk",
+]
 
 [[package]]
 name = "zenoh-sync"

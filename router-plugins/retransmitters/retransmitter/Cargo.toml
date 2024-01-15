@@ -1,5 +1,5 @@
 [package]
-name = "zenoh-retransmitter"
+name = "retransmitter"
 rust-version.workspace = true
 version.workspace = true
 repository.workspace = true
@@ -12,5 +12,4 @@ license.workspace = true
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-retransmitter = { workspace = true }
 uprotocol-sdk = { workspace = true }

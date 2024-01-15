@@ -15,6 +15,7 @@ members = [
     "example-utils/example-proto",
     "router-plugins/plugins/transport-router-zenoh-plugin",
     "router-plugins/plugins/transport-router-someip-plugin",
+    "router-plugins/retransmitters/retransmitter",
     "router-plugins/retransmitters/retransmitter-zenoh",
     "router-plugins/router-utils",
     "ustreamer",
@@ -43,8 +44,13 @@ futures = "0.3.30"
 log = "0.4.20"
 prost = "0.12"
 prost-types = "0.12"
+retransmitter = { version = "0.1.5-SNAPSHOT", path = "router-plugins/retransmitters/retransmitter" }
+retransmitter-zenoh = { version = "0.1.5-SNAPSHOT", path = "router-plugins/retransmitters/retransmitter-zenoh" }
 serde_json = "1.0.111"
 transport-router-zenoh-plugin = { version = "0.1.5-SNAPSHOT", path = "router-plugins/plugins/transport-router-zenoh-plugin" }
+# upstream
+# uprotocol-sdk = { git = "https://github.com/eclipse-uprotocol/uprotocol-rust.git", branch = "main" }
+# zettascale version
 uprotocol-sdk = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust.git", branch = "support_rpcserver" }
 # upstream
 # uprotocol_zenoh_rust = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust-ulink-zenoh.git", branch = "support_rpcserver" }
