@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+use async_trait::async_trait;
 use log::debug;
 use retransmitter::Retransmitter;
 use uprotocol_sdk::uprotocol::{UCode, UMessage, UStatus, UUri};
@@ -20,8 +21,9 @@ pub struct RetransmitterZenoh {
     resource_append: Option<u8>, // used when operating in "dummy" mode to append this to the resource
 }
 
+#[async_trait]
 impl Retransmitter for RetransmitterZenoh {
-    fn retransmit(&self, destination: UUri, message: UMessage) -> UStatus {
+    async fn retransmit(&self, destination: UUri, message: UMessage) -> UStatus {
         let key_expr = match ULinkZenoh::to_zenoh_key_string(&destination) {
             Ok(ke) => ke,
             Err(e) => {

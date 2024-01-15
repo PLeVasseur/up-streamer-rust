@@ -21,6 +21,7 @@ keywords.workspace = true
 license.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
 log = { workspace = true }
 retransmitter = { workspace = true }
 uprotocol-sdk = { workspace = true }
