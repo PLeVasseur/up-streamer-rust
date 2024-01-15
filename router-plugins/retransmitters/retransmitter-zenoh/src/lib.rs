@@ -11,11 +11,63 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+use log::debug;
 use retransmitter::Retransmitter;
-pub struct RetransmitterZenoh {}
+use uprotocol_sdk::uprotocol::{UCode, UMessage, UStatus, UUri};
+use uprotocol_zenoh_rust::ULinkZenoh;
+
+pub struct RetransmitterZenoh {
+    resource_append: Option<u8>, // used when operating in "dummy" mode to append this to the resource
+}
 
 impl Retransmitter for RetransmitterZenoh {
-    fn retransmit(msg: uprotocol_sdk::uprotocol::UMessage) {
-        todo!()
+    fn retransmit(&self, destination: UUri, message: UMessage) -> UStatus {
+        let key_expr = match ULinkZenoh::to_zenoh_key_string(&destination) {
+            Ok(ke) => ke,
+            Err(e) => {
+                return UStatus::fail_with_code(
+                    UCode::Internal,
+                    &*format!("Unable to convert UUri to Zenoh key expression: {:?}", e),
+                );
+            }
+        };
+
+        // Check if the key expression starts with "@", i.e is internal message to Zenoh
+        if key_expr.starts_with('@') {
+            debug!(
+                "Ignoring Zenoh internal message with key expression: '{}'",
+                &key_expr
+            );
+            return UStatus::ok();
+        }
+
+        // Check if we have received a message we already retransmitted
+        if let Some(resource_append) = self.resource_append {
+            if key_expr.ends_with(&resource_append.to_string()) {
+                debug!(
+                    "Ignoring already retransmitted message with key expression: '{}'",
+                    &key_expr
+                );
+                return UStatus::ok();
+            }
+        }
+
+        let retransmit_key_expr = {
+            if let Some(resource_append) = self.resource_append {
+                key_expr.clone().push_str(&resource_append.to_string());
+            }
+            key_expr.clone()
+        };
+
+        // TODO: Implement checking the UAuthority here, when we want to use this with remote uDevices
+        if destination.authority.is_none() {
+            debug!(
+                "Only retransmit messages onto other protocols to other uDevices: '{}'",
+                &key_expr
+            );
+            return UStatus::ok();
+        }
+
+        UStatus::ok()
     }
 }

@@ -11,8 +11,8 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use uprotocol_sdk::uprotocol::UMessage;
+use uprotocol_sdk::uprotocol::{UMessage, UStatus, UUri};
 
 pub trait Retransmitter {
-    fn retransmit(message: UMessage);
+    fn retransmit(&self, destination: UUri, message: UMessage) -> UStatus;
 }

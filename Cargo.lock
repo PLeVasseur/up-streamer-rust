@@ -2915,7 +2915,7 @@ dependencies = [
 [[package]]
 name = "uprotocol_zenoh_rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/update_timeout#6dde78cdcd6ee3eeba79e6b64aa316b7779980cc"
+source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/update_timeout#5caf8bed8f2b5fb91ba272f5a068db916a33bbe0"
 dependencies = [
  "anyhow",
  "async-std",
@@ -3695,8 +3695,10 @@ dependencies = [
 name = "zenoh-retransmitter"
 version = "0.1.5-SNAPSHOT"
 dependencies = [
+ "log",
  "retransmitter",
  "uprotocol-sdk",
+ "uprotocol_zenoh_rust",
 ]
 
 [[package]]
