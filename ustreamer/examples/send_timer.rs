@@ -42,19 +42,20 @@ fn print_time(timer: &Timer) {
 
 #[async_std::main]
 async fn main() {
+    env_logger::try_init().unwrap_or_default();
     // Your example code goes here
     println!("This is an example sender for uStreamer.");
 
-    let locator = vec![String::from("tcp/127.0.0.1:17449")];
+    // let locator = vec![String::from("tcp/127.0.0.1:17449")];
 
     let mut config = Config::default();
     config
-        .set_mode(Some(WhatAmI::Client))
-        .expect("Setting as Client failed");
-    config
-        .connect
-        .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
-        .unwrap();
+        .set_mode(Some(WhatAmI::Peer))
+        .expect("Setting as Peer failed");
+    // config
+    //     .connect
+    //     .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
+    //     .unwrap();
     let ulink = ULinkZenoh::new(config).await.unwrap();
     let timer_hour_uuri = UUri {
         authority: None,

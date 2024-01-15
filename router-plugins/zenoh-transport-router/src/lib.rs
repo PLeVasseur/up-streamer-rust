@@ -15,7 +15,7 @@
 
 use futures::select;
 use log::{debug, info};
-use std::collections::HashMap;
+// use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::{
     atomic::{AtomicBool, Ordering::Relaxed},
@@ -48,6 +48,11 @@ impl Plugin for ZenohTransportRouter {
 
     // The first operation called by zenohd on the plugin
     fn start(name: &str, runtime: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
+        // Try to initiate login.
+        // Required in case of dynamic lib, otherwise no logs.
+        // But cannot be done twice in case of static link.
+        let _ = env_logger::try_init();
+
         let config = runtime.config.lock();
         let self_cfg = config.plugin(name).unwrap().as_object().unwrap();
         // get the plugin's config details from self_cfg Map (here the "storage-selector" property)
@@ -148,13 +153,11 @@ impl Drop for RunningPlugin {
 }
 
 async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) {
-    env_logger::init();
-
     // create a zenoh Session that shares the same Runtime as zenohd
     let session = zenoh::init(runtime).res().await.unwrap();
 
     // the HasMap used as a storage by this example of storage plugin
-    let mut stored: HashMap<String, Sample> = HashMap::new();
+    // let mut stored: HashMap<String, Sample> = HashMap::new();
 
     debug!(
         "Run zenoh-transport-router with sniff-route={}",
@@ -174,23 +177,24 @@ async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) 
     let queryable = session.declare_queryable(&sniff_route).res().await.unwrap();
 
     // Plugin's event loop, while the flag is true
-    while flag.load(Relaxed) {
+    // while flag.load(Relaxed) {
+    loop {
         select!(
             // on sample received by the Subscriber
             sample = sub.recv_async() => {
                 let sample = sample.unwrap();
                 info!("Received data ('{}': '{}')", sample.key_expr, sample.value);
-                stored.insert(sample.key_expr.to_string(), sample);
+                // stored.insert(sample.key_expr.to_string(), sample);
             },
             // on query received by the Queryable
             query = queryable.recv_async() => {
                 let query = query.unwrap();
                 info!("Handling query '{}'", query.selector());
-                for (key_expr, sample) in stored.iter() {
-                    if query.selector().key_expr.intersects(unsafe{keyexpr::from_str_unchecked(key_expr)}) {
-                        query.reply(Ok(sample.clone())).res().await.unwrap();
-                    }
-                }
+                // for (key_expr, sample) in stored.iter() {
+                //     if query.selector().key_expr.intersects(unsafe{keyexpr::from_str_unchecked(key_expr)}) {
+                //         query.reply(Ok(sample.clone())).res().await.unwrap();
+                //     }
+                // }
             }
         );
     }

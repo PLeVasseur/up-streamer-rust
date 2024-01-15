@@ -31,16 +31,16 @@ async fn main() {
 
     println!("uProtocol RPC server example");
 
-    let locator = vec![String::from("tcp/127.0.0.1:17449")];
+    // let locator = vec![String::from("tcp/127.0.0.1:17449")];
 
     let mut config = Config::default();
     config
         .set_mode(Some(WhatAmI::Client))
         .expect("Setting as Client failed");
-    config
-        .connect
-        .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
-        .unwrap();
+    // config
+    //     .connect
+    //     .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
+    //     .unwrap();
     config.scouting.multicast.set_enabled(Some(false)).unwrap();
     config.scouting.gossip.set_enabled(Some(false)).unwrap();
     config

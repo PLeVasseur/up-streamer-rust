@@ -2936,10 +2936,13 @@ dependencies = [
  "chrono",
  "env_logger",
  "example-proto",
+ "log",
  "prost",
  "uprotocol-sdk",
  "uprotocol_zenoh_rust",
  "zenoh",
+ "zenoh-plugin-trait",
+ "zenoh-transport-router",
 ]
 
 [[package]]

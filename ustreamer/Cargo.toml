@@ -19,10 +19,13 @@ edition = { workspace = true }
 [dependencies]
 async-std = { workspace = true }
 env_logger = { workspace = true }
+log = { workspace = true }
 prost = { workspace = true }
 uprotocol-sdk = { workspace = true }
 uprotocol_zenoh_rust = { workspace = true }
 zenoh = { workspace = true }
+zenoh-transport-router = { workspace = true }
+zenoh-plugin-trait = { workspace = true }
 
 [dev-dependencies]
 example-proto = { path = "../example-utils/example-proto" }
