@@ -2111,6 +2111,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "router-utils"
+version = "0.1.5-SNAPSHOT"
+
+[[package]]
 name = "rsa"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2527,10 +2531,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "someip-router"
-version = "0.1.0"
-
-[[package]]
 name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2746,6 +2746,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "transport-router-someip-plugin"
+version = "0.1.0"
+
+[[package]]
+name = "transport-router-zenoh-plugin"
+version = "0.1.5-SNAPSHOT"
+dependencies = [
+ "async-std",
+ "clap",
+ "env_logger",
+ "futures",
+ "log",
+ "serde_json",
+ "zenoh",
+ "zenoh-core",
+ "zenoh-plugin-trait",
+ "zenoh-result",
+ "zenoh-util",
+]
+
+[[package]]
 name = "tungstenite"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2938,11 +2959,11 @@ dependencies = [
  "example-proto",
  "log",
  "prost",
+ "transport-router-zenoh-plugin",
  "uprotocol-sdk",
  "uprotocol_zenoh_rust",
  "zenoh",
  "zenoh-plugin-trait",
- "zenoh-transport-router",
 ]
 
 [[package]]
@@ -3664,6 +3685,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "zenoh-retransmitter"
+version = "0.1.5-SNAPSHOT"
+
+[[package]]
 name = "zenoh-sync"
 version = "0.10.1-rc"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3708,23 +3733,6 @@ dependencies = [
  "zenoh-protocol",
  "zenoh-result",
  "zenoh-sync",
- "zenoh-util",
-]
-
-[[package]]
-name = "zenoh-transport-router"
-version = "0.1.5-SNAPSHOT"
-dependencies = [
- "async-std",
- "clap",
- "env_logger",
- "futures",
- "log",
- "serde_json",
- "zenoh",
- "zenoh-core",
- "zenoh-plugin-trait",
- "zenoh-result",
  "zenoh-util",
 ]
 

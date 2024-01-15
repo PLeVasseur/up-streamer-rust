@@ -11,13 +11,13 @@
 
 [package]
 rust-version = { workspace = true }
-name = "zenoh-transport-router"
+name = "transport-router-zenoh-plugin"
 version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
 
 [lib]
-# When auto-detecting the "zenoh-transport-router" plugin, `zenohd` will look for a dynamic library named "zenoh_transport_router"
+# When auto-detecting the "transport-router-zenoh-plugin" plugin, `zenohd` will look for a dynamic library named "zenoh_transport_router"
 # `zenohd` will expect the file to be named according to OS conventions:
 #   - libzenoh_tranport_router.so on linux
 #   - libzenoh_transport_router.dylib on macOS

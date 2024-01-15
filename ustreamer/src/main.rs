@@ -45,17 +45,10 @@ async fn main() {
     // let zenoh_transport_router_plugin = config.plugin("rest").is_some();
     let zenoh_transport_router_plugin = true;
 
-    // let locator = vec![String::from("tcp/127.0.0.1:17449")];
-
     let mut config = zenoh::config::Config::default();
     config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Unable to configure as Peer");
-
-    // config
-    //     .listen
-    //     .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
-    //     .unwrap();
 
     // if "zenoh_transport_router" plugin conf is not present, add it (empty to use default config)
     if config.plugin("zenoh_transport_router").is_none() {
@@ -67,7 +60,7 @@ async fn main() {
     // create a zenoh Runtime (to share with router-plugins)
     let runtime = zenoh::runtime::Runtime::new(config).await.unwrap();
 
-    // start zenoh-transport-router plugin
+    // start transport-router-zenoh-plugin plugin
     if zenoh_transport_router_plugin {
         use zenoh_plugin_trait::Plugin;
         zenoh_transport_router::ZenohTransportRouter::start("zenoh_transport_router", &runtime)

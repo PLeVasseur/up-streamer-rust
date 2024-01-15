@@ -33,7 +33,7 @@ pub struct ZenohTransportRouter {}
 // declaration of the plugin's VTable for zenohd to find the plugin's functions to be called
 zenoh_plugin_trait::declare_plugin!(ZenohTransportRouter);
 
-// A default sniff-route for the zenoh-transport-router to monitor traffic on
+// A default sniff-route for the transport-router-zenoh-plugin to monitor traffic on
 // TODO: May be good to have the up-zenoh-* libraries prepend their key expressions with up/ to disambiguate
 // const DEFAULT_SNIFF_ROUTE: &str = "up/**";
 const DEFAULT_SNIFF_ROUTE: &str = "**";
@@ -160,7 +160,7 @@ async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) 
     // let mut stored: HashMap<String, Sample> = HashMap::new();
 
     debug!(
-        "Run zenoh-transport-router with sniff-route={}",
+        "Run transport-router-zenoh-plugin with sniff-route={}",
         sniff_route
     );
 
