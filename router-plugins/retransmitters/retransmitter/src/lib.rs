@@ -12,7 +12,6 @@
  ********************************************************************************/
 
 use async_trait::async_trait;
-
 use uprotocol_sdk::uprotocol::{UMessage, UStatus, UUri};
 
 #[async_trait]

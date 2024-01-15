@@ -16,9 +16,23 @@ use log::debug;
 use retransmitter::Retransmitter;
 use uprotocol_sdk::uprotocol::{UCode, UMessage, UStatus, UUri};
 use uprotocol_zenoh_rust::ULinkZenoh;
+use zenoh::prelude::r#async::*;
+use zenoh::runtime::Runtime;
 
 pub struct RetransmitterZenoh {
     resource_append: Option<u8>, // used when operating in "dummy" mode to append this to the resource
+    up_zenoh: ULinkZenoh,
+}
+
+impl RetransmitterZenoh {
+    pub async fn new(runtime: Runtime, resource_append: Option<u8>) -> RetransmitterZenoh {
+        // RetransmitterZenoh {
+        //     resource_append,
+        //     up_zenoh: zenoh::init(runtime).res().await.unwrap(),
+        // }
+
+        todo!()
+    }
 }
 
 #[async_trait]

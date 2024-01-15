@@ -3701,6 +3701,7 @@ dependencies = [
  "retransmitter",
  "uprotocol-sdk",
  "uprotocol_zenoh_rust",
+ "zenoh",
 ]
 
 [[package]]

@@ -26,3 +26,4 @@ log = { workspace = true }
 retransmitter = { workspace = true }
 uprotocol-sdk = { workspace = true }
 uprotocol_zenoh_rust = { workspace = true }
+zenoh = { workspace = true }
