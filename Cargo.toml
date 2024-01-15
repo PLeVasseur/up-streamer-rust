@@ -34,16 +34,16 @@ keywords = ["uProtocol", "SDK"]
 license = "Apache-2.0"
 
 [workspace.dependencies]
+async-std = "1.12.0"
+env_logger = "0.10.1"
+prost = "0.12"
+prost-types = "0.12"
 uprotocol-sdk = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust.git", branch = "support_rpcserver" }
-zenoh = { version = "0.10.1-rc", features = ["unstable"]}
 # upstream
 # uprotocol_zenoh_rust = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust-ulink-zenoh.git", branch = "support_rpcserver" }
 # my version, increasing timeout to 2 seconds
 uprotocol_zenoh_rust = { git = "https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git", branch = "feature/update_timeout" }
-async-std = "1.12.0"
-prost = "0.12"
-prost-types = "0.12"
-env_logger = "0.10.1"
+zenoh = { version = "0.10.1-rc", features = ["unstable"]}
 
 [profile.dev]
 debug = true

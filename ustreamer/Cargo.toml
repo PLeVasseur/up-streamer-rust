@@ -17,12 +17,12 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-uprotocol-sdk = { workspace = true }
-zenoh = { workspace = true }
-uprotocol_zenoh_rust = { workspace = true }
 async-std = { workspace = true }
-prost = { workspace = true }
 env_logger = { workspace = true }
+prost = { workspace = true }
+uprotocol-sdk = { workspace = true }
+uprotocol_zenoh_rust = { workspace = true }
+zenoh = { workspace = true }
 
 [dev-dependencies]
 example-proto = { path = "../example-utils/example-proto" }
