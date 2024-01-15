@@ -1,0 +1,36 @@
+# Copyright (c) 2023 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+rust-version = { workspace = true }
+name = "zenoh-transport-router"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+
+[lib]
+# When auto-detecting the "zenoh-transport-router" plugin, `zenohd` will look for a dynamic library named "zenoh_transport_router"
+# `zenohd` will expect the file to be named according to OS conventions:
+#   - libzenoh_tranport_router.so on linux
+#   - libzenoh_transport_router.dylib on macOS
+#   - zenoh_transport_router.dll on Windows
+name = "zenoh_transport_router"
+# This crate type will make `cargo` output a dynamic library instead of a rust static library
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+async-std = { workspace = true, features = ["default"] }
+clap = { workspace = true }
+env_logger = { workspace = true }
+futures = { workspace = true }
+log = { workspace = true }
+serde_json = { workspace = true }
+zenoh = { workspace = true }

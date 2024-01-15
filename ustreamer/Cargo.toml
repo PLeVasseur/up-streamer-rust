@@ -10,11 +10,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
+rust-version = { workspace = true }
 name = "ustreamer"
-version = "0.1.0"
-edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
 
 [dependencies]
 async-std = { workspace = true }
