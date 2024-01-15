@@ -28,33 +28,34 @@ use zenoh_core::zlock;
 use zenoh_result::{bail, ZResult};
 
 // The struct implementing the ZenohPlugin and ZenohPlugin traits
-pub struct ExamplePlugin {}
+pub struct ZenohTransportRouter {}
 
 // declaration of the plugin's VTable for zenohd to find the plugin's functions to be called
-zenoh_plugin_trait::declare_plugin!(ExamplePlugin);
+zenoh_plugin_trait::declare_plugin!(ZenohTransportRouter);
 
-// A default selector for this example of storage plugin (in case the config doesn't set it)
-// This plugin will subscribe to this selector and declare a queryable with this selector
-const DEFAULT_SELECTOR: &str = "demo/example/**";
+// A default sniff-route for the zenoh-transport-router to monitor traffic on
+// TODO: May be good to have the up-zenoh-* libraries prepend their key expressions with up/ to disambiguate
+// const DEFAULT_SNIFF_ROUTE: &str = "up/**";
+const DEFAULT_SNIFF_ROUTE: &str = "**";
 
-impl ZenohPlugin for ExamplePlugin {}
-impl Plugin for ExamplePlugin {
+impl ZenohPlugin for ZenohTransportRouter {}
+impl Plugin for ZenohTransportRouter {
     type StartArgs = Runtime;
     type RunningPlugin = zenoh::plugins::RunningPlugin;
 
     // A mandatory const to define, in case of the plugin is built as a standalone executable
-    const STATIC_NAME: &'static str = "example";
+    const STATIC_NAME: &'static str = "zenoh_transport_router";
 
     // The first operation called by zenohd on the plugin
     fn start(name: &str, runtime: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
         let config = runtime.config.lock();
         let self_cfg = config.plugin(name).unwrap().as_object().unwrap();
         // get the plugin's config details from self_cfg Map (here the "storage-selector" property)
-        let selector: KeyExpr = match self_cfg.get("storage-selector") {
+        let default_sniff_route: KeyExpr = match self_cfg.get("default-sniff-route") {
             Some(serde_json::Value::String(s)) => KeyExpr::try_from(s)?,
-            None => KeyExpr::try_from(DEFAULT_SELECTOR).unwrap(),
+            None => KeyExpr::try_from(DEFAULT_SNIFF_ROUTE).unwrap(),
             _ => {
-                bail!("storage-selector is a mandatory option for {}", name)
+                bail!("default-sniff-route is a mandatory option for {}", name)
             }
         }
         .clone()
@@ -64,7 +65,7 @@ impl Plugin for ExamplePlugin {
         // a flag to end the plugin's loop when the plugin is removed from the config
         let flag = Arc::new(AtomicBool::new(true));
         // spawn the task running the plugin's loop
-        async_std::task::spawn(run(runtime.clone(), selector, flag.clone()));
+        async_std::task::spawn(run(runtime.clone(), default_sniff_route, flag.clone()));
         // return a RunningPlugin to zenohd
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
             RunningPluginInner {
@@ -94,11 +95,11 @@ impl RunningPluginTrait for RunningPlugin {
         std::mem::drop(guard);
         let plugin = self.clone();
         Arc::new(move |path, old, new| {
-            const STORAGE_SELECTOR: &str = "storage-selector";
-            if path == STORAGE_SELECTOR || path.is_empty() {
-                match (old.get(STORAGE_SELECTOR), new.get(STORAGE_SELECTOR)) {
+            const DEFAULT_SNIFF_ROUTE: &str = "default-sniff-route";
+            if path == DEFAULT_SNIFF_ROUTE || path.is_empty() {
+                match (old.get(DEFAULT_SNIFF_ROUTE), new.get(DEFAULT_SNIFF_ROUTE)) {
                     (Some(serde_json::Value::String(os)), Some(serde_json::Value::String(ns)))
-                    if os == ns => {}
+                        if os == ns => {}
                     (_, Some(serde_json::Value::String(selector))) => {
                         let mut guard = zlock!(&plugin.0);
                         guard.flag.store(false, Relaxed);
@@ -120,7 +121,7 @@ impl RunningPluginTrait for RunningPlugin {
                         guard.flag.store(false, Relaxed);
                     }
                     _ => {
-                        bail!("storage-selector for {} must be a string", &name)
+                        bail!("default-sniff-route for {} must be a string", &name)
                     }
                 }
             }
@@ -146,24 +147,31 @@ impl Drop for RunningPlugin {
     }
 }
 
-async fn run(runtime: Runtime, selector: KeyExpr<'_>, flag: Arc<AtomicBool>) {
+async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) {
     env_logger::init();
 
-    // create a zenoh Session that shares the same Runtime than zenohd
+    // create a zenoh Session that shares the same Runtime as zenohd
     let session = zenoh::init(runtime).res().await.unwrap();
 
     // the HasMap used as a storage by this example of storage plugin
     let mut stored: HashMap<String, Sample> = HashMap::new();
 
-    debug!("Run example-plugin with storage-selector={}", selector);
+    debug!(
+        "Run zenoh-transport-router with sniff-route={}",
+        sniff_route
+    );
 
-    // This storage plugin subscribes to the selector and will store in HashMap the received samples
-    debug!("Create Subscriber on {}", selector);
-    let sub = session.declare_subscriber(&selector).res().await.unwrap();
+    // This storage plugin subscribes to the sniff_route and will store in HashMap the received samples
+    debug!("Create Subscriber on {}", sniff_route);
+    let sub = session
+        .declare_subscriber(&sniff_route)
+        .res()
+        .await
+        .unwrap();
 
     // This storage plugin declares a Queryable that will reply to queries with the samples stored in the HashMap
-    debug!("Create Queryable on {}", selector);
-    let queryable = session.declare_queryable(&selector).res().await.unwrap();
+    debug!("Create Queryable on {}", sniff_route);
+    let queryable = session.declare_queryable(&sniff_route).res().await.unwrap();
 
     // Plugin's event loop, while the flag is true
     while flag.load(Relaxed) {
