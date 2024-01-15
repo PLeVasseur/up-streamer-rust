@@ -1,0 +1,18 @@
+[package]
+name = "ustreamer"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+uprotocol-sdk = { workspace = true }
+zenoh = { workspace = true }
+uprotocol_zenoh_rust = { workspace = true }
+async-std = { workspace = true }
+prost = { workspace = true }
+env_logger = { workspace = true }
+
+[dev-dependencies]
+example-proto = { path = "../example-utils/example-proto" }
+chrono = { version = "0.4.31", features = [] }

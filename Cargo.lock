@@ -2527,6 +2527,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "someip-router"
+version = "0.1.0"
+
+[[package]]
 name = "spin"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3655,6 +3659,10 @@ checksum = "3d3b5209dc13bf96dc62921a389af38e757fb0baea54f2078e29636d2238e958"
 dependencies = [
  "anyhow",
 ]
+
+[[package]]
+name = "zenoh-router"
+version = "0.1.0"
 
 [[package]]
 name = "zenoh-sync"
