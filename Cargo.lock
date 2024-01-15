@@ -3719,6 +3719,10 @@ dependencies = [
  "log",
  "serde_json",
  "zenoh",
+ "zenoh-core",
+ "zenoh-plugin-trait",
+ "zenoh-result",
+ "zenoh-util",
 ]
 
 [[package]]

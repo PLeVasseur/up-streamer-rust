@@ -34,3 +34,7 @@ futures = { workspace = true }
 log = { workspace = true }
 serde_json = { workspace = true }
 zenoh = { workspace = true }
+zenoh-core = { workspace = true }
+zenoh-plugin-trait = { workspace = true }
+zenoh-result = { workspace = true }
+zenoh-util = { workspace = true }
