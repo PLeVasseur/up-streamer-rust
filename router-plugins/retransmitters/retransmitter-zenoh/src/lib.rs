@@ -105,53 +105,61 @@ impl Retransmitter for RetransmitterZenoh {
         // };
 
         let mut retransmit_destination = destination;
-        if let Some(ref append) = self.resource_append {
-            if let Some(ref mut resource) = retransmit_destination.resource {
-                if let Some(ref mut message) = resource.message {
-                    message.push_str(&append.to_string());
-                } else {
-                    println!("UResource.message was none!");
-                    return Err(UStatus::fail_with_code(
-                        UCode::Internal,
-                        &*format!(
-                            "UResource.message was none for Zenoh key expression: {}",
-                            &key_expr
-                        ),
-                    ));
-                }
-            } else {
+
+        if let Some(append) = &self.resource_append {
+            let resource = retransmit_destination.resource.as_mut().ok_or_else(|| {
                 println!("UResource was none!");
-                return Err(UStatus::fail_with_code(
+                UStatus::fail_with_code(
                     UCode::Internal,
-                    &*format!("UResource was none for Zenoh key expression: {}", &key_expr),
-                ));
-            }
+                    &format!("UResource was none for Zenoh key expression: {}", key_expr),
+                )
+            })?;
+
+            let message = resource.message.as_mut().ok_or_else(|| {
+                println!("UResource.message was none!");
+                UStatus::fail_with_code(
+                    UCode::Internal,
+                    &format!(
+                        "UResource.message was none for Zenoh key expression: {}",
+                        key_expr
+                    ),
+                )
+            })?;
+
+            message.push_str(&append.to_string());
         }
 
         let mut retransmit_attributes = attributes;
-        if let Some(ref append) = self.resource_append {
-            if let Some(ref mut sink) = retransmit_attributes.sink {
-                if let Some(ref mut resource) = sink.resource {
-                    if let Some(ref mut message) = resource.message {
-                        message.push_str(&append.to_string());
-                    } else {
-                        println!("UResource.message was none!");
-                        return Err(UStatus::fail_with_code(
-                            UCode::Internal,
-                            &*format!(
-                                "UResource.message was none for Zenoh key expression: {}",
-                                &key_expr
-                            ),
-                        ));
-                    }
-                } else {
-                    println!("UResource was none!");
-                    return Err(UStatus::fail_with_code(
-                        UCode::Internal,
-                        &*format!("UResource was none for Zenoh key expression: {}", &key_expr),
-                    ));
-                }
-            }
+
+        if let Some(append) = &self.resource_append {
+            let sink = retransmit_attributes.sink.as_mut().ok_or_else(|| {
+                println!("UResource was none!");
+                UStatus::fail_with_code(
+                    UCode::Internal,
+                    &format!("UResource was none for Zenoh key expression: {}", key_expr),
+                )
+            })?;
+
+            let resource = sink.resource.as_mut().ok_or_else(|| {
+                println!("UResource was none!");
+                UStatus::fail_with_code(
+                    UCode::Internal,
+                    &format!("UResource was none for Zenoh key expression: {}", key_expr),
+                )
+            })?;
+
+            let message = resource.message.as_mut().ok_or_else(|| {
+                println!("UResource.message was none!");
+                UStatus::fail_with_code(
+                    UCode::Internal,
+                    &format!(
+                        "UResource.message was none for Zenoh key expression: {}",
+                        key_expr
+                    ),
+                )
+            })?;
+
+            message.push_str(&append.to_string());
         }
 
         match UMessageType::try_from(retransmit_attributes.r#type) {
