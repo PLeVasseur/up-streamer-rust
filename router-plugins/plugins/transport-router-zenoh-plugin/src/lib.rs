@@ -214,10 +214,6 @@ async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) 
                     continue;
                 };
 
-                info!("Past attachment check");
-
-                let attachment_clone = attachment.clone();
-
                 let Ok(encoding) = sample.encoding.suffix().parse::<i32>() else {
                     error!("Unable to get encoding for key expression: '{}'", key_expr);
                     continue;
@@ -246,21 +242,15 @@ async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) 
                     data: Some(Data::Value(sample.payload.contiguous().to_vec())),
                 };
 
-                info!("Past creating UPayload and UAttributes");
-
                 let Some(ref sink) = u_attribute.sink else {
                     error!("No sink attached to message with key expression: '{}", &key_expr);
                     continue;
                 };
 
-                info!("Calling retransmit");
                 if let Err(e) = retransmitter_zenoh.retransmit(sink.clone(), u_payload, u_attribute).await {
                     error!("Unable to retransmit over Zenoh: {:?}", e);
                     continue;
                 };
-                info!("Past retransmit");
-
-                // stored.insert(sample.key_expr.to_string(), sample);
             },
             // on query received by the Queryable
             query = queryable.recv_async() => {

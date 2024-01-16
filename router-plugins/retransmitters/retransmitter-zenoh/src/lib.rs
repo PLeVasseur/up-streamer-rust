@@ -47,9 +47,6 @@ impl Retransmitter for RetransmitterZenoh {
         payload: UPayload,
         attributes: UAttributes,
     ) -> Result<(), UStatus> {
-        println!("entered retransmit");
-
-        // async fn retransmit(&self, destination: UUri, message: UMessage) -> UStatus {
         let key_expr = match ULinkZenoh::to_zenoh_key_string(&destination) {
             Ok(ke) => ke,
             Err(e) => {
@@ -60,22 +57,10 @@ impl Retransmitter for RetransmitterZenoh {
             }
         };
 
-        println!("inside of retransmit, key_expr: {}", &key_expr);
-
-        println!("Past check for UUri => key expression");
-
         // Check if we have received a message we already retransmitted
         if let Some(resource_append) = self.resource_append {
-            println!("Some(resource_append): {}", &resource_append);
-            println!(
-                "&resource_append.to_string(): {}",
-                &resource_append.to_string()
-            );
-            println!(
-                "key_expr.ends_with(&resource_append.to_string()): {}",
-                key_expr.ends_with(&resource_append.to_string())
-            );
             if key_expr.ends_with(&resource_append.to_string()) {
+                // TODO: Troubleshoot why e.g. info!() don't appear to be honored from within this file
                 println!(
                     "Ignoring already retransmitted message with key expression: '{}'",
                     &key_expr
@@ -84,8 +69,6 @@ impl Retransmitter for RetransmitterZenoh {
             }
         }
 
-        println!("Past check for retransmitted message");
-
         let retransmit_key_expr = {
             if let Some(resource_append) = self.resource_append {
                 key_expr.clone() + &resource_append.to_string()
@@ -93,8 +76,6 @@ impl Retransmitter for RetransmitterZenoh {
                 key_expr.clone()
             }
         };
-
-        println!("retransmit_key_expr: {}", retransmit_key_expr);
 
         // TODO: Implement checking the UAuthority here, when we want to use this with remote uDevices
         // if destination.authority.is_none() {
@@ -105,7 +86,7 @@ impl Retransmitter for RetransmitterZenoh {
         //     return UStatus::ok();
         // }
 
-        // // TODO: Do we need to check this here, if it's enforced at the API level?
+        // TODO: Do we need to check this here, if it's enforced at the API level?
         // let Some(payload) = message.payload else {
         //     error!("No payload retrieved from message with key expression: '{}", &key_expr);
         //     return UStatus::fail_with_code(
@@ -113,8 +94,8 @@ impl Retransmitter for RetransmitterZenoh {
         //         &*format!("No payload retrieved from message with key expression: {:?}", key_expr),
         //     );
         // };
-        //
-        // // TODO: Do we need to check this here, if it's enforced at the API level?
+
+        // TODO: Do we need to check this here, if it's enforced at the API level?
         // let Some(attributes) = message.attributes else {
         //     error!("No attributes retrieved from message with key expression: '{}", &key_expr);
         //     return UStatus::fail_with_code(
@@ -124,18 +105,9 @@ impl Retransmitter for RetransmitterZenoh {
         // };
 
         let mut retransmit_destination = destination;
-        println!(
-            "retransmit_destination -- before -- : {:?}",
-            &retransmit_destination
-        );
         if let Some(ref append) = self.resource_append {
-            println!("Some(ref append)");
-            // If resource_append is Some, modify the message
             if let Some(ref mut resource) = retransmit_destination.resource {
-                println!("Some(ref mut resource)");
                 if let Some(ref mut message) = resource.message {
-                    println!("Some(ref mut message)");
-                    // If message is Some, append to it
                     message.push_str(&append.to_string());
                 } else {
                     println!("UResource.message was none!");
@@ -154,30 +126,13 @@ impl Retransmitter for RetransmitterZenoh {
                     &*format!("UResource was none for Zenoh key expression: {}", &key_expr),
                 ));
             }
-            // Note: If retransmit_destination.resource is None, we do nothing
         }
-        println!(
-            "retransmit_destination -- after -- : {:?}",
-            &retransmit_destination
-        );
-        // retransmit_destination.resource.unwrap().message = {
-        //     if let Some(resource_append) = self.resource_append {
-        //         Some(retransmit_destination.resource.clone().unwrap().message.unwrap() + &resource_append.to_string())
-        //     } else {
-        //         Some(retransmit_destination.resource.clone().unwrap().message.unwrap())
-        //     }
-        // };
 
         let mut retransmit_attributes = attributes;
         if let Some(ref append) = self.resource_append {
             if let Some(ref mut sink) = retransmit_attributes.sink {
-                println!("Some(ref mut sink)");
-                // If resource_append is Some, modify the message
                 if let Some(ref mut resource) = sink.resource {
-                    println!("Some(ref mut resource)");
                     if let Some(ref mut message) = resource.message {
-                        println!("Some(ref mut message)");
-                        // If message is Some, append to it
                         message.push_str(&append.to_string());
                     } else {
                         println!("UResource.message was none!");
@@ -223,18 +178,6 @@ impl Retransmitter for RetransmitterZenoh {
                 ));
             }
         }
-
-        println!("Past check on UMessageType");
-
-        // if attributes.r#type == UMessageType::UmessageTypePublish {
-        // if let Err(e) = self.up_zenoh.send(destination, payload, attributes).await {
-        //     error!("UTransport::send() failed: {:?}", e);
-        //     return UStatus::fail_with_code(
-        //         UCode::Internal,
-        //         &*format!("Send failed: {:?}", e),
-        //     );
-        // }
-        // }
 
         Ok(())
     }
