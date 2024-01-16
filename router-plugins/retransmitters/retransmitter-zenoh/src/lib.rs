@@ -26,12 +26,13 @@ pub struct RetransmitterZenoh {
 
 impl RetransmitterZenoh {
     pub async fn new(runtime: Runtime, resource_append: Option<u8>) -> RetransmitterZenoh {
-        // RetransmitterZenoh {
-        //     resource_append,
-        //     up_zenoh: zenoh::init(runtime).res().await.unwrap(),
-        // }
+        // TODO: Add error handling here and change signature to possibly error
+        let up_zenoh = ULinkZenoh::new_from_runtime(runtime).await.unwrap();
 
-        todo!()
+        RetransmitterZenoh {
+            resource_append,
+            up_zenoh: up_zenoh,
+        }
     }
 }
 
