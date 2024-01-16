@@ -193,7 +193,6 @@ async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) 
                 info!("Received data ('{}': '{}')", sample.key_expr, sample.value);
 
                 let key_expr = sample.key_expr.clone();
-                let payload = sample.value.payload.clone();
 
                 // Check if the key expression starts with "@", i.e is internal message to Zenoh
                 if key_expr.starts_with('@') {
@@ -203,8 +202,6 @@ async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) 
                     );
                     continue;
                 }
-
-                info!("Past internal @ check");
 
                 let Some(attachment) = sample.attachment() else {
                     error!(
@@ -219,10 +216,6 @@ async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) 
                     continue;
                 };
 
-                let Some(attachment) = sample.attachment() else {
-                    error!("Unable to get attachment for key expression: '{}'", &key_expr);
-                    continue;
-                };
                 let Some(attribute) = attachment.get(&"uattributes".as_bytes()) else {
                     error!("Unable to get uattributes for key expression: '{}'", &key_expr);
                     continue;

@@ -46,8 +46,6 @@ async fn main() {
     // Your example code goes here
     println!("This is an example sender for uStreamer.");
 
-    // let locator = vec![String::from("tcp/127.0.0.1:17449")];
-
     let mut config = Config::default();
     config
         .set_mode(Some(WhatAmI::Peer))

@@ -69,15 +69,13 @@ impl Retransmitter for RetransmitterZenoh {
             }
         }
 
-        let retransmit_key_expr = {
-            if let Some(resource_append) = self.resource_append {
-                key_expr.clone() + &resource_append.to_string()
-            } else {
-                key_expr.clone()
-            }
-        };
+        // TODO: Think I need the ability to convert from Zenoh key expression back into UUri
+        //  Why? Because the "source" UUri doesn't appear to be made available anywhere
+        //  So when a message is published to a topic in a multicast fashion, I must be able to
+        //  from that Zenoh key expression be able to extract the UUri to allow me to bridge to different
+        //  transports
 
-        // TODO: Implement checking the UAuthority here, when we want to use this with remote uDevices
+        // TODO: Uncomment checking the UAuthority here, when we want to use this with remote uDevices
         // if destination.authority.is_none() {
         //     debug!(
         //         "Only retransmit messages onto other protocols to other uDevices: '{}'",
@@ -104,6 +102,7 @@ impl Retransmitter for RetransmitterZenoh {
         //     );
         // };
 
+        // --- a temporary hack to showcase the ability to retransmit. we must change the destination to do so ---
         let mut retransmit_destination = destination;
 
         if let Some(append) = &self.resource_append {
@@ -128,7 +127,9 @@ impl Retransmitter for RetransmitterZenoh {
 
             message.push_str(&append.to_string());
         }
+        // --- a temporary hack to showcase the ability to retransmit. we must change the destination to do so ---
 
+        // --- a temporary hack to showcase the ability to retransmit. we must change the sink to do so ---
         let mut retransmit_attributes = attributes;
 
         if let Some(append) = &self.resource_append {
@@ -161,6 +162,7 @@ impl Retransmitter for RetransmitterZenoh {
 
             message.push_str(&append.to_string());
         }
+        // --- a temporary hack to showcase the ability to retransmit. we must change the sink to do so ---
 
         match UMessageType::try_from(retransmit_attributes.r#type) {
             Ok(UMessageType::UmessageTypePublish) => {
@@ -176,6 +178,10 @@ impl Retransmitter for RetransmitterZenoh {
                     ));
                 }
             }
+            // TODO: Consider whether to handle Request and Response within here too
+            // Ok(UMessageType::UmessageTypeRequest) => {
+            //     self.send_response(&zenoh_key, payload, attributes).await
+            // }
             // Ok(UMessageType::UmessageTypeResponse) => {
             //     self.send_response(&zenoh_key, payload, attributes).await
             // }

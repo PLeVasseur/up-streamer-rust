@@ -79,16 +79,10 @@ async fn main() {
     // Your example code goes here
     println!("This is an example client for uStreamer.");
 
-    // let locator = vec![String::from("tcp/127.0.0.1:17449")];
-
     let mut config = Config::default();
     config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Client failed");
-    // config
-    //     .connect
-    //     .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
-    //     .unwrap();
     let ulink = ULinkZenoh::new_from_config(config).await.unwrap();
     let timer_hour_uuri = UUri {
         authority: None,
