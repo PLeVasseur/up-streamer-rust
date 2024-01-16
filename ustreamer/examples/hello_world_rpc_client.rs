@@ -43,7 +43,7 @@ async fn main() {
     //     .connect
     //     .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
     //     .unwrap();
-    let ulink = ULinkZenoh::new(config).await.unwrap();
+    let ulink = ULinkZenoh::new_from_config(config).await.unwrap();
 
     let request_resource =
         UResourceBuilder::for_rpc_request(Some("get_hello".to_string()), Some(1));

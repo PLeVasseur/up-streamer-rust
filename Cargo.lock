@@ -2080,6 +2080,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "retransmitter-zenoh"
+version = "0.1.5-SNAPSHOT"
+dependencies = [
+ "async-trait",
+ "log",
+ "retransmitter",
+ "uprotocol-sdk",
+ "uprotocol_zenoh_rust",
+ "zenoh",
+]
+
+[[package]]
 name = "ring"
 version = "0.16.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2766,7 +2778,11 @@ dependencies = [
  "env_logger",
  "futures",
  "log",
+ "prost",
+ "retransmitter",
+ "retransmitter-zenoh",
  "serde_json",
+ "uprotocol-sdk",
  "zenoh",
  "zenoh-core",
  "zenoh-plugin-trait",
@@ -3690,18 +3706,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d3b5209dc13bf96dc62921a389af38e757fb0baea54f2078e29636d2238e958"
 dependencies = [
  "anyhow",
-]
-
-[[package]]
-name = "zenoh-retransmitter"
-version = "0.1.5-SNAPSHOT"
-dependencies = [
- "async-trait",
- "log",
- "retransmitter",
- "uprotocol-sdk",
- "uprotocol_zenoh_rust",
- "zenoh",
 ]
 
 [[package]]

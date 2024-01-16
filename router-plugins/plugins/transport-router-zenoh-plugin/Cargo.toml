@@ -32,7 +32,11 @@ clap = { workspace = true }
 env_logger = { workspace = true }
 futures = { workspace = true }
 log = { workspace = true }
+prost = { workspace = true }
+retransmitter = { workspace = true }
+retransmitter-zenoh = { workspace = true }
 serde_json = { workspace = true }
+uprotocol-sdk = { workspace = true }
 zenoh = { workspace = true }
 zenoh-core = { workspace = true }
 zenoh-plugin-trait = { workspace = true }

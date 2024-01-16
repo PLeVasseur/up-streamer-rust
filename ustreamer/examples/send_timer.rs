@@ -52,7 +52,7 @@ async fn main() {
     config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Peer failed");
-    let ulink = ULinkZenoh::new(config).await.unwrap();
+    let ulink = ULinkZenoh::new_from_config(config).await.unwrap();
     let timer_hour_uuri = UUri {
         authority: None,
         entity: Option::from(UEntity {
@@ -150,10 +150,46 @@ async fn main() {
         }),
     };
 
-    let attributes = UAttributes {
+    let timer_hour_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
-        sink: None,
+        sink: Some(timer_hour_uuri.clone()),
+        priority: 0,
+        ttl: None,
+        permission_level: None,
+        commstatus: None,
+        reqid: None,
+        token: None,
+    };
+
+    let timer_minute_attributes = UAttributes {
+        id: None,
+        r#type: i32::from(UMessageType::UmessageTypePublish),
+        sink: Some(timer_minute_uuri.clone()),
+        priority: 0,
+        ttl: None,
+        permission_level: None,
+        commstatus: None,
+        reqid: None,
+        token: None,
+    };
+
+    let timer_second_attributes = UAttributes {
+        id: None,
+        r#type: i32::from(UMessageType::UmessageTypePublish),
+        sink: Some(timer_second_uuri.clone()),
+        priority: 0,
+        ttl: None,
+        permission_level: None,
+        commstatus: None,
+        reqid: None,
+        token: None,
+    };
+
+    let timer_nanosecond_attributes = UAttributes {
+        id: None,
+        r#type: i32::from(UMessageType::UmessageTypePublish),
+        sink: Some(timer_nanosecond_uuri.clone()),
         priority: 0,
         ttl: None,
         permission_level: None,
@@ -183,7 +219,7 @@ async fn main() {
             .send(
                 timer_hour_uuri.clone(),
                 hour_timer_payload.clone(),
-                attributes.clone(),
+                timer_hour_attributes.clone(),
             )
             .await
         {
@@ -216,7 +252,7 @@ async fn main() {
             .send(
                 timer_minute_uuri.clone(),
                 minute_timer_payload.clone(),
-                attributes.clone(),
+                timer_minute_attributes.clone(),
             )
             .await
         {
@@ -249,7 +285,7 @@ async fn main() {
             .send(
                 timer_second_uuri.clone(),
                 second_timer_payload.clone(),
-                attributes.clone(),
+                timer_second_attributes.clone(),
             )
             .await
         {
@@ -282,7 +318,7 @@ async fn main() {
             .send(
                 timer_nanosecond_uuri.clone(),
                 nanosecond_timer_payload.clone(),
-                attributes.clone(),
+                timer_nanosecond_attributes.clone(),
             )
             .await
         {

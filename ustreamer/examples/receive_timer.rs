@@ -83,13 +83,13 @@ async fn main() {
 
     let mut config = Config::default();
     config
-        .set_mode(Some(WhatAmI::Client))
+        .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Client failed");
     // config
     //     .connect
     //     .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
     //     .unwrap();
-    let ulink = ULinkZenoh::new(config).await.unwrap();
+    let ulink = ULinkZenoh::new_from_config(config).await.unwrap();
     let timer_hour_uuri = UUri {
         authority: None,
         entity: Option::from(UEntity {

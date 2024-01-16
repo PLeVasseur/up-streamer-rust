@@ -35,20 +35,22 @@ async fn main() {
 
     let mut config = Config::default();
     config
-        .set_mode(Some(WhatAmI::Client))
+        .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Client failed");
     // config
     //     .connect
     //     .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
     //     .unwrap();
-    config.scouting.multicast.set_enabled(Some(false)).unwrap();
-    config.scouting.gossip.set_enabled(Some(false)).unwrap();
-    config
-        .routing
-        .router
-        .set_peers_failover_brokering(Some(false))
-        .unwrap();
-    let rpc_server = Arc::new(Mutex::new(ULinkZenoh::new(config).await.unwrap()));
+    // config.scouting.multicast.set_enabled(Some(false)).unwrap();
+    // config.scouting.gossip.set_enabled(Some(false)).unwrap();
+    // config
+    //     .routing
+    //     .router
+    //     .set_peers_failover_brokering(Some(false))
+    //     .unwrap();
+    let rpc_server = Arc::new(Mutex::new(
+        ULinkZenoh::new_from_config(config).await.unwrap(),
+    ));
 
     // create uuri
     let uuri = UUri {

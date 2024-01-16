@@ -10,7 +10,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 [package]
-name = "zenoh-retransmitter"
+name = "retransmitter-zenoh"
 rust-version.workspace = true
 version.workspace = true
 repository.workspace = true

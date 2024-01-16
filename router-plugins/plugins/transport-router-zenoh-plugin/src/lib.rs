@@ -14,13 +14,17 @@
 #![recursion_limit = "256"]
 
 use futures::select;
-use log::{debug, info};
+use log::{debug, error, info};
+use prost::Message;
 // use std::collections::HashMap;
+use retransmitter::Retransmitter;
+use retransmitter_zenoh::RetransmitterZenoh;
 use std::convert::TryFrom;
 use std::sync::{
     atomic::{AtomicBool, Ordering::Relaxed},
     Arc, Mutex,
 };
+use uprotocol_sdk::uprotocol::{Data, UAttributes, UPayload};
 use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction, ZenohPlugin};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
@@ -154,7 +158,7 @@ impl Drop for RunningPlugin {
 
 async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) {
     // create a zenoh Session that shares the same Runtime as zenohd
-    let session = zenoh::init(runtime).res().await.unwrap();
+    let session = zenoh::init(runtime.clone()).res().await.unwrap();
 
     // the HasMap used as a storage by this example of storage plugin
     // let mut stored: HashMap<String, Sample> = HashMap::new();
@@ -163,6 +167,9 @@ async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) 
         "Run transport-router-zenoh-plugin with sniff-route={}",
         sniff_route
     );
+
+    debug!("Create RetransmitterZenoh");
+    let retransmitter_zenoh = RetransmitterZenoh::new(runtime.clone(), Some(535)).await;
 
     // This storage plugin subscribes to the sniff_route and will store in HashMap the received samples
     debug!("Create Subscriber on {}", sniff_route);
@@ -184,6 +191,75 @@ async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) 
             sample = sub.recv_async() => {
                 let sample = sample.unwrap();
                 info!("Received data ('{}': '{}')", sample.key_expr, sample.value);
+
+                let key_expr = sample.key_expr.clone();
+                let payload = sample.value.payload.clone();
+
+                // Check if the key expression starts with "@", i.e is internal message to Zenoh
+                if key_expr.starts_with('@') {
+                    debug!(
+                        "Ignoring Zenoh internal message with key expression: '{}'",
+                        &key_expr
+                    );
+                    continue;
+                }
+
+                info!("Past internal @ check");
+
+                let Some(attachment) = sample.attachment() else {
+                    error!(
+                        "Message missing attachment, skip key expression: '{}'",
+                        key_expr
+                    );
+                    continue;
+                };
+
+                info!("Past attachment check");
+
+                let attachment_clone = attachment.clone();
+
+                let Ok(encoding) = sample.encoding.suffix().parse::<i32>() else {
+                    error!("Unable to get encoding for key expression: '{}'", key_expr);
+                    continue;
+                };
+
+                let Some(attachment) = sample.attachment() else {
+                    error!("Unable to get attachment for key expression: '{}'", &key_expr);
+                    continue;
+                };
+                let Some(attribute) = attachment.get(&"uattributes".as_bytes()) else {
+                    error!("Unable to get uattributes for key expression: '{}'", &key_expr);
+                    continue;
+                };
+                let Ok(u_attribute): Result<UAttributes, _> = Message::decode(&*attribute) else {
+                    error!("Unable to decode attribute for key expression: '{}'", &key_expr);
+                    continue;
+                };
+                // Create UPayload
+                let Ok(encoding) = sample.encoding.suffix().parse::<i32>() else {
+                    error!("Unable to get payload encoding for key expression: '{}'", &key_expr);
+                    continue;
+                };
+                let u_payload = UPayload {
+                    length: Some(0),
+                    format: encoding,
+                    data: Some(Data::Value(sample.payload.contiguous().to_vec())),
+                };
+
+                info!("Past creating UPayload and UAttributes");
+
+                let Some(ref sink) = u_attribute.sink else {
+                    error!("No sink attached to message with key expression: '{}", &key_expr);
+                    continue;
+                };
+
+                info!("Calling retransmit");
+                if let Err(e) = retransmitter_zenoh.retransmit(sink.clone(), u_payload, u_attribute).await {
+                    error!("Unable to retransmit over Zenoh: {:?}", e);
+                    continue;
+                };
+                info!("Past retransmit");
+
                 // stored.insert(sample.key_expr.to_string(), sample);
             },
             // on query received by the Queryable
