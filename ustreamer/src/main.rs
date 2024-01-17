@@ -14,6 +14,10 @@
 use async_std::task;
 use std::sync::Arc;
 use std::time::Duration;
+use uprotocol_sdk::uprotocol::{Remote, UAuthority, UEntity, UMessage, UStatus, UUri};
+use uprotocol_sdk::transport::datamodel::UTransport;
+use uprotocol_zenoh_rust::ULinkZenoh;
+use uprotocol_rust_transport_sommr::UTransportSommr;
 use zenoh::prelude::r#async::AsyncResolve;
 use zenoh::prelude::*;
 use zenoh::queryable::Query;
@@ -36,255 +40,294 @@ macro_rules! insert_json5 {
     };
 }
 
-#[async_std::main]
-async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("z=info")).init();
-    // log::info!("zenoh-bridge-dds {}", *zenoh_plugin_dds::LONG_VERSION);
-
-    // let (config) = parse_args();
-    // let zenoh_transport_router_plugin = config.plugin("rest").is_some();
-    let zenoh_transport_router_plugin = true;
-
-    let mut config = zenoh::config::Config::default();
-    config
-        .set_mode(Some(WhatAmI::Peer))
-        .expect("Unable to configure as Peer");
-
-    // if "zenoh_transport_router" plugin conf is not present, add it (empty to use default config)
-    if config.plugin("zenoh_transport_router").is_none() {
-        config
-            .insert_json5("plugins/zenoh_transport_router", "{}")
-            .unwrap();
-    }
-
-    // create a zenoh Runtime (to share with router-plugins)
-    let runtime = zenoh::runtime::Runtime::new(config).await.unwrap();
-
-    // start transport-router-zenoh-plugin plugin
-    if zenoh_transport_router_plugin {
-        use zenoh_plugin_trait::Plugin;
-        zenoh_transport_router::ZenohTransportRouter::start("zenoh_transport_router", &runtime)
-            .unwrap();
-    }
-
-    async_std::future::pending::<()>().await;
-}
-
-// Temporarily comment out -- try to bring in the plugin
 // #[async_std::main]
 // async fn main() {
-//     env_logger::try_init().unwrap_or_default();
+//     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("z=info")).init();
+//     // log::info!("zenoh-bridge-dds {}", *zenoh_plugin_dds::LONG_VERSION);
 //
-//     println!("Hello, uStreamer!");
-//
-//     // Initialize the Zenoh runtime
-//     let locator = vec![String::from("tcp/127.0.0.1:17449")];
+//     // let (config) = parse_args();
+//     // let zenoh_transport_router_plugin = config.plugin("rest").is_some();
+//     let zenoh_transport_router_plugin = true;
 //
 //     let mut config = zenoh::config::Config::default();
 //     config
 //         .set_mode(Some(WhatAmI::Peer))
-//         // .set_mode(Some(WhatAmI::Router))
-//         .expect("Unable to configure as Router");
-//     config
-//         .listen
-//         .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
-//         .unwrap();
-//     config
-//         .routing
-//         .router
-//         .set_peers_failover_brokering(Some(false))
-//         .unwrap();
-//     config.scouting.multicast.set_enabled(Some(false)).unwrap();
-//     config.scouting.gossip.set_enabled(Some(false)).unwrap();
-//     let Ok(session) = zenoh::open(config).res().await else {
-//         println!("Failed to open Zenoh Router session");
-//         return;
-//     };
+//         .expect("Unable to configure as Peer");
 //
-//     let session_arc = Arc::new(session);
-//     let session_arc_clone_subscriber_callback = session_arc.clone();
-//     let session_arc_clone_queryable_callback = session_arc.clone();
-//     let session_arc_clone_mainthread = session_arc.clone();
-//
-//     // Define a callback function to process incoming messages
-//     let callback = move |sample: Sample| {
-//         let key_expr = sample.key_expr.clone();
-//         let payload = sample.value.payload.clone();
-//
-//         // Check if the key expression starts with "@"
-//         if key_expr.starts_with('@') {
-//             println!("Ignoring message with key expression: '{}'", key_expr);
-//             return; // Skip processing this message
-//         }
-//
-//         // TODO: Need to check this will still work after the move to micro form
-//         //  Perhaps they'll just append all the numbers together with some . or /
-//         //  So my guess is it'd be best to just add a number here, let's say 535
-//         //  --This mechanism is only needed now because we're listening in on and transmitting
-//         //  over the same transport and can be removed when we're retransmitting over SOME/IP
-//         if key_expr.ends_with("535") {
-//             println!("Ignoring message with key expression: '{}'", key_expr);
-//             return; // Skip processing this message
-//         }
-//
-//         let Some(attachment) = sample.attachment() else {
-//             println!(
-//                 "Message missing attachment, skip key expression: '{}'",
-//                 key_expr
-//             );
-//             return;
-//         };
-//
-//         let attachment_clone = attachment.clone();
-//
-//         println!("Received on '{}': '{:?}'", &key_expr, &payload);
-//
-//         let session_clone = session_arc_clone_subscriber_callback.clone();
-//
-//         let retransmit_key_expr = key_expr.concat("535").expect("unable to append retransmit");
-//
-//         let Ok(encoding) = sample.encoding.suffix().parse::<i32>() else {
-//             println!("Unable to get encoding for key expression: '{}'", key_expr);
-//             return;
-//         };
-//
-//         task::spawn(async move {
-//             let session_clone = session_clone.clone();
-//             let putbuilder = session_clone
-//                 .put(retransmit_key_expr, payload)
-//                 .encoding(Encoding::WithSuffix(
-//                     KnownEncoding::AppCustom,
-//                     encoding.to_string().into(),
-//                 ))
-//                 .with_attachment(attachment_clone);
-//
-//             if let Err(e) = putbuilder.res().await {
-//                 eprintln!("Failed to send message: {:?}", e);
-//             }
-//         });
-//     };
-//
-//     let get_callback = move |query: Query| {
-//         let key_expr = query.key_expr().clone();
-//
-//         // Check if the key expression starts with "@"
-//         if key_expr.starts_with('@') {
-//             println!("Ignoring message with key expression: '{}'", key_expr);
-//             return;
-//         }
-//
-//         let Some(value) = query.value() else {
-//             println!("query lacked value: {}", query.key_expr());
-//             return;
-//         };
-//
-//         let value_clone = value.clone();
-//
-//         let Some(attachment) = query.attachment() else {
-//             println!("query lacked appropriate attachment: {}", query.key_expr());
-//             return;
-//         };
-//
-//         if key_expr.ends_with("123") {
-//             println!("Ignoring query with key expression: '{}'", key_expr);
-//             return; // Skip processing this message as it's a retransmit
-//         }
-//
-//         let attachment_clone = attachment.clone();
-//
-//         println!("Received on '{}': '{:?}'", &key_expr, &value);
-//
-//         let session_clone = session_arc_clone_queryable_callback.clone();
-//
-//         let retransmit_key_expr = key_expr.concat("123").expect("unable to append retransmit");
-//
-//         task::spawn(async move {
-//             // 1. Extract the relevant info from the query needed for the GetBuilder:
-//             let getbuilder = session_clone
-//                 .get(&retransmit_key_expr)
-//                 .with_value(value_clone)
-//                 .with_attachment(attachment_clone)
-//                 .target(QueryTarget::BestMatching)
-//                 .timeout(Duration::from_millis(1000));
-//
-//             // 2. Forward the query on
-//             let Ok(replies) = getbuilder.res().await else {
-//                 println!("Error while sending Zenoh query");
-//                 return;
-//             };
-//
-//             // 3. If the reply was Ok, then we can reply to to the original query
-//             // TODO: Because of this back and forth, had to increase the timeout over on invoke_method
-//             match replies.recv_async().await {
-//                 Ok(reply) => {
-//                     println!("Got reply back from server");
-//
-//                     let mut sample_res = reply.sample;
-//
-//                     if let Ok(ref mut res) = sample_res {
-//                         res.key_expr = key_expr;
-//                     } else {
-//                         // Handle the error case
-//                     }
-//
-//                     let sample = match &sample_res {
-//                         Ok(sample) => sample,
-//                         Err(e) => {
-//                             println!("No sample returned: {:?}", e);
-//                             return;
-//                         }
-//                     };
-//
-//                     let Some(reply_attachment) = &sample.attachment else {
-//                         println!("Unable to retrieve reply attachment");
-//                         return;
-//                     };
-//
-//                     let reply_attachment_clone = reply_attachment.clone();
-//
-//                     // Send data
-//                     let result = query // original query from client
-//                         .reply(sample_res) // sample we got back from the server
-//                         .with_attachment(reply_attachment_clone);
-//
-//                     match result {
-//                         Ok(reply_builder_res) => match reply_builder_res.res().await {
-//                             Ok(_) => {
-//                                 println!("Got reply");
-//                             }
-//                             Err(e) => {
-//                                 println!("Error: didn't get reply: {:?}", e);
-//                             }
-//                         },
-//                         Err(_) => {
-//                             println!("Error: Unable to add attachment");
-//                         }
-//                     }
-//                 }
-//                 Err(e) => {
-//                     // 4. If the reply was not Ok... then just print an error and return
-//                     println!("Error while receiving Zenoh reply: {:?}", e);
-//                 }
-//             };
-//         });
-//     };
-//
-//     // Declare a Queryable
-//     let _queryable = session_arc_clone_mainthread
-//         .declare_queryable("**")
-//         .callback_mut(get_callback)
-//         .res()
-//         .await;
-//
-//     // Attach the callback function to a subscriber that listens to all paths
-//     let _subscriber = session_arc_clone_mainthread
-//         .declare_subscriber("**") // "*" captures one chunk (i.e. section not containing /), "**" captures all chunks
-//         .callback_mut(callback)
-//         .res()
-//         .await;
-//
-//     // Infinite loop in main thread, just letting the uStreamer listen and retransmit
-//     loop {
-//         task::sleep(Duration::from_secs(10)).await;
+//     // if "zenoh_transport_router" plugin conf is not present, add it (empty to use default config)
+//     if config.plugin("zenoh_transport_router").is_none() {
+//         config
+//             .insert_json5("plugins/zenoh_transport_router", "{}")
+//             .unwrap();
 //     }
+//
+//     // create a zenoh Runtime (to share with router-plugins)
+//     let runtime = zenoh::runtime::Runtime::new(config).await.unwrap();
+//
+//     // start transport-router-zenoh-plugin plugin
+//     if zenoh_transport_router_plugin {
+//         use zenoh_plugin_trait::Plugin;
+//         zenoh_transport_router::ZenohTransportRouter::start("zenoh_transport_router", &runtime)
+//             .unwrap();
+//     }
+//
+//     async_std::future::pending::<()>().await;
 // }
+
+fn sommr_remote_listener(result: Result<UMessage, UStatus>) {
+    // Thought: if we're using uP-L1's UTransport::RegisterListener in this special mode listening to all
+    //  traffic, it seems like we'd need a way to encode the source into the SOME/IP msg s.t. we can route traffic back
+    //  there as needed in the case of routing a uP-L1 CE we receive that's an RPC Request
+
+    let Ok(msg) = result else {
+        println!("received error");
+        return;
+    };
+
+    let Some(source) = msg.source else {
+        println!("no source");
+        return;
+    };
+
+    println!("Source: {}", source);
+}
+
+// Temporarily comment out -- try to bring in the plugin
+#[async_std::main]
+async fn main() {
+    env_logger::try_init().unwrap_or_default();
+
+    println!("Hello, uStreamer!");
+
+    // Initialize the Zenoh runtime
+    // let locator = vec![String::from("tcp/127.0.0.1:17449")];
+
+    let mut config = zenoh::config::Config::default();
+    config
+        .set_mode(Some(WhatAmI::Peer))
+        .expect("Unable to configure as Router");
+    let Ok(session) = zenoh::open(config.clone()).res().await else {
+        println!("Failed to open Zenoh Router session");
+        return;
+    };
+
+    let utransport_sommr = UTransportSommr::new_from_config(config.clone()).await.unwrap();
+
+    let uuri_for_all_remote = UUri{
+        authority: Some(UAuthority{ remote: Some(Remote::Name("*".to_string())) }),
+        entity: Some(UEntity{
+            name: "*".to_string(),
+            id: None,
+            version_major: None,
+            version_minor: None,
+        }),
+        resource: None,
+    };
+
+
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
+    let _registered_all_remote_sommr_key = {
+        match utransport_sommr
+            .register_listener(uuri_for_all_remote, Box::new(sommr_remote_listener))
+            .await
+        {
+            Ok(registered_key) => registered_key,
+            Err(status) => {
+                println!(
+                    "Failed to register sommr_remote_listener: {:?} {}",
+                    status.get_code(),
+                    status.message()
+                );
+                return;
+            }
+        }
+    };
+    // utransport_sommr.register_listener(uuri_for_all_remote, sommr_remote_listener);
+
+    let session_arc = Arc::new(session);
+    let session_arc_clone_subscriber_callback = session_arc.clone();
+    let session_arc_clone_queryable_callback = session_arc.clone();
+    let session_arc_clone_mainthread = session_arc.clone();
+
+    // Define a callback function to process incoming messages
+    let callback = move |sample: Sample| {
+        let key_expr = sample.key_expr.clone();
+        let payload = sample.value.payload.clone();
+
+        // Check if the key expression starts with "@"
+        if key_expr.starts_with('@') {
+            println!("Ignoring message with key expression: '{}'", key_expr);
+            return; // Skip processing this message
+        }
+
+        // TODO: Need to check this will still work after the move to micro form
+        //  Perhaps they'll just append all the numbers together with some . or /
+        //  So my guess is it'd be best to just add a number here, let's say 535
+        //  --This mechanism is only needed now because we're listening in on and transmitting
+        //  over the same transport and can be removed when we're retransmitting over SOME/IP
+        if key_expr.ends_with("535") {
+            println!("Ignoring message with key expression: '{}'", key_expr);
+            return; // Skip processing this message
+        }
+
+        let Some(attachment) = sample.attachment() else {
+            println!(
+                "Message missing attachment, skip key expression: '{}'",
+                key_expr
+            );
+            return;
+        };
+
+        let attachment_clone = attachment.clone();
+
+        println!("Received on '{}': '{:?}'", &key_expr, &payload);
+
+        let session_clone = session_arc_clone_subscriber_callback.clone();
+
+        let retransmit_key_expr = key_expr.concat("535").expect("unable to append retransmit");
+
+        let Ok(encoding) = sample.encoding.suffix().parse::<i32>() else {
+            println!("Unable to get encoding for key expression: '{}'", key_expr);
+            return;
+        };
+
+        task::spawn(async move {
+            let session_clone = session_clone.clone();
+            let putbuilder = session_clone
+                .put(retransmit_key_expr, payload)
+                .encoding(Encoding::WithSuffix(
+                    KnownEncoding::AppCustom,
+                    encoding.to_string().into(),
+                ))
+                .with_attachment(attachment_clone);
+
+            if let Err(e) = putbuilder.res().await {
+                eprintln!("Failed to send message: {:?}", e);
+            }
+        });
+    };
+
+    let get_callback = move |query: Query| {
+        let key_expr = query.key_expr().clone();
+
+        // Check if the key expression starts with "@"
+        if key_expr.starts_with('@') {
+            println!("Ignoring message with key expression: '{}'", key_expr);
+            return;
+        }
+
+        let Some(value) = query.value() else {
+            println!("query lacked value: {}", query.key_expr());
+            return;
+        };
+
+        let value_clone = value.clone();
+
+        let Some(attachment) = query.attachment() else {
+            println!("query lacked appropriate attachment: {}", query.key_expr());
+            return;
+        };
+
+        if key_expr.ends_with("123") {
+            println!("Ignoring query with key expression: '{}'", key_expr);
+            return; // Skip processing this message as it's a retransmit
+        }
+
+        let attachment_clone = attachment.clone();
+
+        println!("Received on '{}': '{:?}'", &key_expr, &value);
+
+        let session_clone = session_arc_clone_queryable_callback.clone();
+
+        let retransmit_key_expr = key_expr.concat("123").expect("unable to append retransmit");
+
+        task::spawn(async move {
+            // 1. Extract the relevant info from the query needed for the GetBuilder:
+            let getbuilder = session_clone
+                .get(&retransmit_key_expr)
+                .with_value(value_clone)
+                .with_attachment(attachment_clone)
+                .target(QueryTarget::BestMatching)
+                .timeout(Duration::from_millis(1000));
+
+            // 2. Forward the query on
+            let Ok(replies) = getbuilder.res().await else {
+                println!("Error while sending Zenoh query");
+                return;
+            };
+
+            // 3. If the reply was Ok, then we can reply to to the original query
+            // TODO: Because of this back and forth, had to increase the timeout over on invoke_method
+            match replies.recv_async().await {
+                Ok(reply) => {
+                    println!("Got reply back from server");
+
+                    let mut sample_res = reply.sample;
+
+                    if let Ok(ref mut res) = sample_res {
+                        res.key_expr = key_expr;
+                    } else {
+                        // Handle the error case
+                    }
+
+                    let sample = match &sample_res {
+                        Ok(sample) => sample,
+                        Err(e) => {
+                            println!("No sample returned: {:?}", e);
+                            return;
+                        }
+                    };
+
+                    let Some(reply_attachment) = &sample.attachment else {
+                        println!("Unable to retrieve reply attachment");
+                        return;
+                    };
+
+                    let reply_attachment_clone = reply_attachment.clone();
+
+                    // Send data
+                    let result = query // original query from client
+                        .reply(sample_res) // sample we got back from the server
+                        .with_attachment(reply_attachment_clone);
+
+                    match result {
+                        Ok(reply_builder_res) => match reply_builder_res.res().await {
+                            Ok(_) => {
+                                println!("Got reply");
+                            }
+                            Err(e) => {
+                                println!("Error: didn't get reply: {:?}", e);
+                            }
+                        },
+                        Err(_) => {
+                            println!("Error: Unable to add attachment");
+                        }
+                    }
+                }
+                Err(e) => {
+                    // 4. If the reply was not Ok... then just print an error and return
+                    println!("Error while receiving Zenoh reply: {:?}", e);
+                }
+            };
+        });
+    };
+
+    // Declare a Queryable
+    let _queryable = session_arc_clone_mainthread
+        .declare_queryable("**")
+        .callback_mut(get_callback)
+        .res()
+        .await;
+
+    // Attach the callback function to a subscriber that listens to all paths
+    let _subscriber = session_arc_clone_mainthread
+        .declare_subscriber("**") // "*" captures one chunk (i.e. section not containing /), "**" captures all chunks
+        .callback_mut(callback)
+        .res()
+        .await;
+
+    // Infinite loop in main thread, just letting the uStreamer listen and retransmit
+    loop {
+        async_std::future::pending::<()>().await;
+    }
+}

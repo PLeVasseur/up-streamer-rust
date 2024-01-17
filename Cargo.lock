@@ -2906,6 +2906,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "uprotocol-rust-transport-sommr"
+version = "0.1.0"
+source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/stand-in_for_uprotocol-rust-transport-sommr#15793cdd2d2151bc21169a5ddbcd4f9f8ed53ba0"
+dependencies = [
+ "anyhow",
+ "async-std",
+ "async-trait",
+ "chrono",
+ "cloudevents-sdk",
+ "prost",
+ "prost-types",
+ "uprotocol-sdk",
+ "zenoh",
+]
+
+[[package]]
 name = "uprotocol-sdk"
 version = "0.1.5"
 source = "git+https://github.com/ZettaScaleLabs/uprotocol-rust.git?branch=support_rpcserver#db2b4616700dfdcbe4a88f537df6ba7c8e5497f9"
@@ -2984,6 +3000,7 @@ dependencies = [
  "log",
  "prost",
  "transport-router-zenoh-plugin",
+ "uprotocol-rust-transport-sommr",
  "uprotocol-sdk",
  "uprotocol_zenoh_rust",
  "zenoh",

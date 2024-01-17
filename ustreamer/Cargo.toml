@@ -22,6 +22,7 @@ env_logger = { workspace = true }
 log = { workspace = true }
 prost = { workspace = true }
 uprotocol-sdk = { workspace = true }
+uprotocol-rust-transport-sommr = { git = "https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git", branch = "feature/stand-in_for_uprotocol-rust-transport-sommr" }
 uprotocol_zenoh_rust = { workspace = true }
 zenoh = { workspace = true }
 transport-router-zenoh-plugin = { workspace = true }

@@ -56,6 +56,7 @@ uprotocol-sdk = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust.git", 
 # upstream
 # uprotocol_zenoh_rust = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust-ulink-zenoh.git", branch = "support_rpcserver" }
 # my version, increasing timeout to 2 seconds
+uprotocol-rust-transport-sommr = { git = "https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git", branch = "feature/stand-in_for_uprotocol-rust-transport-sommr" }
 uprotocol_zenoh_rust = { git = "https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git", branch = "feature/update_timeout" }
 zenoh = { version = "0.10.1-rc", features = ["unstable"] }
 zenoh-core = { version = "0.10.1-rc"  }
