@@ -111,6 +111,7 @@ async fn main() {
         return;
     };
 
+    let ulink_zenoh = ULinkZenoh::new_from_config(config.clone()).await.unwrap();
     let utransport_sommr = UTransportSommr::new_from_config(config.clone()).await.unwrap();
 
     let uuri_for_all_remote = UUri{
@@ -124,11 +125,55 @@ async fn main() {
         resource: None,
     };
 
+    let ulink_zenoh_arc = Arc::new(ulink_zenoh);
+
+    let sommr_callback = move | result: Result<UMessage, UStatus> | {
+        let Ok(msg) = result else {
+            println!("received error");
+            return;
+        };
+
+        let Some(source) = msg.source else {
+            println!("no source");
+            return;
+        };
+
+        let Some(payload) = msg.payload else {
+            println!("no payload");
+            return;
+        };
+
+        let Some(attributes) = msg.attributes else {
+            println!("no attributes");
+            return;
+        };
+
+        println!("Source: {}", &source);
+
+        let ulink_zenoh_clone = ulink_zenoh_arc.clone();
+        task::spawn(async move {
+            match ulink_zenoh_clone
+                .send(
+                    source,
+                    payload,
+                    attributes
+                )
+                .await
+            {
+                Ok(_) => {
+                    println!("Forwarding message succeeded");
+                }
+                Err(status) => {
+                    println!("Forwarding message failed: {:?}", status)
+                }
+            }
+        });
+    };
 
     // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
     let _registered_all_remote_sommr_key = {
         match utransport_sommr
-            .register_listener(uuri_for_all_remote, Box::new(sommr_remote_listener))
+            .register_listener(uuri_for_all_remote, Box::new(sommr_callback))
             .await
         {
             Ok(registered_key) => registered_key,
@@ -142,7 +187,6 @@ async fn main() {
             }
         }
     };
-    // utransport_sommr.register_listener(uuri_for_all_remote, sommr_remote_listener);
 
     let session_arc = Arc::new(session);
     let session_arc_clone_subscriber_callback = session_arc.clone();
@@ -314,14 +358,14 @@ async fn main() {
 
     // Declare a Queryable
     let _queryable = session_arc_clone_mainthread
-        .declare_queryable("**")
+        .declare_queryable("up/**")
         .callback_mut(get_callback)
         .res()
         .await;
 
     // Attach the callback function to a subscriber that listens to all paths
     let _subscriber = session_arc_clone_mainthread
-        .declare_subscriber("**") // "*" captures one chunk (i.e. section not containing /), "**" captures all chunks
+        .declare_subscriber("up/**") // "*" captures one chunk (i.e. section not containing /), "**" captures all chunks
         .callback_mut(callback)
         .res()
         .await;
