@@ -12,14 +12,14 @@
  ********************************************************************************/
 
 use async_trait::async_trait;
-use log::{debug, error, info};
+use log::{/*debug, */error/*, info*/};
 use retransmitter::Retransmitter;
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::{
-    UAttributes, UCode, UMessage, UMessageType, UPayload, UStatus, UUri,
+    UAttributes, UCode, /*UMessage,*/ UMessageType, UPayload, UStatus, UUri,
 };
 use uprotocol_zenoh_rust::ULinkZenoh;
-use zenoh::prelude::r#async::*;
+// use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
 
 pub struct RetransmitterZenoh {

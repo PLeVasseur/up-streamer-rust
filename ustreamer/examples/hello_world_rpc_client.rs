@@ -33,16 +33,10 @@ use zenoh::prelude::WhatAmI;
 async fn main() {
     println!("uProtocol RPC client example");
 
-    // let locator = vec![String::from("tcp/127.0.0.1:17449")];
-
     let mut config = Config::default();
     config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Peer failed");
-    // config
-    //     .connect
-    //     .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
-    //     .unwrap();
     let ulink = ULinkZenoh::new_from_config(config).await.unwrap();
 
     let request_resource =

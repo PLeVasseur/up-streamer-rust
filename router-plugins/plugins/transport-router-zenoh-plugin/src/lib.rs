@@ -156,7 +156,7 @@ impl Drop for RunningPlugin {
     }
 }
 
-async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) {
+async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, _flag: Arc<AtomicBool>) {
     // create a zenoh Session that shares the same Runtime as zenohd
     let session = zenoh::init(runtime.clone()).res().await.unwrap();
 
@@ -211,7 +211,7 @@ async fn run(runtime: Runtime, sniff_route: KeyExpr<'_>, flag: Arc<AtomicBool>) 
                     continue;
                 };
 
-                let Ok(encoding) = sample.encoding.suffix().parse::<i32>() else {
+                let Ok(_encoding) = sample.encoding.suffix().parse::<i32>() else {
                     error!("Unable to get encoding for key expression: '{}'", key_expr);
                     continue;
                 };

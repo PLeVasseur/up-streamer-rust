@@ -15,12 +15,14 @@ use async_std::task;
 use std::sync::Arc;
 use std::time::Duration;
 use log::{debug, error, info, trace};
-use uprotocol_sdk::uprotocol::{Remote, UAuthority, UEntity, UMessage, UStatus, UUri};
+use prost::Message;
+use uprotocol_sdk::uprotocol::{Data, Remote, UAttributes, UAuthority, UCode, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UStatus, UUri};
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_zenoh_rust::ULinkZenoh;
 use uprotocol_rust_transport_sommr::UTransportSommr;
 use zenoh::prelude::r#async::AsyncResolve;
 use zenoh::prelude::*;
+use zenoh::queryable::Query;
 
 #[async_std::main]
 async fn main() {
@@ -91,6 +93,17 @@ async fn main() {
             return;
         };
 
+        // TODO: Check into how/if we can spin out a specific temporary register_listener
+        //  to get the message back over sommR down there in the get_callback
+        // Check the type of UAttributes (Publish)
+        match UMessageType::try_from(attributes.r#type) {
+            Ok(UMessageType::UmessageTypePublish) => { }
+            _ => {
+                debug!("UMessageType is not UmessageTypeRequest");
+                return;
+            }
+        }
+
         trace!("sommr_callback: got attributes");
 
         info!("sommr_callback: Source: {}", &source);
@@ -138,82 +151,101 @@ async fn main() {
 
     let session_arc = Arc::new(session);
     let session_arc_clone_mainthread = session_arc.clone();
-    let session_arc_clone_subscriber_callback = session_arc.clone();
+    let utransport_sommr_arc = Arc::new(utransport_sommr);
 
-    // Define a callback function to process incoming messages
-    let zenoh_sub_callback = move |sample: Sample| {
-        trace!("zenoh_sub_callback: Zenoh up/ subscriber callback");
-
-        let key_expr = sample.key_expr.clone();
-        let payload = sample.value.payload.clone();
+    let get_callback = move |query: Query| {
+        let utransport_sommr_arc = utransport_sommr_arc.clone();
+        let key_expr = query.key_expr().clone();
 
         // Check if the key expression starts with "@"
         if key_expr.starts_with('@') {
-            debug!("Ignoring message with key expression: '{}'", key_expr);
-            return; // Skip processing this message
+            info!("Ignoring message with key expression: '{}'", key_expr);
+            return;
         }
 
-        trace!("zenoh_sub_callback: after key_expr @ check");
-
-        // TODO: Need to check this will still work after the move to micro form
-        //  Perhaps they'll just append all the numbers together with some . or /
-        //  So my guess is it'd be best to just add a number here, let's say 535
-        //  --This mechanism is only needed now because we're listening in on and transmitting
-        //  over the same transport and can be removed when we're retransmitting over SOME/IP
-        if key_expr.ends_with("535") {
-            debug!("Ignoring message with key expression: '{}'", key_expr);
-            return; // Skip processing this message
-        }
-
-        let Some(attachment) = sample.attachment() else {
-            error!(
-                "Message missing attachment, skip key expression: '{}'",
-                key_expr
-            );
+        let Some(value) = query.value() else {
+            error!("query lacked value: {}", query.key_expr());
             return;
         };
 
-        trace!("zenoh_sub_callback: got attachment");
-
-        let attachment_clone = attachment.clone();
-
-        trace!("Received on '{}': '{:?}'", &key_expr, &payload);
-
-        let session_clone = session_arc_clone_subscriber_callback.clone();
-
-        let retransmit_key_expr = key_expr.concat("535").expect("unable to append retransmit");
-
-        let Ok(encoding) = sample.encoding.suffix().parse::<i32>() else {
-            error!("Unable to get encoding for key expression: '{}'", &key_expr);
+        let Some(attachment) = query.attachment() else {
+            error!("query lacked appropriate attachment: {}", query.key_expr());
+            return;
+        };
+        let Some(attribute) = attachment.get(&"uattributes".as_bytes()) else {
+            error!("Unable to get uattributes");
+            return;
+        };
+        let u_attribute: UAttributes = if let Ok(attr) = Message::decode(&*attribute) {
+            attr
+        } else {
+            error!("Unable to decode attribute");
             return;
         };
 
-        trace!("zenoh_sub_callback: got encoding");
+        // Check the type of UAttributes (Request)
+        match UMessageType::try_from(u_attribute.r#type) {
+            Ok(UMessageType::UmessageTypeRequest) => { }
+            _ => {
+                debug!("UMessageType is not UmessageTypeRequest");
+                return;
+            }
+        }
+
+        // Create UPayload
+        let u_payload = match query.value() {
+            Some(value) => {
+                let Ok(encoding) = value.encoding.suffix().parse::<i32>() else {
+                    error!("Unable to get payload encoding");
+                    return;
+                };
+                UPayload {
+                    length: Some(0),
+                    format: encoding,
+                    data: Some(Data::Value(value.payload.contiguous().to_vec())),
+                }
+            }
+            None => UPayload {
+                length: Some(0),
+                format: UPayloadFormat::UpayloadFormatUnspecified as i32,
+                data: None,
+            },
+        };
+        let Some(dest_uuri) = attachment.get(&"dest_uuri".as_bytes()) else {
+            error!("Unable to get dest_uuri attachment");
+            return;
+        };
+        let Ok(destination): Result<UUri, _> = Message::decode(&*dest_uuri) else {
+            error!("Unable to decode destination uuri");
+            return;
+        };
+
+        println!("Received on '{}': '{:?}': destination: {:?}", &key_expr, &value, &destination);
+        println!("UAttributes: {:?}", &u_attribute);
 
         task::spawn(async move {
-            let session_clone = session_clone.clone();
-            let putbuilder = session_clone
-                .put(retransmit_key_expr, payload)
-                .encoding(Encoding::WithSuffix(
-                    KnownEncoding::AppCustom,
-                    encoding.to_string().into(),
-                ))
-                .with_attachment(attachment_clone);
-
-            if let Err(e) = putbuilder.res().await {
-                error!("Failed to send message: {:?}", e);
+            match utransport_sommr_arc
+                .send(
+                    destination.clone(),
+                    u_payload,
+                    u_attribute
+                )
+                .await
+            {
+                Ok(_) => {
+                    println!("Forwarding RPC Request over sommR succeeded");
+                }
+                Err(status) => {
+                    error!("Seconding timer_hour failed: {:?}", status)
+                }
             }
-            trace!("zenoh_sub_callback: sent via Zenoh inside async");
         });
-
-        trace!("zenoh_sub_callback: sent via Zenoh");
     };
 
-    // Attach the callback function to a subscriber that listens to all paths
-    let _subscriber = session_arc_clone_mainthread
-        .declare_subscriber("up/**") // "*" captures one chunk (i.e. section not containing /), "**" captures all chunks
-        // .declare_subscriber("up/**") // "*" captures one chunk (i.e. section not containing /), "**" captures all chunks
-        .callback_mut(zenoh_sub_callback)
+    // Declare a Queryable
+    let _queryable = session_arc_clone_mainthread
+        .declare_queryable("up/**")
+        .callback_mut(get_callback)
         .res()
         .await;
 

@@ -12,7 +12,7 @@
  ********************************************************************************/
 
 use async_trait::async_trait;
-use uprotocol_sdk::uprotocol::{UAttributes, UMessage, UPayload, UStatus, UUri};
+use uprotocol_sdk::uprotocol::{UAttributes, /*UMessage,*/ UPayload, UStatus, UUri};
 
 #[async_trait]
 pub trait Retransmitter {
