@@ -44,7 +44,7 @@ fn print_time(timer: &Timer) {
 async fn main() {
     env_logger::try_init().unwrap_or_default();
     // Your example code goes here
-    println!("This is an example sender for uStreamer.");
+    println!("This is an example (stand-in) sender of sommR messages for uStreamer.");
 
     let mut config = Config::default();
     config
