@@ -141,15 +141,75 @@ async fn main() {
 
     let session_arc = Arc::new(session);
     let session_arc_clone_mainthread = session_arc.clone();
+    let session_arc_clone_subscriber_callback = session_arc.clone();
 
     // Define a callback function to process incoming messages
     let zenoh_sub_callback = move |sample: Sample| {
-        println!("Zenoh up/ subscriber callback");
+        println!("zenoh_sub_callback: Zenoh up/ subscriber callback");
 
         let key_expr = sample.key_expr.clone();
         let payload = sample.value.payload.clone();
 
+        // Check if the key expression starts with "@"
+        if key_expr.starts_with('@') {
+            println!("Ignoring message with key expression: '{}'", key_expr);
+            return; // Skip processing this message
+        }
+
+        println!("zenoh_sub_callback: after key_expr @ check");
+
+        // TODO: Need to check this will still work after the move to micro form
+        //  Perhaps they'll just append all the numbers together with some . or /
+        //  So my guess is it'd be best to just add a number here, let's say 535
+        //  --This mechanism is only needed now because we're listening in on and transmitting
+        //  over the same transport and can be removed when we're retransmitting over SOME/IP
+        if key_expr.ends_with("535") {
+            println!("Ignoring message with key expression: '{}'", key_expr);
+            return; // Skip processing this message
+        }
+
+        let Some(attachment) = sample.attachment() else {
+            println!(
+                "Message missing attachment, skip key expression: '{}'",
+                key_expr
+            );
+            return;
+        };
+
+        println!("zenoh_sub_callback: got attachment");
+
+        let attachment_clone = attachment.clone();
+
         println!("Received on '{}': '{:?}'", &key_expr, &payload);
+
+        let session_clone = session_arc_clone_subscriber_callback.clone();
+
+        let retransmit_key_expr = key_expr.concat("535").expect("unable to append retransmit");
+
+        let Ok(encoding) = sample.encoding.suffix().parse::<i32>() else {
+            println!("Unable to get encoding for key expression: '{}'", &key_expr);
+            return;
+        };
+
+        println!("zenoh_sub_callback: got encoding");
+
+        task::spawn(async move {
+            let session_clone = session_clone.clone();
+            let putbuilder = session_clone
+                .put(retransmit_key_expr, payload)
+                .encoding(Encoding::WithSuffix(
+                    KnownEncoding::AppCustom,
+                    encoding.to_string().into(),
+                ))
+                .with_attachment(attachment_clone);
+
+            if let Err(e) = putbuilder.res().await {
+                eprintln!("Failed to send message: {:?}", e);
+            }
+            println!("zenoh_sub_callback: sent via Zenoh inside async");
+        });
+
+        println!("zenoh_sub_callback: sent via Zenoh");
     };
 
     // Attach the callback function to a subscriber that listens to all paths
