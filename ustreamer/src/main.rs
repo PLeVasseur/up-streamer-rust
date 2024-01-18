@@ -26,7 +26,7 @@ use zenoh::prelude::*;
 async fn main() {
     env_logger::try_init().unwrap_or_default();
 
-    info!("Hello, uStreamer!");
+    println!("Hello, uStreamer!");
 
     let mut raw_zenoh_config = zenoh::config::Config::default();
     raw_zenoh_config
