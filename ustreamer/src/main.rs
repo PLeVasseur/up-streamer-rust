@@ -14,6 +14,7 @@
 use async_std::task;
 use std::sync::Arc;
 use std::time::Duration;
+use log::{debug, error, info, trace};
 use uprotocol_sdk::uprotocol::{Remote, UAuthority, UEntity, UMessage, UStatus, UUri};
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_zenoh_rust::ULinkZenoh;
@@ -21,19 +22,18 @@ use uprotocol_rust_transport_sommr::UTransportSommr;
 use zenoh::prelude::r#async::AsyncResolve;
 use zenoh::prelude::*;
 
-// Temporarily comment out -- try to bring in the plugin
 #[async_std::main]
 async fn main() {
     env_logger::try_init().unwrap_or_default();
 
-    println!("Hello, uStreamer!");
+    info!("Hello, uStreamer!");
 
     let mut raw_zenoh_config = zenoh::config::Config::default();
     raw_zenoh_config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Unable to configure as Router");
     let Ok(session) = zenoh::open(raw_zenoh_config.clone()).res().await else {
-        println!("Failed to open Zenoh Router session");
+        error!("Failed to open Zenoh Router session");
         return;
     };
 
@@ -46,9 +46,6 @@ async fn main() {
     ulink_zenoh_config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Unable to configure as Router");
-    // let runtime = zenoh::runtime::Runtime::new(config).await.unwrap();
-    // let ulink_zenoh = ULinkZenoh::new_from_runtime(runtime.clone()).await.unwrap();
-    // let utransport_sommr = UTransportSommr::new_from_runtime(runtime.clone()).await.unwrap();
 
     let ulink_zenoh = ULinkZenoh::new_from_config(ulink_zenoh_config.clone()).await.unwrap();
     let utransport_sommr = UTransportSommr::new_from_config(sommr_zenoh_config.clone()).await.unwrap();
@@ -66,37 +63,37 @@ async fn main() {
     let ulink_zenoh_arc = Arc::new(ulink_zenoh);
 
     let sommr_callback = move | result: Result<UMessage, UStatus> | {
-        println!("entered sommr_callback");
+        trace!("entered sommr_callback");
 
         let Ok(msg) = result else {
-            println!("received error");
+            error!("no msg");
             return;
         };
 
-        println!("sommr_callback: got msg");
+        trace!("sommr_callback: got msg");
 
         let Some(source) = msg.source else {
-            println!("no source");
+            error!("no source");
             return;
         };
 
-        println!("sommr_callback: got source");
+        trace!("sommr_callback: got source");
 
         let Some(payload) = msg.payload else {
-            println!("no payload");
+            error!("no payload");
             return;
         };
 
-        println!("sommr_callback: got payload");
+        trace!("sommr_callback: got payload");
 
         let Some(attributes) = msg.attributes else {
-            println!("no attributes");
+            error!("no attributes");
             return;
         };
 
-        println!("sommr_callback: got attributes");
+        trace!("sommr_callback: got attributes");
 
-        println!("Source: {}", &source);
+        info!("sommr_callback: Source: {}", &source);
 
         let ulink_zenoh_clone = ulink_zenoh_arc.clone();
         task::spawn(async move {
@@ -109,16 +106,16 @@ async fn main() {
                 .await
             {
                 Ok(_) => {
-                    println!("Forwarding message succeeded");
+                    info!("Forwarding message succeeded");
                 }
                 Err(status) => {
-                    println!("Forwarding message failed: {:?}", status)
+                    error!("Forwarding message failed: {:?}", status)
                 }
             }
 
-            println!("sommr_callback: ulink_zenoh_clone.send() within async");
+            trace!("sommr_callback: ulink_zenoh_clone.send() within async");
         });
-        println!("sommr_callback: after ulink_zenoh_clone.send()");
+        trace!("sommr_callback: after ulink_zenoh_clone.send()");
     };
 
     // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
@@ -145,18 +142,18 @@ async fn main() {
 
     // Define a callback function to process incoming messages
     let zenoh_sub_callback = move |sample: Sample| {
-        println!("zenoh_sub_callback: Zenoh up/ subscriber callback");
+        trace!("zenoh_sub_callback: Zenoh up/ subscriber callback");
 
         let key_expr = sample.key_expr.clone();
         let payload = sample.value.payload.clone();
 
         // Check if the key expression starts with "@"
         if key_expr.starts_with('@') {
-            println!("Ignoring message with key expression: '{}'", key_expr);
+            debug!("Ignoring message with key expression: '{}'", key_expr);
             return; // Skip processing this message
         }
 
-        println!("zenoh_sub_callback: after key_expr @ check");
+        trace!("zenoh_sub_callback: after key_expr @ check");
 
         // TODO: Need to check this will still work after the move to micro form
         //  Perhaps they'll just append all the numbers together with some . or /
@@ -164,34 +161,34 @@ async fn main() {
         //  --This mechanism is only needed now because we're listening in on and transmitting
         //  over the same transport and can be removed when we're retransmitting over SOME/IP
         if key_expr.ends_with("535") {
-            println!("Ignoring message with key expression: '{}'", key_expr);
+            debug!("Ignoring message with key expression: '{}'", key_expr);
             return; // Skip processing this message
         }
 
         let Some(attachment) = sample.attachment() else {
-            println!(
+            error!(
                 "Message missing attachment, skip key expression: '{}'",
                 key_expr
             );
             return;
         };
 
-        println!("zenoh_sub_callback: got attachment");
+        trace!("zenoh_sub_callback: got attachment");
 
         let attachment_clone = attachment.clone();
 
-        println!("Received on '{}': '{:?}'", &key_expr, &payload);
+        trace!("Received on '{}': '{:?}'", &key_expr, &payload);
 
         let session_clone = session_arc_clone_subscriber_callback.clone();
 
         let retransmit_key_expr = key_expr.concat("535").expect("unable to append retransmit");
 
         let Ok(encoding) = sample.encoding.suffix().parse::<i32>() else {
-            println!("Unable to get encoding for key expression: '{}'", &key_expr);
+            error!("Unable to get encoding for key expression: '{}'", &key_expr);
             return;
         };
 
-        println!("zenoh_sub_callback: got encoding");
+        trace!("zenoh_sub_callback: got encoding");
 
         task::spawn(async move {
             let session_clone = session_clone.clone();
@@ -204,12 +201,12 @@ async fn main() {
                 .with_attachment(attachment_clone);
 
             if let Err(e) = putbuilder.res().await {
-                eprintln!("Failed to send message: {:?}", e);
+                error!("Failed to send message: {:?}", e);
             }
-            println!("zenoh_sub_callback: sent via Zenoh inside async");
+            trace!("zenoh_sub_callback: sent via Zenoh inside async");
         });
 
-        println!("zenoh_sub_callback: sent via Zenoh");
+        trace!("zenoh_sub_callback: sent via Zenoh");
     };
 
     // Attach the callback function to a subscriber that listens to all paths
