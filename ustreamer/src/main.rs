@@ -12,23 +12,20 @@
  ********************************************************************************/
 
 use async_std::task;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use prost::Message;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use uprotocol_rust_transport_sommr::UTransportSommr;
+use uprotocol_sdk::rpc::RpcClient;
 use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::{
-    Data, Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UPayload,
-    UPayloadFormat, UStatus, UUri, Uuid,
-};
+use uprotocol_sdk::uprotocol::{Data, Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UStatus, UUri, Uuid, UCode};
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::prelude::r#async::AsyncResolve;
 use zenoh::prelude::*;
 use zenoh::queryable::Query;
 use zenoh::sample::AttachmentBuilder;
-
 #[async_std::main]
 async fn main() {
     env_logger::try_init().unwrap_or_default();
@@ -164,7 +161,7 @@ async fn main() {
                 });
                 trace!("zenoh_callback: after utransport_clone.send()");
             }
-            Ok(UMessageType::UmessageTypeResponse) => {
+            // Ok(UMessageType::UmessageTypeResponse) => {
                 // trace!("got response back");
                 //
                 // // Look up the Zenoh reply using reqid from the message's attributes
@@ -222,7 +219,7 @@ async fn main() {
                 // } else {
                 //     error!("Attributes lack reqid");
                 // }
-            }
+            // }
             _ => {
                 debug!("UMessageType is not UmessageTypeRequest");
             }
@@ -247,6 +244,8 @@ async fn main() {
             }
         }
     };
+
+    let uapp_ip_sommr_callback_clone = uapp_ip.clone();
 
     let sommr_callback = move |result: Result<UMessage, UStatus>| {
         trace!("entered sommr_callback");
@@ -288,7 +287,7 @@ async fn main() {
                 let block_msg_rx = if let Some(authority) = &source.authority {
                     if let Some(Remote::Ip(ip)) = &authority.remote {
                         debug!("ip: {:?}", &ip);
-                        *ip == uapp_ip.clone()
+                        *ip == uapp_ip_sommr_callback_clone
                     } else {
                         true
                     }
@@ -380,6 +379,41 @@ async fn main() {
             }
             Ok(UMessageType::UmessageTypeRequest) => {
                 trace!("sommr_callback: Received request");
+
+                let Some(destination) = attributes.sink.clone() else {
+                    error!("Unable to route because no destination present");
+                    return;
+                };
+
+                let ulink_zenoh_clone = ulink_zenoh_arc.clone();
+                task::spawn(async move {
+                    match ulink_zenoh_clone
+                        .invoke_method(
+                            destination,
+                            payload,
+                            attributes,
+                        )
+                        .await
+                    {
+                        Ok(payload) => {
+                            let data = match payload.data {
+                                Some(data) => data,
+                                None => {
+                                    error!("Empty data payload!");
+                                    return;
+                                }
+                            };
+
+                            println!("Successfully got payload back via invoke_method");
+
+                            // TODO: Route back through to source
+                        }
+                        Err(e) => {
+                            println!("invoke_method failed: {:?}", e)
+                        }
+                    }
+                });
+
             }
             _ => {
                 debug!("UMessageType is not UmessageTypeRequest");
@@ -408,6 +442,7 @@ async fn main() {
     let session_arc = Arc::new(session);
     let session_arc_clone_mainthread = session_arc.clone();
     let zenoh_queries_get_callback = zenoh_queries.clone();
+    let uapp_ip_get_callback_clone = uapp_ip.clone();
 
     let get_callback = move |query: Query| {
         let utransport_sommr_arc = utransport_sommr_arc.clone();
@@ -476,6 +511,35 @@ async fn main() {
             error!("Unable to get destination from UAttributes.sink");
             return;
         };
+
+        let Some(src_uuri) = attachment.get(&"src_uuri".as_bytes()) else {
+            error!("Unable to get source_uuri");
+            return;
+        };
+        let Ok(source): Result<UUri, _> = Message::decode(&*src_uuri) else {
+            error!("Unable to decode source uuri");
+            return;
+        };
+
+        let Some(authority) = source.authority else {
+            info!("No remote included for routing purposes, it's local");
+            return;
+        };
+
+        let Some(remote) = authority.remote else {
+            warn!("Has authority, but empty");
+            return;
+        };
+
+        let Remote::Ip(ip) = remote else {
+            info!("Authority remote is not IP");
+            return;
+        };
+
+        if ip == uapp_ip_get_callback_clone {
+            info!("Not intended for our uDevice");
+            return;
+        }
 
         // Extract the id from u_attribute and use it as the key for the HashMap
         if let Some(id) = u_attribute.id.as_ref() {

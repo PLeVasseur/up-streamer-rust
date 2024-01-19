@@ -19,7 +19,7 @@ use std::time;
 use uprotocol_sdk::{
     rpc::RpcServer,
     transport::datamodel::UTransport,
-    uprotocol::{Data, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UStatus, UUri},
+    uprotocol::{Data, Remote, UAuthority, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UStatus, UUri},
     uri::builder::resourcebuilder::UResourceBuilder,
 };
 use uprotocol_zenoh_rust::ULinkZenoh;
@@ -31,39 +31,32 @@ async fn main() {
 
     println!("uProtocol RPC server example");
 
-    // let locator = vec![String::from("tcp/127.0.0.1:17449")];
+    let uapp_ip = vec![192, 168, 3, 100];
+    let mdevice_ip = vec![192, 168, 3, 1];
 
     let mut config = Config::default();
     config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Client failed");
-    // config
-    //     .connect
-    //     .set_endpoints(locator.iter().map(|x| x.parse().unwrap()).collect())
-    //     .unwrap();
-    // config.scouting.multicast.set_enabled(Some(false)).unwrap();
-    // config.scouting.gossip.set_enabled(Some(false)).unwrap();
-    // config
-    //     .routing
-    //     .router
-    //     .set_peers_failover_brokering(Some(false))
-    //     .unwrap();
     let rpc_server = Arc::new(Mutex::new(
         ULinkZenoh::new_from_config(config).await.unwrap(),
     ));
 
     // create uuri
     let uuri = UUri {
+        authority: Some(UAuthority {
+            remote: Some(Remote::Ip(uapp_ip.clone())),
+        }),
         entity: Some(UEntity {
             name: "hello_world_service".to_string(),
+            id: Some(111),
             version_major: Some(1),
             ..Default::default()
         }),
         resource: Some(UResourceBuilder::for_rpc_request(
-            Some("get_hello123".to_string()),
-            None,
-        )),
-        ..Default::default()
+            Some("get_hello".to_string()),
+            Some(1),
+        ))
     };
 
     let rpc_server_callback = rpc_server.clone();
