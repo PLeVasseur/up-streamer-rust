@@ -65,6 +65,7 @@ async fn main() {
     let utransport_sommr = UTransportSommr::new_from_config(sommr_zenoh_config.clone())
         .await
         .unwrap();
+
     let uuri_for_all_remote = UUri {
         authority: Some(UAuthority {
             remote: Some(Remote::Name("*".to_string())),
@@ -80,6 +81,59 @@ async fn main() {
 
     let ulink_zenoh_arc = Arc::new(ulink_zenoh);
     let zenoh_queries_sommr_callback = zenoh_queries.clone();
+
+    let zenoh_callback = move |result: Result<UMessage, UStatus>| {
+        trace!("entered zenoh_callback");
+
+        let Ok(msg) = result else {
+            error!("no msg");
+            return;
+        };
+
+        trace!("zenoh_callback: got msg");
+
+        let Some(source) = msg.source else {
+            error!("no source");
+            return;
+        };
+
+        trace!("zenoh_callback: got source");
+
+        let Some(payload) = msg.payload else {
+            error!("no payload");
+            return;
+        };
+
+        trace!("zenoh_callback: got payload");
+
+        let Some(attributes) = msg.attributes else {
+            error!("no attributes");
+            return;
+        };
+
+        trace!("zenoh_callback: got attributes");
+
+        println!("Got Zenoh message intended for remote publish");
+    };
+
+    info!("Register the listener for publishes to remote...");
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
+    let _registered_all_remote_zenoh_key = {
+        match ulink_zenoh_arc
+            .register_listener(uuri_for_all_remote.clone(), Box::new(zenoh_callback))
+            .await
+        {
+            Ok(registered_key) => registered_key,
+            Err(status) => {
+                error!(
+                    "Failed to register zenoh remote listener callback: {:?} {}",
+                    status.get_code(),
+                    status.message()
+                );
+                return;
+            }
+        }
+    };
 
     let sommr_callback = move |result: Result<UMessage, UStatus>| {
         trace!("entered sommr_callback");

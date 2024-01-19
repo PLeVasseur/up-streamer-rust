@@ -15,7 +15,7 @@ use async_std::task::{self};
 use example_proto::proto::example::hello_world::v1::{HelloRequest, HelloResponse};
 use log::{debug, error, info, trace};
 use prost::Message;
-use std::sync::{Arc};
+use std::sync::Arc;
 use std::time;
 use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::transport::builder::UAttributesBuilder;
