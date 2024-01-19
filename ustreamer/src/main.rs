@@ -436,6 +436,8 @@ async fn main() {
             return;
         };
 
+        debug!("up-client-zenoh-rust: attributes: {:?}", &u_attribute);
+
         // Check the type of UAttributes (Request)
         match UMessageType::try_from(u_attribute.r#type) {
             Ok(UMessageType::UmessageTypeRequest) => {}
@@ -464,12 +466,11 @@ async fn main() {
                 data: None,
             },
         };
-        let Some(dest_uuri) = attachment.get(&"dest_uuri".as_bytes()) else {
-            error!("Unable to get dest_uuri attachment");
-            return;
-        };
-        let Ok(destination): Result<UUri, _> = Message::decode(&*dest_uuri) else {
-            error!("Unable to decode destination uuri");
+
+        let destination = if let Some(sink) = u_attribute.sink.clone() {
+            sink
+        } else {
+            error!("Unable to get destination from UAttributes.sink");
             return;
         };
 
@@ -486,7 +487,9 @@ async fn main() {
 
         debug!(
             "Received on '{}': '{:?}': destination: {:?}",
-            &key_expr, &value, &destination
+            &key_expr,
+            &value,
+            &destination.clone()
         );
         trace!("UAttributes: {:?}", &u_attribute);
 

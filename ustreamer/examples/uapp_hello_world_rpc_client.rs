@@ -23,7 +23,7 @@ use prost::Message;
 use std::time::Duration;
 use uprotocol_sdk::rpc::RpcClient;
 use uprotocol_sdk::transport::builder::UAttributesBuilder;
-use uprotocol_sdk::uprotocol::{u_payload, Data, Remote, UAuthority, UPriority};
+use uprotocol_sdk::uprotocol::{u_payload, Data, Remote, UAuthority, UPriority, Uuid};
 use uprotocol_sdk::uprotocol::{UEntity, UPayload, UUri};
 use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
 use uprotocol_zenoh_rust::ULinkZenoh;
@@ -34,17 +34,34 @@ use zenoh::prelude::WhatAmI;
 async fn main() {
     println!("uProtocol RPC client example");
 
+    let mdevice_ip = vec![192, 168, 3, 1];
+    let uapp_ip = vec![192, 169, 3, 100];
+
     let mut config = Config::default();
     config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Peer failed");
     let ulink = ULinkZenoh::new_from_config(config).await.unwrap();
 
+    let response_resource = UResourceBuilder::for_rpc_response();
+    let hello_world_response_uuri = UUri {
+        authority: Some(UAuthority {
+            remote: Some(Remote::Ip(uapp_ip.clone())),
+        }),
+        entity: Option::from(UEntity {
+            name: "hello_world_service".to_string(),
+            id: Option::Some(111),
+            version_major: Some(1),
+            version_minor: None,
+        }),
+        resource: Option::from(response_resource),
+    };
+
     let request_resource =
         UResourceBuilder::for_rpc_request(Some("get_hello".to_string()), Some(1));
     let hello_world_request_uuri = UUri {
         authority: Some(UAuthority {
-            remote: Some(Remote::Ip(vec![192, 168, 3, 1])),
+            remote: Some(Remote::Ip(mdevice_ip.clone())),
         }),
         entity: Option::from(UEntity {
             name: "hello_world_service".to_string(),
@@ -55,14 +72,18 @@ async fn main() {
         resource: Option::from(request_resource),
     };
 
-    let attributes = UAttributesBuilder::request(
+    let mut attributes = UAttributesBuilder::request(
         UPriority::UpriorityCs4,
         hello_world_request_uuri.clone(),
         2000,
     )
     .build();
 
+    attributes.sink = Some(hello_world_request_uuri.clone());
+
+    debug!("hello_world_response_uuri: {:?}", hello_world_response_uuri);
     debug!("hello_world_request_uuri: {:?}", hello_world_request_uuri);
+    debug!("attributes: {:?}", attributes);
 
     let mut hello_attempt = 0;
 
@@ -85,7 +106,7 @@ async fn main() {
 
         match ulink
             .invoke_method(
-                hello_world_request_uuri.clone(),
+                hello_world_response_uuri.clone(),
                 hello_request_payload.clone(),
                 attributes.clone(),
             )
