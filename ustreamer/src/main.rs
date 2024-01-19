@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use log::{debug, error, info, trace};
 use prost::Message;
-use uprotocol_sdk::uprotocol::{Data, Remote, UAttributes, UAuthority, UCode, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UStatus, UUri};
+use uprotocol_sdk::uprotocol::{Data, Remote, UAttributes, UAuthority, UCode, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UStatus, Uuid, UUri};
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_zenoh_rust::ULinkZenoh;
 use uprotocol_rust_transport_sommr::UTransportSommr;
@@ -69,6 +69,7 @@ async fn main() {
     };
 
     let ulink_zenoh_arc = Arc::new(ulink_zenoh);
+    let zenoh_queries_sommr_callback = zenoh_queries.clone();
 
     let sommr_callback = move | result: Result<UMessage, UStatus> | {
         trace!("entered sommr_callback");
@@ -106,6 +107,22 @@ async fn main() {
             Ok(UMessageType::UmessageTypePublish) => { }
             Ok(UMessageType::UmessageTypeResponse) => {
                 println!("got response back");
+
+                // Look up the Zenoh reply using reqid from the message's attributes
+                if let Some(reqid) = attributes.reqid.as_ref() {
+
+                    let id_str: String = reqid.clone().into();
+
+                    if let Some(query) = zenoh_queries_sommr_callback.lock().unwrap().remove(&String::from(reqid)) {
+                        // Use the reply to respond to the original Zenoh query
+                        // (You'll need to adjust this according to your application's logic)
+                        println!("for reqid: {} we had query: {:?}", <&Uuid as Into<String>>::into(reqid), &query);
+                    }
+                } else {
+                    error!("Attributes lack reqid");
+                    return;
+                }
+
                 return;
             }
             _ => {
