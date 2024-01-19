@@ -145,12 +145,18 @@ async fn main() {
                 info!("zenoh_callback: Source: {}", &source);
 
                 task::spawn(async move {
-                    match utransport_sommr_clone.send(source, payload, attributes).await {
+                    match utransport_sommr_clone
+                        .send(source, payload, attributes)
+                        .await
+                    {
                         Ok(_) => {
                             info!("zenoh_callback: Forwarding message over sommr succeeded");
                         }
                         Err(status) => {
-                            error!("zenoh_callback: Forwarding message over sommr failed: {:?}", status)
+                            error!(
+                                "zenoh_callback: Forwarding message over sommr failed: {:?}",
+                                status
+                            )
                         }
                     }
 

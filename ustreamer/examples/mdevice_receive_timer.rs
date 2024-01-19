@@ -1,0 +1,224 @@
+/********************************************************************************
+ * Copyright (c) 2023 Contributors to the Eclipse Foundation
+ *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Apache License Version 2.0 which is available at
+ * https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ ********************************************************************************/
+
+extern crate example_proto;
+extern crate uprotocol_sdk;
+extern crate uprotocol_zenoh_rust;
+
+use async_std::task;
+use log::error;
+use prost::Message;
+use std::time::Duration;
+use uprotocol_rust_transport_sommr::UTransportSommr;
+use uprotocol_sdk::{
+    transport::datamodel::UTransport,
+    uprotocol::{Data, Remote, UAuthority, UEntity, UMessage, UResource, UStatus, UUri},
+};
+use zenoh::config::Config;
+use zenoh::prelude::WhatAmI;
+
+use example_proto::proto::example::hello_world::v1::*;
+
+fn timer_listener(result: Result<UMessage, UStatus>) {
+    match result {
+        Ok(message) => {
+            let payload = match message.payload {
+                Some(payload) => payload,
+                None => {
+                    error!("No payload attached!");
+                    return;
+                }
+            };
+
+            let data = match payload.data {
+                Some(data) => data,
+                None => {
+                    error!("Empty data payload!");
+                    return;
+                }
+            };
+
+            if let Data::Value(buf) = data {
+                let timer = match Timer::decode(&*buf) {
+                    Ok(timer) => timer,
+                    Err(_) => {
+                        error!("Failed to decode Timer!");
+                        return;
+                    }
+                };
+
+                if let Some(time) = timer.time {
+                    println!(
+                        "Time: H: {} M: {} S: {} NS: {}",
+                        time.hours, time.minutes, time.seconds, time.nanos
+                    );
+                }
+            }
+        }
+        Err(status) => {
+            error!(
+                "second_timer_listener returned UStatus: {:?} msg: {}",
+                status.get_code(),
+                status.message()
+            );
+        }
+    }
+}
+
+#[async_std::main]
+async fn main() {
+    // Your example code goes here
+    println!("This is an example client for uStreamer on an mDevice over sommR");
+
+    let uapp_ip = vec![192, 168, 3, 100];
+
+    let mut config = Config::default();
+    config
+        .set_mode(Some(WhatAmI::Peer))
+        .expect("Setting as Client failed");
+    let utransport_sommr = UTransportSommr::new_from_config(config).await.unwrap();
+    let authority = UAuthority {
+        remote: Some(Remote::Ip(uapp_ip.clone())),
+    };
+    let timer_hour_uuri = UUri {
+        authority: Some(authority.clone()),
+        entity: Option::from(UEntity {
+            name: "timer_service".to_string(),
+            id: Option::Some(123),
+            version_major: Some(1),
+            version_minor: None,
+        }),
+        resource: Option::from(UResource {
+            name: "timer".to_string(),
+            instance: None,
+            message: Some("hour".to_string()),
+            id: Some(1),
+        }),
+    };
+    let timer_minute_uuri = UUri {
+        authority: Some(authority.clone()),
+        entity: Option::from(UEntity {
+            name: "timer_service".to_string(),
+            id: Option::Some(123),
+            version_major: Some(1),
+            version_minor: None,
+        }),
+        resource: Option::from(UResource {
+            name: "timer".to_string(),
+            instance: None,
+            message: Some("minute".to_string()),
+            id: Some(2),
+        }),
+    };
+    let timer_second_uuri = UUri {
+        authority: Some(authority.clone()),
+        entity: Option::from(UEntity {
+            name: "timer_service".to_string(),
+            id: Option::Some(123),
+            version_major: Some(1),
+            version_minor: None,
+        }),
+        resource: Option::from(UResource {
+            name: "timer".to_string(),
+            instance: None,
+            message: Some("second".to_string()),
+            id: Some(3),
+        }),
+    };
+    let timer_nanosecond_uuri = UUri {
+        authority: Some(authority.clone()),
+        entity: Option::from(UEntity {
+            name: "timer_service".to_string(),
+            id: Option::Some(123),
+            version_major: Some(1),
+            version_minor: None,
+        }),
+        resource: Option::from(UResource {
+            name: "timer".to_string(),
+            instance: None,
+            message: Some("nanosecond".to_string()),
+            id: Some(4),
+        }),
+    };
+
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
+    let _registered_hour_timer_key = {
+        match utransport_sommr
+            .register_listener(timer_hour_uuri, Box::new(timer_listener))
+            .await
+        {
+            Ok(registered_key) => registered_key,
+            Err(status) => {
+                error!(
+                    "Failed to register timer_hour listener: {:?} {}",
+                    status.get_code(),
+                    status.message()
+                );
+                return;
+            }
+        }
+    };
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
+    let _registered_minute_timer_key = {
+        match utransport_sommr
+            .register_listener(timer_minute_uuri, Box::new(timer_listener))
+            .await
+        {
+            Ok(registered_key) => registered_key,
+            Err(status) => {
+                error!(
+                    "Failed to register timer_minute listener: {:?}",
+                    status.get_code()
+                );
+                return;
+            }
+        }
+    };
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
+    let _registered_second_timer_key = {
+        match utransport_sommr
+            .register_listener(timer_second_uuri, Box::new(timer_listener))
+            .await
+        {
+            Ok(registered_key) => registered_key,
+            Err(status) => {
+                error!(
+                    "Failed to register timer_second listener: {:?}",
+                    status.get_code()
+                );
+                return;
+            }
+        }
+    };
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
+    let _registered_second_timer_key = {
+        match utransport_sommr
+            .register_listener(timer_nanosecond_uuri, Box::new(timer_listener))
+            .await
+        {
+            Ok(registered_key) => registered_key,
+            Err(status) => {
+                error!(
+                    "Failed to register timer_nanosecond listener: {:?}",
+                    status.get_code()
+                );
+                return;
+            }
+        }
+    };
+
+    // Infinite loop in main thread, just letting the listeners listen
+    loop {
+        task::sleep(Duration::from_secs(10)).await;
+    }
+}
