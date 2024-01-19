@@ -72,6 +72,8 @@ async fn main() {
     let ulink_zenoh_arc = Arc::new(ulink_zenoh);
     let zenoh_queries_sommr_callback = zenoh_queries.clone();
 
+
+
     let sommr_callback = move | result: Result<UMessage, UStatus> | {
         trace!("entered sommr_callback");
 

@@ -20,6 +20,7 @@ use async_std::task::{self};
 use example_proto::proto::example::hello_world::v1::*;
 use prost::Message;
 use std::time::Duration;
+use log::{debug, trace};
 use uprotocol_sdk::rpc::RpcClient;
 use uprotocol_sdk::transport::builder::UAttributesBuilder;
 use uprotocol_sdk::uprotocol::{u_payload, Data, UPriority, Uuid, UAuthority, Remote};
@@ -59,13 +60,13 @@ async fn main() {
     )
     .build();
 
-    println!("hello_world_request_uuri: {:?}", hello_world_request_uuri);
+    debug!("hello_world_request_uuri: {:?}", hello_world_request_uuri);
 
     let mut hello_attempt = 0;
 
     loop {
         task::sleep(Duration::from_secs(1)).await;
-        println!("Attempting send of hello world...");
+        trace!("Attempting send of hello world...");
 
         let hello_request = HelloRequest {
             name: format!("Please tell me hello {}", hello_attempt).to_string(),

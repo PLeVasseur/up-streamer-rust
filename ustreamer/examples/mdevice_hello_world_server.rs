@@ -13,7 +13,7 @@
 
 use async_std::task::{self, block_on};
 use example_proto::proto::example::hello_world::v1::{HelloRequest, HelloResponse};
-use log::{error, info};
+use log::{debug, error, info, trace};
 use prost::Message;
 use std::sync::{Arc, Mutex};
 use std::time;
@@ -63,7 +63,7 @@ async fn main() {
     let mdevice_rpc_server_for_callback = mdevice_rpc_server.clone();
 
     let callback = move |result: Result<UMessage, UStatus>| {
-        println!("callback: entered");
+        trace!("callback: entered");
 
         match result {
             Ok(message) => {
@@ -73,12 +73,12 @@ async fn main() {
                     return;
                 };
 
-                println!("hello_response_desintation: {:?}", hello_response_destination);
+                debug!("hello_response_destination: {:?}", hello_response_destination);
 
                 if let Some(authority) = hello_response_destination.authority {
                     if let Some(Remote::Ip(ip)) = authority.remote {
 
-                        print!("ip: {:?}", ip);
+                        debug!("ip: {:?}", ip);
 
                         if ip != mdevice_ip {
                             info!("Don't react to messages not directed to us. remote ip: {:?}", ip);
@@ -159,10 +159,10 @@ async fn main() {
                         .await
                     {
                         Ok(_) => {
-                            println!("Sending HelloResponse succeeded");
+                            info!("Sending HelloResponse succeeded");
                         }
                         Err(status) => {
-                            println!("Sending HelloResponse failed: {:?}", status)
+                            error!("Sending HelloResponse failed: {:?}", status)
                         }
                     }
                 });
@@ -177,7 +177,7 @@ async fn main() {
         }
     };
 
-    println!("Register the listener...");
+    info!("Register the listener...");
     mdevice_rpc_server
         .register_listener(uuri, Box::new(callback))
         .await

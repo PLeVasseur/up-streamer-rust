@@ -1,6 +1,6 @@
 # uStreamer example apps
 
-## Simple publish / subscribe example
+## Publish / subscribe example
 
 ### Run the uStreamer
 
@@ -13,18 +13,18 @@ cargo run --bin ustreamer
 An example of a client app that interacts with `uStreamer`
 
 ```bash
-cargo run --example receive_hello_world
+cargo run --example uapp_receive_timer
 ```
 
 ### In another terminal run the publish app
 
-This is a stand-in dummy to let us exercise the client app and `uSteamer`
+This is using a stand-in for the sommR client library to let us exercise the client app and `uSteamer`
 
 ```bash
-cargo run --example send_hello_world
+cargo run --example mdevice_send_timer
 ```
 
-## Simple RPC server / RPC client example
+## RPC server / RPC client example
 
 ### Run the uStreamer
 
@@ -34,10 +34,10 @@ cargo run --bin ustreamer
 
 ### Run the example RPC server app
 
-An example of an RPC server app that interacts through `uStreamer`
+An example of a sommR RPC server app that interacts through `uStreamer`
 
 ```bash
-cargo run --example hello_world_rpc_server
+cargo run --example mdevice_hello_world_server
 ```
 
 ### In another terminal run the RPC client app
@@ -45,5 +45,5 @@ cargo run --example hello_world_rpc_server
 An example of an RPC client app that interacts through `uStreamer`
 
 ```bash
-cargo run --example hello_world_rpc_client
+cargo run --example uapp_hello_world_rpc_client
 ```
