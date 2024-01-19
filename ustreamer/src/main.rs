@@ -32,8 +32,8 @@ async fn main() {
 
     println!("Starting uStreamer!");
 
-    let uapp_ip = vec![192, 168, 3, 100];
-    let mdevice_ip = vec![192, 168, 3, 1];
+    let uapp_ip: Vec<u8> = vec![192, 168, 3, 100];
+    let mdevice_ip: Vec<u8> = vec![192, 168, 3, 1];
 
     let zenoh_queries = Arc::new(Mutex::new(HashMap::<String, (KeyExpr, Query)>::new()));
 
@@ -101,13 +101,55 @@ async fn main() {
             return;
         };
 
-        // TODO: Check into how/if we can spin out a specific temporary register_listener
-        //  to get the message back over sommR down there in the get_callback
-        // Check the type of UAttributes (Publish)
+        trace!("sommr_callback: got attributes");
+
+        // Check the message type (Publish/Request/Response)
+        // ASSUMPTION: By registering an "all remote" listener, we get only those messages which have UAuthority
         match UMessageType::try_from(attributes.r#type) {
-            Ok(UMessageType::UmessageTypePublish) => { }
+            Ok(UMessageType::UmessageTypePublish) => {
+
+                let msg_rx = if let Some(authority) = &source.authority {
+                    if let Some(Remote::Ip(ip)) = &authority.remote {
+                        debug!("ip: {:?}", &ip);
+                        *ip == uapp_ip
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if msg_rx {
+
+                } else {
+                    info!("sommr_callback: Source: {}", &source);
+
+                    let ulink_zenoh_clone = ulink_zenoh_arc.clone();
+                    task::spawn(async move {
+                        match ulink_zenoh_clone
+                            .send(
+                                source,
+                                payload,
+                                attributes
+                            )
+                            .await
+                        {
+                            Ok(_) => {
+                                info!("Forwarding message succeeded");
+                            }
+                            Err(status) => {
+                                error!("Forwarding message failed: {:?}", status)
+                            }
+                        }
+
+                        trace!("sommr_callback: ulink_zenoh_clone.send() within async");
+                    });
+                    trace!("sommr_callback: after ulink_zenoh_clone.send()");
+                }
+
+            }
             Ok(UMessageType::UmessageTypeResponse) => {
-                println!("got response back");
+                trace!("got response back");
 
                 // Look up the Zenoh reply using reqid from the message's attributes
                 if let Some(reqid) = attributes.reqid.as_ref() {
@@ -117,7 +159,7 @@ async fn main() {
                     if let Some((key_expr, query)) = zenoh_queries_sommr_callback.lock().unwrap().remove(&String::from(reqid)) {
                         // Use the reply to respond to the original Zenoh query
                         // (You'll need to adjust this according to your application's logic)
-                        println!("for reqid: {} we had query: {:?}", <&Uuid as Into<String>>::into(reqid), &query);
+                        trace!("for reqid: {} we had query: {:?}", <&Uuid as Into<String>>::into(reqid), &query);
 
                         let Some(Data::Value(buf)) = payload.data else {
                             error!("Invalid data");
@@ -152,10 +194,6 @@ async fn main() {
                                 return;
                             };
 
-                            // query
-                            //     .reply(reply)
-                            //     .with_attachment(attachment.build());
-
                             if let Err(e) = reply_builder
                                 .res()
                                 .await
@@ -164,7 +202,7 @@ async fn main() {
                                 return;
                             }
 
-                            println!("Replied via Zenoh!");
+                            trace!("Replied via Zenoh!");
                         });
                     }
                 } else {
@@ -180,31 +218,6 @@ async fn main() {
             }
         }
 
-        trace!("sommr_callback: got attributes");
-
-        info!("sommr_callback: Source: {}", &source);
-
-        let ulink_zenoh_clone = ulink_zenoh_arc.clone();
-        task::spawn(async move {
-            match ulink_zenoh_clone
-                .send(
-                    source,
-                    payload,
-                    attributes
-                )
-                .await
-            {
-                Ok(_) => {
-                    info!("Forwarding message succeeded");
-                }
-                Err(status) => {
-                    error!("Forwarding message failed: {:?}", status)
-                }
-            }
-
-            trace!("sommr_callback: ulink_zenoh_clone.send() within async");
-        });
-        trace!("sommr_callback: after ulink_zenoh_clone.send()");
     };
 
     // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
@@ -305,15 +318,15 @@ async fn main() {
             return;
         }
 
-        println!("Received on '{}': '{:?}': destination: {:?}", &key_expr, &value, &destination);
-        println!("UAttributes: {:?}", &u_attribute);
+        debug!("Received on '{}': '{:?}': destination: {:?}", &key_expr, &value, &destination);
+        trace!("UAttributes: {:?}", &u_attribute);
 
         task::spawn(async move {
             // TODO: I think we want to register a listener for what's coming back over the sommR interface here
             //  and then hang out / wait till we get the topic we're expecting
             //  and then at that point return the result over Zenoh
 
-            println!("destination: {:?}", &destination);
+            trace!("destination: {:?}", &destination);
 
             match utransport_sommr_arc
                 .send(
@@ -324,7 +337,7 @@ async fn main() {
                 .await
             {
                 Ok(_) => {
-                    println!("Forwarding RPC Request over sommR succeeded");
+                    info!("Forwarding RPC Request over sommR succeeded");
                 }
                 Err(status) => {
                     error!("Forwarding RPC Request over sommR failed: {:?}", status)
