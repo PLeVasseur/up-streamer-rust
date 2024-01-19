@@ -111,7 +111,7 @@ async fn main() {
                 let msg_rx = if let Some(authority) = &source.authority {
                     if let Some(Remote::Ip(ip)) = &authority.remote {
                         debug!("ip: {:?}", &ip);
-                        *ip == uapp_ip
+                        *ip != uapp_ip
                     } else {
                         false
                     }
@@ -119,33 +119,33 @@ async fn main() {
                     false
                 };
 
-                if msg_rx {
-
-                } else {
-                    info!("sommr_callback: Source: {}", &source);
-
-                    let ulink_zenoh_clone = ulink_zenoh_arc.clone();
-                    task::spawn(async move {
-                        match ulink_zenoh_clone
-                            .send(
-                                source,
-                                payload,
-                                attributes
-                            )
-                            .await
-                        {
-                            Ok(_) => {
-                                info!("Forwarding message succeeded");
-                            }
-                            Err(status) => {
-                                error!("Forwarding message failed: {:?}", status)
-                            }
-                        }
-
-                        trace!("sommr_callback: ulink_zenoh_clone.send() within async");
-                    });
-                    trace!("sommr_callback: after ulink_zenoh_clone.send()");
+                if !msg_rx {
+                    info!("Message not intended for us, skipping");
                 }
+                info!("sommr_callback: Source: {}", &source);
+
+                let ulink_zenoh_clone = ulink_zenoh_arc.clone();
+                task::spawn(async move {
+                    match ulink_zenoh_clone
+                        .send(
+                            source,
+                            payload,
+                            attributes
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            info!("Forwarding message succeeded");
+                        }
+                        Err(status) => {
+                            error!("Forwarding message failed: {:?}", status)
+                        }
+                    }
+
+                    trace!("sommr_callback: ulink_zenoh_clone.send() within async");
+                });
+                trace!("sommr_callback: after ulink_zenoh_clone.send()");
+
 
             }
             Ok(UMessageType::UmessageTypeResponse) => {
@@ -153,9 +153,6 @@ async fn main() {
 
                 // Look up the Zenoh reply using reqid from the message's attributes
                 if let Some(reqid) = attributes.reqid.as_ref() {
-
-                    let id_str: String = reqid.clone().into();
-
                     if let Some((key_expr, query)) = zenoh_queries_sommr_callback.lock().unwrap().remove(&String::from(reqid)) {
                         // Use the reply to respond to the original Zenoh query
                         // (You'll need to adjust this according to your application's logic)
