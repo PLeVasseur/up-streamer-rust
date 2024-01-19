@@ -19,7 +19,10 @@ use std::time;
 use uprotocol_sdk::{
     rpc::RpcServer,
     transport::datamodel::UTransport,
-    uprotocol::{Data, Remote, UAuthority, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UStatus, UUri},
+    uprotocol::{
+        Data, Remote, UAuthority, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat,
+        UStatus, UUri,
+    },
     uri::builder::resourcebuilder::UResourceBuilder,
 };
 use uprotocol_zenoh_rust::ULinkZenoh;
@@ -56,7 +59,7 @@ async fn main() {
         resource: Some(UResourceBuilder::for_rpc_request(
             Some("get_hello".to_string()),
             Some(1),
-        ))
+        )),
     };
 
     let rpc_server_callback = rpc_server.clone();
@@ -75,6 +78,7 @@ async fn main() {
                     let value = v.into_iter().map(|c| c as char).collect::<String>();
                     println!("Receive {} from {}", value, uuri);
                 }
+
                 let hello_response = HelloResponse {
                     message: "Hello there!".to_string(),
                 };

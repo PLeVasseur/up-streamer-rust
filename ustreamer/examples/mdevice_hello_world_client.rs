@@ -16,19 +16,21 @@ extern crate prost;
 extern crate uprotocol_sdk;
 extern crate uprotocol_zenoh_rust;
 
-use std::sync::Arc;
 use async_std::task::{self};
-use prost::Message;
-use std::time::Duration;
 use log::{debug, error, info, trace};
+use prost::Message;
+use std::sync::Arc;
+use std::time::Duration;
 use uprotocol_rust_transport_sommr::UTransportSommr;
-use uprotocol_sdk::uprotocol::{Data, Remote, u_payload, UAttributes, UAuthority, UMessage, UPriority, UStatus};
+use uprotocol_sdk::transport::builder::UAttributesBuilder;
+use uprotocol_sdk::uprotocol::{
+    Data, Remote, UAuthority, UMessage, UPriority, UStatus, Uuid,
+};
+use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
 use uprotocol_sdk::{
     transport::datamodel::UTransport,
-    uprotocol::{UEntity, UMessageType, UPayload, UResource, UUri},
+    uprotocol::{UEntity, UPayload, UUri},
 };
-use uprotocol_sdk::transport::builder::UAttributesBuilder;
-use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
 use zenoh::config::Config;
 use zenoh::prelude::WhatAmI;
 
@@ -78,11 +80,17 @@ async fn main() {
         resource: Option::from(request_resource),
     };
 
+    // timestamp = 1, ver = 0b1000
+    let msb = 0x0000000000018000u64;
+    // variant = 0b10
+    let lsb = 0x8000000000000000u64;
+
     let mut attributes = UAttributesBuilder::request(
         UPriority::UpriorityCs4,
         hello_world_request_uuri.clone(),
         2000,
     )
+    .with_reqid(Uuid { msb, lsb }) // TODO: Isn't it not required to include a reqid when forming attributes for request? not used...
     .build();
 
     attributes.sink = Some(hello_world_request_uuri.clone());
@@ -104,10 +112,7 @@ async fn main() {
                     return;
                 };
 
-                debug!(
-                    "sink: {:?}",
-                    &sink
-                );
+                debug!("sink: {:?}", &sink);
 
                 if let Some(authority) = sink.authority {
                     if let Some(Remote::Ip(ip)) = authority.remote {
@@ -147,7 +152,6 @@ async fn main() {
                             return;
                         }
                     };
-
 
                     println!("{}", &hello_response.message);
                 }

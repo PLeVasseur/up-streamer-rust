@@ -20,7 +20,11 @@ use std::time::Duration;
 use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::rpc::RpcClient;
 use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::{Data, Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UStatus, UUri, Uuid, UCode};
+use uprotocol_sdk::uprotocol::UMessageType::UmessageTypeResponse;
+use uprotocol_sdk::uprotocol::{
+    Data, Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UPayload,
+    UPayloadFormat, UStatus, UUri, Uuid,
+};
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::prelude::r#async::AsyncResolve;
 use zenoh::prelude::*;
@@ -161,67 +165,8 @@ async fn main() {
                 });
                 trace!("zenoh_callback: after utransport_clone.send()");
             }
-            // Ok(UMessageType::UmessageTypeResponse) => {
-                // trace!("got response back");
-                //
-                // // Look up the Zenoh reply using reqid from the message's attributes
-                // if let Some(reqid) = attributes.reqid.as_ref() {
-                //     if let Some((key_expr, query)) = zenoh_queries_sommr_callback
-                //         .lock()
-                //         .unwrap()
-                //         .remove(&String::from(reqid))
-                //     {
-                //         // Use the reply to respond to the original Zenoh query
-                //         // (You'll need to adjust this according to your application's logic)
-                //         trace!(
-                //             "for reqid: {} we had query: {:?}",
-                //             <&Uuid as Into<String>>::into(reqid),
-                //             &query
-                //         );
-                //
-                //         let Some(Data::Value(buf)) = payload.data else {
-                //             error!("Invalid data");
-                //             return;
-                //         };
-                //
-                //         let mut attr = vec![];
-                //         let Ok(()) = attributes.encode(&mut attr) else {
-                //             error!("Unable to encode UAttributes");
-                //             return;
-                //         };
-                //
-                //         // Add attachment and payload
-                //         let mut attachment = AttachmentBuilder::new();
-                //         attachment.insert("uattributes", attr.as_slice());
-                //         // Send back query
-                //         let value = Value::new(buf.into()).encoding(Encoding::WithSuffix(
-                //             KnownEncoding::AppCustom,
-                //             payload.format.to_string().into(),
-                //         ));
-                //         let reply = Ok(Sample::new(key_expr, value));
-                //
-                //         task::spawn(async move {
-                //             let Ok(reply_builder) =
-                //                 query.reply(reply).with_attachment(attachment.build())
-                //                 else {
-                //                     error!("Error: Unable to add attachment");
-                //                     return;
-                //                 };
-                //
-                //             if let Err(e) = reply_builder.res().await {
-                //                 error!("Error: Unable to reply with Zenoh - {:?}", e);
-                //                 return;
-                //             }
-                //
-                //             trace!("Replied via Zenoh!");
-                //         });
-                //     }
-                // } else {
-                //     error!("Attributes lack reqid");
-                // }
-            // }
             _ => {
-                debug!("UMessageType is not UmessageTypeRequest");
+                debug!("UMessageType is not UmessageTypePublish");
             }
         }
     };
@@ -246,6 +191,7 @@ async fn main() {
     };
 
     let uapp_ip_sommr_callback_clone = uapp_ip.clone();
+    let utransport_sommr_for_sommr_callback = utransport_sommr_arc.clone();
 
     let sommr_callback = move |result: Result<UMessage, UStatus>| {
         trace!("entered sommr_callback");
@@ -321,6 +267,24 @@ async fn main() {
             Ok(UMessageType::UmessageTypeResponse) => {
                 trace!("got response back");
 
+                let block_msg_rx = if let Some(authority) = &source.authority {
+                    if let Some(Remote::Ip(ip)) = &authority.remote {
+                        debug!("ip: {:?}", &ip);
+                        *ip == uapp_ip_sommr_callback_clone
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+
+                debug!("block_msg_rx: {}", &block_msg_rx);
+
+                if block_msg_rx {
+                    info!("Message not intended for us, skipping");
+                    return;
+                }
+
                 // Look up the Zenoh reply using reqid from the message's attributes
                 if let Some(reqid) = attributes.reqid.as_ref() {
                     if let Some((key_expr, query)) = zenoh_queries_sommr_callback
@@ -386,17 +350,14 @@ async fn main() {
                 };
 
                 let ulink_zenoh_clone = ulink_zenoh_arc.clone();
+                let utransport_sommr_clone = utransport_sommr_for_sommr_callback.clone();
                 task::spawn(async move {
                     match ulink_zenoh_clone
-                        .invoke_method(
-                            destination,
-                            payload,
-                            attributes,
-                        )
+                        .invoke_method(destination, payload, attributes.clone())
                         .await
                     {
                         Ok(payload) => {
-                            let data = match payload.data {
+                            let _ = match payload.clone().data {
                                 Some(data) => data,
                                 None => {
                                     error!("Empty data payload!");
@@ -407,13 +368,28 @@ async fn main() {
                             println!("Successfully got payload back via invoke_method");
 
                             // TODO: Route back through to source
+                            let mut attributes_response = attributes.clone();
+                            attributes_response.sink = Some(source.clone());
+                            attributes_response.r#type = UmessageTypeResponse as i32;
+                            // attributes_response.reqid =
+
+                            match utransport_sommr_clone
+                                .send(source.clone(), payload.clone(), attributes_response)
+                                .await
+                            {
+                                Ok(_) => {
+                                    info!("Successfully routed response back over sommr");
+                                }
+                                Err(e) => {
+                                    error!("Failed to route response over sommr: {:?}", e);
+                                }
+                            }
                         }
                         Err(e) => {
                             println!("invoke_method failed: {:?}", e)
                         }
                     }
                 });
-
             }
             _ => {
                 debug!("UMessageType is not UmessageTypeRequest");
@@ -423,7 +399,8 @@ async fn main() {
 
     // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
     let _registered_all_remote_sommr_key = {
-        match utransport_sommr_arc
+        let utransport_sommr_clone = utransport_sommr_arc.clone();
+        match utransport_sommr_clone
             .register_listener(uuri_for_all_remote, Box::new(sommr_callback))
             .await
         {
