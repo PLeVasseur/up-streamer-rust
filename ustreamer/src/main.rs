@@ -20,7 +20,7 @@ use std::time::Duration;
 use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::{
-    Data, Remote, UAttributes, UAuthority, UCode, UEntity, UMessage, UMessageType, UPayload,
+    Data, Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UPayload,
     UPayloadFormat, UStatus, UUri, Uuid,
 };
 use uprotocol_zenoh_rust::ULinkZenoh;
@@ -204,14 +204,10 @@ async fn main() {
                     }
                 } else {
                     error!("Attributes lack reqid");
-                    return;
                 }
-
-                return;
             }
             _ => {
                 debug!("UMessageType is not UmessageTypeRequest");
-                return;
             }
         }
     };

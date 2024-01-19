@@ -34,7 +34,7 @@ impl RetransmitterZenoh {
 
         RetransmitterZenoh {
             resource_append,
-            up_zenoh: up_zenoh,
+            up_zenoh,
         }
     }
 }
@@ -52,7 +52,7 @@ impl Retransmitter for RetransmitterZenoh {
             Err(e) => {
                 return Err(UStatus::fail_with_code(
                     UCode::Internal,
-                    &*format!("Unable to convert UUri to Zenoh key expression: {:?}", e),
+                    &format!("Unable to convert UUri to Zenoh key expression: {:?}", e),
                 ))
             }
         };
@@ -174,7 +174,7 @@ impl Retransmitter for RetransmitterZenoh {
                     error!("UTransport::send() failed: {:?}", e);
                     return Err(UStatus::fail_with_code(
                         UCode::Internal,
-                        &*format!("Send failed: {:?}", e),
+                        &format!("Send failed: {:?}", e),
                     ));
                 }
             }

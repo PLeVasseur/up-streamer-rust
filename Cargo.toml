@@ -17,7 +17,6 @@ members = [
     "router-plugins/plugins/transport-router-someip-plugin",
     "router-plugins/retransmitters/retransmitter",
     "router-plugins/retransmitters/retransmitter-zenoh",
-    "router-plugins/router-utils",
     "ustreamer",
     "udiscovery",
     "usubscription",

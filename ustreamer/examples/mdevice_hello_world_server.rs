@@ -11,19 +11,18 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use async_std::task::{self, block_on};
+use async_std::task::{self};
 use example_proto::proto::example::hello_world::v1::{HelloRequest, HelloResponse};
 use log::{debug, error, info, trace};
 use prost::Message;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use std::time;
 use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::transport::builder::UAttributesBuilder;
-use uprotocol_sdk::uprotocol::{u_payload, Remote, UAuthority, UPriority, Uuid};
+use uprotocol_sdk::uprotocol::{u_payload, Remote, UAuthority, UPriority};
 use uprotocol_sdk::{
-    rpc::RpcServer,
     transport::datamodel::UTransport,
-    uprotocol::{Data, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UStatus, UUri},
+    uprotocol::{Data, UEntity, UMessage, UPayload, UStatus, UUri},
     uri::builder::resourcebuilder::UResourceBuilder,
 };
 use zenoh::config::{Config, WhatAmI};
@@ -57,7 +56,6 @@ async fn main() {
             Some("get_hello".to_string()),
             Some(1),
         )),
-        ..Default::default()
     };
 
     let mdevice_rpc_server_for_callback = mdevice_rpc_server.clone();

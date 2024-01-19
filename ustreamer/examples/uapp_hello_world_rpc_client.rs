@@ -23,7 +23,7 @@ use prost::Message;
 use std::time::Duration;
 use uprotocol_sdk::rpc::RpcClient;
 use uprotocol_sdk::transport::builder::UAttributesBuilder;
-use uprotocol_sdk::uprotocol::{u_payload, Data, Remote, UAuthority, UPriority, Uuid};
+use uprotocol_sdk::uprotocol::{u_payload, Data, Remote, UAuthority, UPriority};
 use uprotocol_sdk::uprotocol::{UEntity, UPayload, UUri};
 use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
 use uprotocol_zenoh_rust::ULinkZenoh;

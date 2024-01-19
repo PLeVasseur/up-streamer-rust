@@ -2131,10 +2131,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "router-utils"
-version = "0.1.5-SNAPSHOT"
-
-[[package]]
 name = "rsa"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
