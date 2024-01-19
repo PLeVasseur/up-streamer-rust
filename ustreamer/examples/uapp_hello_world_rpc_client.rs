@@ -18,12 +18,12 @@ extern crate uprotocol_zenoh_rust;
 
 use async_std::task::{self};
 use example_proto::proto::example::hello_world::v1::*;
+use log::{debug, trace};
 use prost::Message;
 use std::time::Duration;
-use log::{debug, trace};
 use uprotocol_sdk::rpc::RpcClient;
 use uprotocol_sdk::transport::builder::UAttributesBuilder;
-use uprotocol_sdk::uprotocol::{u_payload, Data, UPriority, Uuid, UAuthority, Remote};
+use uprotocol_sdk::uprotocol::{u_payload, Data, Remote, UAuthority, UPriority, Uuid};
 use uprotocol_sdk::uprotocol::{UEntity, UPayload, UUri};
 use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
 use uprotocol_zenoh_rust::ULinkZenoh;
@@ -43,7 +43,9 @@ async fn main() {
     let request_resource =
         UResourceBuilder::for_rpc_request(Some("get_hello".to_string()), Some(1));
     let hello_world_request_uuri = UUri {
-        authority: Some(UAuthority{ remote: Some(Remote::Ip(vec![192, 168, 3, 1])) }),
+        authority: Some(UAuthority {
+            remote: Some(Remote::Ip(vec![192, 168, 3, 1])),
+        }),
         entity: Option::from(UEntity {
             name: "hello_world_service".to_string(),
             id: Option::Some(111),

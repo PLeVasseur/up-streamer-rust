@@ -14,10 +14,10 @@
 use async_std::task;
 use std::sync::Arc;
 use std::time::Duration;
-use uprotocol_sdk::uprotocol::{Remote, UAuthority, UEntity, UMessage, UStatus, UUri};
-use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_zenoh_rust::ULinkZenoh;
 use uprotocol_rust_transport_sommr::UTransportSommr;
+use uprotocol_sdk::transport::datamodel::UTransport;
+use uprotocol_sdk::uprotocol::{Remote, UAuthority, UEntity, UMessage, UStatus, UUri};
+use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::prelude::r#async::AsyncResolve;
 use zenoh::prelude::*;
 use zenoh::queryable::Query;
@@ -95,11 +95,15 @@ async fn main() {
     let runtime = zenoh::runtime::Runtime::new(config).await.unwrap();
 
     let ulink_zenoh = ULinkZenoh::new_from_runtime(runtime.clone()).await.unwrap();
-    let utransport_sommr = UTransportSommr::new_from_runtime(runtime.clone()).await.unwrap();
+    let utransport_sommr = UTransportSommr::new_from_runtime(runtime.clone())
+        .await
+        .unwrap();
 
-    let uuri_for_all_remote = UUri{
-        authority: Some(UAuthority{ remote: Some(Remote::Name("*".to_string())) }),
-        entity: Some(UEntity{
+    let uuri_for_all_remote = UUri {
+        authority: Some(UAuthority {
+            remote: Some(Remote::Name("*".to_string())),
+        }),
+        entity: Some(UEntity {
             name: "*".to_string(),
             id: None,
             version_major: None,
@@ -110,7 +114,7 @@ async fn main() {
 
     let ulink_zenoh_arc = Arc::new(ulink_zenoh);
 
-    let sommr_callback = move | result: Result<UMessage, UStatus> | {
+    let sommr_callback = move |result: Result<UMessage, UStatus>| {
         println!("entered sommr_callback");
 
         let Ok(msg) = result else {
@@ -145,14 +149,7 @@ async fn main() {
 
         let ulink_zenoh_clone = ulink_zenoh_arc.clone();
         task::spawn(async move {
-            match ulink_zenoh_clone
-                .send(
-                    source,
-                    payload,
-                    attributes
-                )
-                .await
-            {
+            match ulink_zenoh_clone.send(source, payload, attributes).await {
                 Ok(_) => {
                     println!("Forwarding message succeeded");
                 }

@@ -19,12 +19,12 @@ extern crate uprotocol_zenoh_rust;
 use async_std::task::{self};
 use prost::Message;
 use std::time::Duration;
+use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::uprotocol::{u_payload, UAttributes};
 use uprotocol_sdk::{
     transport::datamodel::UTransport,
     uprotocol::{UEntity, UMessageType, UPayload, UResource, UUri},
 };
-use uprotocol_rust_transport_sommr::UTransportSommr;
 use zenoh::config::Config;
 use zenoh::prelude::WhatAmI;
 

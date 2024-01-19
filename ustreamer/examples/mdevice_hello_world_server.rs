@@ -17,15 +17,15 @@ use log::{debug, error, info, trace};
 use prost::Message;
 use std::sync::{Arc, Mutex};
 use std::time;
+use uprotocol_rust_transport_sommr::UTransportSommr;
+use uprotocol_sdk::transport::builder::UAttributesBuilder;
+use uprotocol_sdk::uprotocol::{u_payload, Remote, UAuthority, UPriority, Uuid};
 use uprotocol_sdk::{
     rpc::RpcServer,
     transport::datamodel::UTransport,
     uprotocol::{Data, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UStatus, UUri},
     uri::builder::resourcebuilder::UResourceBuilder,
 };
-use uprotocol_rust_transport_sommr::UTransportSommr;
-use uprotocol_sdk::transport::builder::UAttributesBuilder;
-use uprotocol_sdk::uprotocol::{Remote, u_payload, UAuthority, UPriority, Uuid};
 use zenoh::config::{Config, WhatAmI};
 
 #[async_std::main]
@@ -38,16 +38,16 @@ async fn main() {
     config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Client failed");
-    let mdevice_rpc_server = Arc::new(
-        UTransportSommr::new_from_config(config).await.unwrap()
-    );
+    let mdevice_rpc_server = Arc::new(UTransportSommr::new_from_config(config).await.unwrap());
 
     let uapp_ip = vec![192, 168, 3, 100];
     let mdevice_ip = vec![192, 168, 3, 1];
 
     // create uuri
     let uuri = UUri {
-        authority: Some(UAuthority{remote: Some(Remote::Ip(mdevice_ip.clone()))}),
+        authority: Some(UAuthority {
+            remote: Some(Remote::Ip(mdevice_ip.clone())),
+        }),
         entity: Some(UEntity {
             name: "hello_world_service".to_string(),
             version_major: Some(1),
@@ -67,27 +67,33 @@ async fn main() {
 
         match result {
             Ok(message) => {
-
                 let Some(mut hello_response_destination) = message.source else {
                     error!("Unable to get destination UUri");
                     return;
                 };
 
-                debug!("hello_response_destination: {:?}", hello_response_destination);
+                debug!(
+                    "hello_response_destination: {:?}",
+                    hello_response_destination
+                );
 
                 if let Some(authority) = hello_response_destination.authority {
                     if let Some(Remote::Ip(ip)) = authority.remote {
-
                         debug!("ip: {:?}", ip);
 
                         if ip != mdevice_ip {
-                            info!("Don't react to messages not directed to us. remote ip: {:?}", ip);
+                            info!(
+                                "Don't react to messages not directed to us. remote ip: {:?}",
+                                ip
+                            );
                             return;
                         }
                     }
                 }
-                
-                hello_response_destination.authority = Some(UAuthority{ remote: Some(Remote::Ip(uapp_ip.clone())) });
+
+                hello_response_destination.authority = Some(UAuthority {
+                    remote: Some(Remote::Ip(uapp_ip.clone())),
+                });
 
                 let payload = match message.payload {
                     Some(payload) => payload,
@@ -105,7 +111,9 @@ async fn main() {
                     }
                 };
 
-                let mut hello_response = HelloResponse{ message: "".to_string() };
+                let mut hello_response = HelloResponse {
+                    message: "".to_string(),
+                };
                 if let Data::Value(buf) = data {
                     let hello_request = match HelloRequest::decode(&*buf) {
                         Ok(hello_request) => hello_request,
@@ -133,7 +141,7 @@ async fn main() {
                 let hello_response_attributes = UAttributesBuilder::response(
                     UPriority::UpriorityCs4,
                     hello_response_destination.clone(),
-                    hello_request_reqid
+                    hello_request_reqid,
                 )
                 .build();
 
@@ -154,7 +162,7 @@ async fn main() {
                         .send(
                             hello_response_destination.clone(),
                             hello_response_payload,
-                            hello_response_attributes
+                            hello_response_attributes,
                         )
                         .await
                     {

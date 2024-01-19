@@ -12,7 +12,7 @@
  ********************************************************************************/
 
 use async_trait::async_trait;
-use log::{/*debug, */error/*, info*/};
+use log::error;
 use retransmitter::Retransmitter;
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::{

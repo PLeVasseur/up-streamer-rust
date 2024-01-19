@@ -11,16 +11,19 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use std::collections::HashMap;
 use async_std::task;
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use log::{debug, error, info, trace};
 use prost::Message;
-use uprotocol_sdk::uprotocol::{Data, Remote, UAttributes, UAuthority, UCode, UEntity, UMessage, UMessageType, UPayload, UPayloadFormat, UStatus, Uuid, UUri};
-use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_zenoh_rust::ULinkZenoh;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use uprotocol_rust_transport_sommr::UTransportSommr;
+use uprotocol_sdk::transport::datamodel::UTransport;
+use uprotocol_sdk::uprotocol::{
+    Data, Remote, UAttributes, UAuthority, UCode, UEntity, UMessage, UMessageType, UPayload,
+    UPayloadFormat, UStatus, UUri, Uuid,
+};
+use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::prelude::r#async::AsyncResolve;
 use zenoh::prelude::*;
 use zenoh::queryable::Query;
@@ -56,11 +59,17 @@ async fn main() {
         .set_mode(Some(WhatAmI::Peer))
         .expect("Unable to configure as Router");
 
-    let ulink_zenoh = ULinkZenoh::new_from_config(ulink_zenoh_config.clone()).await.unwrap();
-    let utransport_sommr = UTransportSommr::new_from_config(sommr_zenoh_config.clone()).await.unwrap();
-    let uuri_for_all_remote = UUri{
-        authority: Some(UAuthority{ remote: Some(Remote::Name("*".to_string())) }),
-        entity: Some(UEntity{
+    let ulink_zenoh = ULinkZenoh::new_from_config(ulink_zenoh_config.clone())
+        .await
+        .unwrap();
+    let utransport_sommr = UTransportSommr::new_from_config(sommr_zenoh_config.clone())
+        .await
+        .unwrap();
+    let uuri_for_all_remote = UUri {
+        authority: Some(UAuthority {
+            remote: Some(Remote::Name("*".to_string())),
+        }),
+        entity: Some(UEntity {
             name: "*".to_string(),
             id: None,
             version_major: None,
@@ -72,9 +81,7 @@ async fn main() {
     let ulink_zenoh_arc = Arc::new(ulink_zenoh);
     let zenoh_queries_sommr_callback = zenoh_queries.clone();
 
-
-
-    let sommr_callback = move | result: Result<UMessage, UStatus> | {
+    let sommr_callback = move |result: Result<UMessage, UStatus>| {
         trace!("entered sommr_callback");
 
         let Ok(msg) = result else {
@@ -109,7 +116,6 @@ async fn main() {
         // ASSUMPTION: By registering an "all remote" listener, we get only those messages which have UAuthority
         match UMessageType::try_from(attributes.r#type) {
             Ok(UMessageType::UmessageTypePublish) => {
-
                 let msg_rx = if let Some(authority) = &source.authority {
                     if let Some(Remote::Ip(ip)) = &authority.remote {
                         debug!("ip: {:?}", &ip);
@@ -128,14 +134,7 @@ async fn main() {
 
                 let ulink_zenoh_clone = ulink_zenoh_arc.clone();
                 task::spawn(async move {
-                    match ulink_zenoh_clone
-                        .send(
-                            source,
-                            payload,
-                            attributes
-                        )
-                        .await
-                    {
+                    match ulink_zenoh_clone.send(source, payload, attributes).await {
                         Ok(_) => {
                             info!("Forwarding message succeeded");
                         }
@@ -147,18 +146,24 @@ async fn main() {
                     trace!("sommr_callback: ulink_zenoh_clone.send() within async");
                 });
                 trace!("sommr_callback: after ulink_zenoh_clone.send()");
-
-
             }
             Ok(UMessageType::UmessageTypeResponse) => {
                 trace!("got response back");
 
                 // Look up the Zenoh reply using reqid from the message's attributes
                 if let Some(reqid) = attributes.reqid.as_ref() {
-                    if let Some((key_expr, query)) = zenoh_queries_sommr_callback.lock().unwrap().remove(&String::from(reqid)) {
+                    if let Some((key_expr, query)) = zenoh_queries_sommr_callback
+                        .lock()
+                        .unwrap()
+                        .remove(&String::from(reqid))
+                    {
                         // Use the reply to respond to the original Zenoh query
                         // (You'll need to adjust this according to your application's logic)
-                        trace!("for reqid: {} we had query: {:?}", <&Uuid as Into<String>>::into(reqid), &query);
+                        trace!(
+                            "for reqid: {} we had query: {:?}",
+                            <&Uuid as Into<String>>::into(reqid),
+                            &query
+                        );
 
                         let Some(Data::Value(buf)) = payload.data else {
                             error!("Invalid data");
@@ -179,24 +184,17 @@ async fn main() {
                             KnownEncoding::AppCustom,
                             payload.format.to_string().into(),
                         ));
-                        let reply = Ok(Sample::new(
-                            key_expr,
-                            value,
-                        ));
+                        let reply = Ok(Sample::new(key_expr, value));
 
                         task::spawn(async move {
-                            let Ok(reply_builder) = query
-                                .reply(reply)
-                                .with_attachment(attachment.build())
+                            let Ok(reply_builder) =
+                                query.reply(reply).with_attachment(attachment.build())
                             else {
                                 error!("Error: Unable to add attachment");
                                 return;
                             };
 
-                            if let Err(e) = reply_builder
-                                .res()
-                                .await
-                            {
+                            if let Err(e) = reply_builder.res().await {
                                 error!("Error: Unable to reply with Zenoh - {:?}", e);
                                 return;
                             }
@@ -216,7 +214,6 @@ async fn main() {
                 return;
             }
         }
-
     };
 
     // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
@@ -274,7 +271,7 @@ async fn main() {
 
         // Check the type of UAttributes (Request)
         match UMessageType::try_from(u_attribute.r#type) {
-            Ok(UMessageType::UmessageTypeRequest) => { }
+            Ok(UMessageType::UmessageTypeRequest) => {}
             _ => {
                 debug!("UMessageType is not UmessageTypeRequest");
                 return;
@@ -311,13 +308,19 @@ async fn main() {
 
         // Extract the id from u_attribute and use it as the key for the HashMap
         if let Some(id) = u_attribute.id.as_ref() {
-            zenoh_queries_get_callback.lock().unwrap().insert(id.clone().into(), (key_expr.clone(), query.clone()));
+            zenoh_queries_get_callback
+                .lock()
+                .unwrap()
+                .insert(id.clone().into(), (key_expr.clone(), query.clone()));
         } else {
             error!("u_attribute lacks id");
             return;
         }
 
-        debug!("Received on '{}': '{:?}': destination: {:?}", &key_expr, &value, &destination);
+        debug!(
+            "Received on '{}': '{:?}': destination: {:?}",
+            &key_expr, &value, &destination
+        );
         trace!("UAttributes: {:?}", &u_attribute);
 
         task::spawn(async move {
@@ -328,11 +331,7 @@ async fn main() {
             trace!("destination: {:?}", &destination);
 
             match utransport_sommr_arc
-                .send(
-                    destination.clone(),
-                    u_payload,
-                    u_attribute
-                )
+                .send(destination.clone(), u_payload, u_attribute)
                 .await
             {
                 Ok(_) => {
