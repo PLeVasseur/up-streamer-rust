@@ -378,6 +378,9 @@ async fn main() {
                     error!("Attributes lack reqid");
                 }
             }
+            Ok(UMessageType::UmessageTypeRequest) => {
+                trace!("sommr_callback: Received request");
+            }
             _ => {
                 debug!("UMessageType is not UmessageTypeRequest");
             }
