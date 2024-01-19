@@ -80,10 +80,16 @@ async fn main() {
     };
 
     let ulink_zenoh_arc = Arc::new(ulink_zenoh);
+    let utransport_sommr_arc = Arc::new(utransport_sommr);
     let zenoh_queries_sommr_callback = zenoh_queries.clone();
+
+    let uapp_ip_clone = uapp_ip.clone(); // Clone before the first closure
+    let utransport_sommr_zenoh_callback = utransport_sommr_arc.clone();
 
     let zenoh_callback = move |result: Result<UMessage, UStatus>| {
         trace!("entered zenoh_callback");
+
+        let utransport_sommr_clone = utransport_sommr_zenoh_callback.clone();
 
         let Ok(msg) = result else {
             error!("no msg");
@@ -113,7 +119,108 @@ async fn main() {
 
         trace!("zenoh_callback: got attributes");
 
-        println!("Got Zenoh message intended for remote publish");
+        debug!("attributes: {:?}", &attributes);
+
+        // Check the message type (Publish/Request/Response)
+        // ASSUMPTION: By registering an "all remote" listener, we get only those messages which have UAuthority
+        match UMessageType::try_from(attributes.r#type) {
+            Ok(UMessageType::UmessageTypePublish) => {
+                let block_msg_tx = if let Some(authority) = &source.authority {
+                    if let Some(Remote::Ip(ip)) = &authority.remote {
+                        debug!("ip: {:?}", &ip);
+                        *ip != uapp_ip_clone
+                    } else {
+                        true
+                    }
+                } else {
+                    true
+                };
+
+                debug!("block_msg_tx: {}", &block_msg_tx);
+
+                if block_msg_tx {
+                    info!("Message not for send from us, skipping");
+                    return;
+                }
+                info!("zenoh_callback: Source: {}", &source);
+
+                task::spawn(async move {
+                    match utransport_sommr_clone.send(source, payload, attributes).await {
+                        Ok(_) => {
+                            info!("zenoh_callback: Forwarding message over sommr succeeded");
+                        }
+                        Err(status) => {
+                            error!("zenoh_callback: Forwarding message over sommr failed: {:?}", status)
+                        }
+                    }
+
+                    trace!("zenoh_callback: utransport_sommr_clone.send() within async");
+                });
+                trace!("zenoh_callback: after utransport_clone.send()");
+            }
+            Ok(UMessageType::UmessageTypeResponse) => {
+                // trace!("got response back");
+                //
+                // // Look up the Zenoh reply using reqid from the message's attributes
+                // if let Some(reqid) = attributes.reqid.as_ref() {
+                //     if let Some((key_expr, query)) = zenoh_queries_sommr_callback
+                //         .lock()
+                //         .unwrap()
+                //         .remove(&String::from(reqid))
+                //     {
+                //         // Use the reply to respond to the original Zenoh query
+                //         // (You'll need to adjust this according to your application's logic)
+                //         trace!(
+                //             "for reqid: {} we had query: {:?}",
+                //             <&Uuid as Into<String>>::into(reqid),
+                //             &query
+                //         );
+                //
+                //         let Some(Data::Value(buf)) = payload.data else {
+                //             error!("Invalid data");
+                //             return;
+                //         };
+                //
+                //         let mut attr = vec![];
+                //         let Ok(()) = attributes.encode(&mut attr) else {
+                //             error!("Unable to encode UAttributes");
+                //             return;
+                //         };
+                //
+                //         // Add attachment and payload
+                //         let mut attachment = AttachmentBuilder::new();
+                //         attachment.insert("uattributes", attr.as_slice());
+                //         // Send back query
+                //         let value = Value::new(buf.into()).encoding(Encoding::WithSuffix(
+                //             KnownEncoding::AppCustom,
+                //             payload.format.to_string().into(),
+                //         ));
+                //         let reply = Ok(Sample::new(key_expr, value));
+                //
+                //         task::spawn(async move {
+                //             let Ok(reply_builder) =
+                //                 query.reply(reply).with_attachment(attachment.build())
+                //                 else {
+                //                     error!("Error: Unable to add attachment");
+                //                     return;
+                //                 };
+                //
+                //             if let Err(e) = reply_builder.res().await {
+                //                 error!("Error: Unable to reply with Zenoh - {:?}", e);
+                //                 return;
+                //             }
+                //
+                //             trace!("Replied via Zenoh!");
+                //         });
+                //     }
+                // } else {
+                //     error!("Attributes lack reqid");
+                // }
+            }
+            _ => {
+                debug!("UMessageType is not UmessageTypeRequest");
+            }
+        }
     };
 
     info!("Register the listener for publishes to remote...");
@@ -166,23 +273,28 @@ async fn main() {
 
         trace!("sommr_callback: got attributes");
 
+        debug!("sommr attributes: {:?}", &attributes);
+
         // Check the message type (Publish/Request/Response)
         // ASSUMPTION: By registering an "all remote" listener, we get only those messages which have UAuthority
         match UMessageType::try_from(attributes.r#type) {
             Ok(UMessageType::UmessageTypePublish) => {
-                let msg_rx = if let Some(authority) = &source.authority {
+                let block_msg_rx = if let Some(authority) = &source.authority {
                     if let Some(Remote::Ip(ip)) = &authority.remote {
                         debug!("ip: {:?}", &ip);
-                        *ip != uapp_ip
+                        *ip == uapp_ip.clone()
                     } else {
-                        false
+                        true
                     }
                 } else {
-                    false
+                    true
                 };
 
-                if !msg_rx {
+                debug!("block_msg_rx: {}", &block_msg_rx);
+
+                if block_msg_rx {
                     info!("Message not intended for us, skipping");
+                    return;
                 }
                 info!("sommr_callback: Source: {}", &source);
 
@@ -268,7 +380,7 @@ async fn main() {
 
     // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
     let _registered_all_remote_sommr_key = {
-        match utransport_sommr
+        match utransport_sommr_arc
             .register_listener(uuri_for_all_remote, Box::new(sommr_callback))
             .await
         {
@@ -286,7 +398,6 @@ async fn main() {
 
     let session_arc = Arc::new(session);
     let session_arc_clone_mainthread = session_arc.clone();
-    let utransport_sommr_arc = Arc::new(utransport_sommr);
     let zenoh_queries_get_callback = zenoh_queries.clone();
 
     let get_callback = move |query: Query| {

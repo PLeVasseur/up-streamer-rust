@@ -17,6 +17,7 @@ extern crate uprotocol_sdk;
 extern crate uprotocol_zenoh_rust;
 
 use async_std::task::{self};
+use log::{error, info};
 use prost::Message;
 use std::time::Duration;
 use uprotocol_sdk::uprotocol::{u_payload, UAttributes};
@@ -46,7 +47,7 @@ async fn main() {
     // Your example code goes here
     println!("This is an example (stand-in) sender of Zenoh messages for uStreamer.");
 
-    let mdevice_ip = vec![192, 168, 3, 1];
+    let uapp_ip = vec![192, 168, 3, 100];
 
     let mut config = Config::default();
     config
@@ -55,7 +56,7 @@ async fn main() {
     let ulink = ULinkZenoh::new_from_config(config).await.unwrap();
     let timer_hour_uuri = UUri {
         authority: Some(UAuthority {
-            remote: Some(Remote::Ip(mdevice_ip.clone())),
+            remote: Some(Remote::Ip(uapp_ip.clone())),
         }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),
@@ -72,7 +73,7 @@ async fn main() {
     };
     let timer_minute_uuri = UUri {
         authority: Some(UAuthority {
-            remote: Some(Remote::Ip(mdevice_ip.clone())),
+            remote: Some(Remote::Ip(uapp_ip.clone())),
         }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),
@@ -89,7 +90,7 @@ async fn main() {
     };
     let timer_second_uuri = UUri {
         authority: Some(UAuthority {
-            remote: Some(Remote::Ip(mdevice_ip.clone())),
+            remote: Some(Remote::Ip(uapp_ip.clone())),
         }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),
@@ -106,7 +107,7 @@ async fn main() {
     };
     let timer_nanosecond_uuri = UUri {
         authority: Some(UAuthority {
-            remote: Some(Remote::Ip(mdevice_ip.clone())),
+            remote: Some(Remote::Ip(uapp_ip.clone())),
         }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),
@@ -209,7 +210,7 @@ async fn main() {
     loop {
         task::sleep(Duration::from_secs(1)).await;
 
-        println!("Attempting send of timers...");
+        info!("Attempting send of timers...");
 
         // ---- hour_timer ----
         let mut hour_timer_buf = Vec::new();
@@ -236,7 +237,7 @@ async fn main() {
                 print_time(&hour_timer);
             }
             Err(status) => {
-                println!("Seconding timer_hour failed: {:?}", status)
+                error!("Sending timer_hour failed: {:?}", status)
             }
         }
 
@@ -269,7 +270,7 @@ async fn main() {
                 print_time(&minute_timer);
             }
             Err(status) => {
-                println!("Seconding timer_minute failed: {:?}", status)
+                error!("Sending timer_minute failed: {:?}", status)
             }
         }
 
@@ -302,7 +303,7 @@ async fn main() {
                 print_time(&second_timer);
             }
             Err(status) => {
-                println!("Seconding timer_second failed: {:?}", status)
+                error!("Sending timer_second failed: {:?}", status)
             }
         }
 
@@ -335,7 +336,7 @@ async fn main() {
                 print_time(&nanosecond_timer);
             }
             Err(status) => {
-                println!("Seconding timer_nanosecond failed: {:?}", status)
+                error!("Sending timer_nanosecond failed: {:?}", status)
             }
         }
 
