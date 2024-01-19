@@ -22,11 +22,12 @@ use prost::Message;
 use std::time::Duration;
 use log::{debug, error, info, trace};
 use uprotocol_rust_transport_sommr::UTransportSommr;
-use uprotocol_sdk::uprotocol::{Data, Remote, u_payload, UAttributes, UAuthority, UMessage, UStatus};
+use uprotocol_sdk::uprotocol::{Data, Remote, u_payload, UAttributes, UAuthority, UMessage, UPriority, UStatus};
 use uprotocol_sdk::{
     transport::datamodel::UTransport,
     uprotocol::{UEntity, UMessageType, UPayload, UResource, UUri},
 };
+use uprotocol_sdk::transport::builder::UAttributesBuilder;
 use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
 use zenoh::config::Config;
 use zenoh::prelude::WhatAmI;
@@ -48,17 +49,43 @@ async fn main() {
         .expect("Setting as Peer failed");
     let utransport_sommr = UTransportSommr::new_from_config(config).await.unwrap();
 
-    let uuri = UUri {
+    let response_resource = UResourceBuilder::for_rpc_response();
+    let hello_world_response_uuri = UUri {
         authority: Some(UAuthority {
             remote: Some(Remote::Ip(mdevice_ip.clone())),
         }),
-        entity: Some(UEntity {
-            name: "mapp".to_string(),
+        entity: Option::from(UEntity {
+            name: "ask_for_hello_service".to_string(),
+            id: Option::Some(111),
             version_major: Some(1),
-            ..Default::default()
+            version_minor: None,
         }),
-        resource: Some(UResourceBuilder::for_rpc_response()),
+        resource: Option::from(response_resource),
     };
+
+    let request_resource =
+        UResourceBuilder::for_rpc_request(Some("get_hello".to_string()), Some(1));
+    let hello_world_request_uuri = UUri {
+        authority: Some(UAuthority {
+            remote: Some(Remote::Ip(uapp_ip.clone())),
+        }),
+        entity: Option::from(UEntity {
+            name: "hello_world_service".to_string(),
+            id: Option::Some(111),
+            version_major: Some(1),
+            version_minor: None,
+        }),
+        resource: Option::from(request_resource),
+    };
+
+    let mut attributes = UAttributesBuilder::request(
+        UPriority::UpriorityCs4,
+        hello_world_request_uuri.clone(),
+        2000,
+    )
+    .build();
+
+    attributes.sink = Some(hello_world_request_uuri.clone());
 
     let utransport_sommr_arc = Arc::new(utransport_sommr);
 
@@ -137,12 +164,44 @@ async fn main() {
 
     info!("Register the listener...");
     utransport_sommr_arc
-        .register_listener(uuri, Box::new(callback))
+        .register_listener(hello_world_response_uuri.clone(), Box::new(callback))
         .await
         .unwrap();
+
+    let mut hello_attempt = 0;
 
     loop {
         task::sleep(Duration::from_secs(1)).await;
 
+        let hello_request = HelloRequest {
+            name: format!("Please tell me hello {}", hello_attempt).to_string(),
+        };
+        let mut hello_request_buf = Vec::new();
+        hello_request
+            .encode(&mut hello_request_buf)
+            .expect("Failed to encode");
+        let hello_request_payload = UPayload {
+            length: Some(hello_request_buf.len() as i32),
+            format: 0,
+            data: Some(Data::Value(hello_request_buf)),
+        };
+
+        match utransport_sommr_arc
+            .send(
+                hello_world_response_uuri.clone(),
+                hello_request_payload.clone(),
+                attributes.clone(),
+            )
+            .await
+        {
+            Ok(_) => {
+                println!("Sending HelloRequest succeeded");
+            }
+            Err(status) => {
+                println!("Sending HelloRequest failed: {:?}", status)
+            }
+        }
+
+        hello_attempt += 1;
     }
 }
