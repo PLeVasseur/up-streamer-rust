@@ -24,6 +24,7 @@ use uprotocol_rust_transport_sommr::UTransportSommr;
 use zenoh::prelude::r#async::AsyncResolve;
 use zenoh::prelude::*;
 use zenoh::queryable::Query;
+use zenoh::sample::AttachmentBuilder;
 
 #[async_std::main]
 async fn main() {
@@ -34,7 +35,7 @@ async fn main() {
     let uapp_ip = vec![192, 168, 3, 100];
     let mdevice_ip = vec![192, 168, 3, 1];
 
-    let zenoh_queries = Arc::new(Mutex::new(HashMap::<String, Query>::new()));
+    let zenoh_queries = Arc::new(Mutex::new(HashMap::<String, (KeyExpr, Query)>::new()));
 
     let mut raw_zenoh_config = zenoh::config::Config::default();
     raw_zenoh_config
@@ -113,10 +114,58 @@ async fn main() {
 
                     let id_str: String = reqid.clone().into();
 
-                    if let Some(query) = zenoh_queries_sommr_callback.lock().unwrap().remove(&String::from(reqid)) {
+                    if let Some((key_expr, query)) = zenoh_queries_sommr_callback.lock().unwrap().remove(&String::from(reqid)) {
                         // Use the reply to respond to the original Zenoh query
                         // (You'll need to adjust this according to your application's logic)
                         println!("for reqid: {} we had query: {:?}", <&Uuid as Into<String>>::into(reqid), &query);
+
+                        let Some(Data::Value(buf)) = payload.data else {
+                            error!("Invalid data");
+                            return;
+                        };
+
+                        let mut attr = vec![];
+                        let Ok(()) = attributes.encode(&mut attr) else {
+                            error!("Unable to encode UAttributes");
+                            return;
+                        };
+
+                        // Add attachment and payload
+                        let mut attachment = AttachmentBuilder::new();
+                        attachment.insert("uattributes", attr.as_slice());
+                        // Send back query
+                        let value = Value::new(buf.into()).encoding(Encoding::WithSuffix(
+                            KnownEncoding::AppCustom,
+                            payload.format.to_string().into(),
+                        ));
+                        let reply = Ok(Sample::new(
+                            key_expr,
+                            value,
+                        ));
+
+                        task::spawn(async move {
+                            let Ok(reply_builder) = query
+                                .reply(reply)
+                                .with_attachment(attachment.build())
+                            else {
+                                error!("Error: Unable to add attachment");
+                                return;
+                            };
+
+                            // query
+                            //     .reply(reply)
+                            //     .with_attachment(attachment.build());
+
+                            if let Err(e) = reply_builder
+                                .res()
+                                .await
+                            {
+                                error!("Error: Unable to reply with Zenoh - {:?}", e);
+                                return;
+                            }
+
+                            println!("Replied via Zenoh!");
+                        });
                     }
                 } else {
                     error!("Attributes lack reqid");
@@ -250,7 +299,7 @@ async fn main() {
 
         // Extract the id from u_attribute and use it as the key for the HashMap
         if let Some(id) = u_attribute.id.as_ref() {
-            zenoh_queries_get_callback.lock().unwrap().insert(id.clone().into(), query.clone());
+            zenoh_queries_get_callback.lock().unwrap().insert(id.clone().into(), (key_expr.clone(), query.clone()));
         } else {
             error!("u_attribute lacks id");
             return;
