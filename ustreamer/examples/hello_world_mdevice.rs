@@ -13,7 +13,7 @@
 
 use async_std::task::{self, block_on};
 use example_proto::proto::example::hello_world::v1::{HelloRequest, HelloResponse};
-use log::error;
+use log::{error, info};
 use prost::Message;
 use std::sync::{Arc, Mutex};
 use std::time;
@@ -24,6 +24,8 @@ use uprotocol_sdk::{
     uri::builder::resourcebuilder::UResourceBuilder,
 };
 use uprotocol_rust_transport_sommr::UTransportSommr;
+use uprotocol_sdk::transport::builder::UAttributesBuilder;
+use uprotocol_sdk::uprotocol::{Remote, u_payload, UAuthority, UPriority, Uuid};
 use zenoh::config::{Config, WhatAmI};
 
 #[async_std::main]
@@ -36,12 +38,16 @@ async fn main() {
     config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Client failed");
-    let mdevice_rpc_server = Arc::new(Mutex::new(
-        UTransportSommr::new_from_config(config).await.unwrap(),
-    ));
+    let mdevice_rpc_server = Arc::new(
+        UTransportSommr::new_from_config(config).await.unwrap()
+    );
+
+    let uapp_ip = vec![192, 168, 3, 100];
+    let mdevice_ip = vec![192, 168, 3, 1];
 
     // create uuri
     let uuri = UUri {
+        authority: Some(UAuthority{remote: Some(Remote::Ip(mdevice_ip.clone()))}),
         entity: Some(UEntity {
             name: "hello_world_service".to_string(),
             version_major: Some(1),
@@ -54,9 +60,35 @@ async fn main() {
         ..Default::default()
     };
 
+    let mdevice_rpc_server_for_callback = mdevice_rpc_server.clone();
+
     let callback = move |result: Result<UMessage, UStatus>| {
+        println!("callback: entered");
+
         match result {
             Ok(message) => {
+
+                let Some(mut hello_response_destination) = message.source else {
+                    error!("Unable to get destination UUri");
+                    return;
+                };
+
+                println!("hello_response_desintation: {:?}", hello_response_destination);
+
+                if let Some(authority) = hello_response_destination.authority {
+                    if let Some(Remote::Ip(ip)) = authority.remote {
+
+                        print!("ip: {:?}", ip);
+
+                        if ip != mdevice_ip {
+                            info!("Don't react to messages not directed to us. remote ip: {:?}", ip);
+                            return;
+                        }
+                    }
+                }
+                
+                hello_response_destination.authority = Some(UAuthority{ remote: Some(Remote::Ip(uapp_ip.clone())) });
+
                 let payload = match message.payload {
                     Some(payload) => payload,
                     None => {
@@ -73,6 +105,7 @@ async fn main() {
                     }
                 };
 
+                let mut hello_response = HelloResponse{ message: "".to_string() };
                 if let Data::Value(buf) = data {
                     let hello_request = match HelloRequest::decode(&*buf) {
                         Ok(hello_request) => hello_request,
@@ -83,7 +116,56 @@ async fn main() {
                     };
 
                     println!("Received HelloRequest: {}", hello_request.name);
+
+                    hello_response.message = format!("Hello there, {}!", hello_request.name);
                 }
+
+                let Some(hello_request_attributes) = message.attributes else {
+                    error!("Unable to get attributes");
+                    return;
+                };
+
+                let Some(hello_request_reqid) = hello_request_attributes.id else {
+                    error!("Unable to get id to use as reqid");
+                    return;
+                };
+
+                let hello_response_attributes = UAttributesBuilder::response(
+                    UPriority::UpriorityCs4,
+                    hello_response_destination.clone(),
+                    hello_request_reqid
+                )
+                .build();
+
+                let mut hello_response_buf = Vec::new();
+                hello_response
+                    .encode(&mut hello_response_buf)
+                    .expect("Failed to encode");
+
+                let hello_response_payload = UPayload {
+                    length: Some(hello_response_buf.len() as i32),
+                    format: 0,
+                    data: Some(u_payload::Data::Value(hello_response_buf)),
+                };
+
+                let mdevice_rpc_server_within_async_spawn = mdevice_rpc_server_for_callback.clone();
+                task::spawn(async move {
+                    match mdevice_rpc_server_within_async_spawn
+                        .send(
+                            hello_response_destination.clone(),
+                            hello_response_payload,
+                            hello_response_attributes
+                        )
+                        .await
+                    {
+                        Ok(_) => {
+                            println!("Sending HelloResponse succeeded");
+                        }
+                        Err(status) => {
+                            println!("Sending HelloResponse failed: {:?}", status)
+                        }
+                    }
+                });
             }
             Err(status) => {
                 error!(
@@ -97,8 +179,6 @@ async fn main() {
 
     println!("Register the listener...");
     mdevice_rpc_server
-        .lock()
-        .unwrap()
         .register_listener(uuri, Box::new(callback))
         .await
         .unwrap();

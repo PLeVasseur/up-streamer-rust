@@ -22,7 +22,7 @@ use prost::Message;
 use std::time::Duration;
 use uprotocol_sdk::rpc::RpcClient;
 use uprotocol_sdk::transport::builder::UAttributesBuilder;
-use uprotocol_sdk::uprotocol::{u_payload, Data, UPriority, Uuid};
+use uprotocol_sdk::uprotocol::{u_payload, Data, UPriority, Uuid, UAuthority, Remote};
 use uprotocol_sdk::uprotocol::{UEntity, UPayload, UUri};
 use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
 use uprotocol_zenoh_rust::ULinkZenoh;
@@ -42,7 +42,7 @@ async fn main() {
     let request_resource =
         UResourceBuilder::for_rpc_request(Some("get_hello".to_string()), Some(1));
     let hello_world_request_uuri = UUri {
-        authority: None,
+        authority: Some(UAuthority{ remote: Some(Remote::Ip(vec![192, 168, 3, 1])) }),
         entity: Option::from(UEntity {
             name: "hello_world_service".to_string(),
             id: Option::Some(111),
@@ -55,12 +55,8 @@ async fn main() {
     let attributes = UAttributesBuilder::request(
         UPriority::UpriorityCs4,
         hello_world_request_uuri.clone(),
-        100,
+        2000,
     )
-    .with_reqid(Uuid {
-        msb: 0x0000000000018000u64,
-        lsb: 0x8000000000000000u64,
-    })
     .build();
 
     println!("hello_world_request_uuri: {:?}", hello_world_request_uuri);

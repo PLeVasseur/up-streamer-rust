@@ -11,8 +11,9 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+use std::collections::HashMap;
 use async_std::task;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use log::{debug, error, info, trace};
 use prost::Message;
@@ -29,6 +30,11 @@ async fn main() {
     env_logger::try_init().unwrap_or_default();
 
     println!("Starting uStreamer!");
+
+    let uapp_ip = vec![192, 168, 3, 100];
+    let mdevice_ip = vec![192, 168, 3, 1];
+
+    let zenoh_queries = Arc::new(Mutex::new(HashMap::<String, Query>::new()));
 
     let mut raw_zenoh_config = zenoh::config::Config::default();
     raw_zenoh_config
@@ -98,6 +104,10 @@ async fn main() {
         // Check the type of UAttributes (Publish)
         match UMessageType::try_from(attributes.r#type) {
             Ok(UMessageType::UmessageTypePublish) => { }
+            Ok(UMessageType::UmessageTypeResponse) => {
+                println!("got response back");
+                return;
+            }
             _ => {
                 debug!("UMessageType is not UmessageTypeRequest");
                 return;
@@ -152,6 +162,7 @@ async fn main() {
     let session_arc = Arc::new(session);
     let session_arc_clone_mainthread = session_arc.clone();
     let utransport_sommr_arc = Arc::new(utransport_sommr);
+    let zenoh_queries_get_callback = zenoh_queries.clone();
 
     let get_callback = move |query: Query| {
         let utransport_sommr_arc = utransport_sommr_arc.clone();
@@ -220,10 +231,24 @@ async fn main() {
             return;
         };
 
+        // Extract the id from u_attribute and use it as the key for the HashMap
+        if let Some(id) = u_attribute.id.as_ref() {
+            zenoh_queries_get_callback.lock().unwrap().insert(id.clone().into(), query.clone());
+        } else {
+            error!("u_attribute lacks id");
+            return;
+        }
+
         println!("Received on '{}': '{:?}': destination: {:?}", &key_expr, &value, &destination);
         println!("UAttributes: {:?}", &u_attribute);
 
         task::spawn(async move {
+            // TODO: I think we want to register a listener for what's coming back over the sommR interface here
+            //  and then hang out / wait till we get the topic we're expecting
+            //  and then at that point return the result over Zenoh
+
+            println!("destination: {:?}", &destination);
+
             match utransport_sommr_arc
                 .send(
                     destination.clone(),
@@ -236,7 +261,7 @@ async fn main() {
                     println!("Forwarding RPC Request over sommR succeeded");
                 }
                 Err(status) => {
-                    error!("Seconding timer_hour failed: {:?}", status)
+                    error!("Forwarding RPC Request over sommR failed: {:?}", status)
                 }
             }
         });
