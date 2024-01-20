@@ -2988,6 +2988,10 @@ dependencies = [
 [[package]]
 name = "ustreamer"
 version = "0.1.5-SNAPSHOT"
+
+[[package]]
+name = "ustreamer_basic"
+version = "0.1.5-SNAPSHOT"
 dependencies = [
  "async-std",
  "chrono",

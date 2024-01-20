@@ -11,7 +11,7 @@
 
 [package]
 rust-version = { workspace = true }
-name = "ustreamer"
+name = "ustreamer_basic"
 version = { workspace = true }
 authors = { workspace = true }
 edition = { workspace = true }
