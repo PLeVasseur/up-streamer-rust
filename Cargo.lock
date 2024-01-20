@@ -2902,6 +2902,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "uprotocol-rust-transport-mqtt"
+version = "0.1.0"
+source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/stand-in_for_uprotocol-rust-transport-mqtt#4d9c9d0ca34b3b86faae64fb084b8170934edb9f"
+dependencies = [
+ "anyhow",
+ "async-std",
+ "async-trait",
+ "chrono",
+ "cloudevents-sdk",
+ "prost",
+ "prost-types",
+ "uprotocol-sdk",
+ "zenoh",
+]
+
+[[package]]
 name = "uprotocol-rust-transport-sommr"
 version = "0.1.0"
 source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/stand-in_for_uprotocol-rust-transport-sommr#88a53a9ceb3cfe8b8c9a54d6f46e863c956ae348"
@@ -2988,6 +3004,25 @@ dependencies = [
 [[package]]
 name = "ustreamer"
 version = "0.1.5-SNAPSHOT"
+dependencies = [
+ "async-std",
+ "chrono",
+ "env_logger",
+ "example-proto",
+ "futures",
+ "log",
+ "prost",
+ "transport-router-zenoh-plugin",
+ "uprotocol-rust-transport-mqtt",
+ "uprotocol-rust-transport-sommr",
+ "uprotocol-sdk",
+ "uprotocol_zenoh_rust",
+ "zenoh",
+ "zenoh-core",
+ "zenoh-plugin-trait",
+ "zenoh-result",
+ "zenoh-util",
+]
 
 [[package]]
 name = "ustreamer_basic"
