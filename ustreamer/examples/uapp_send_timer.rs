@@ -55,6 +55,15 @@ async fn main() {
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Peer failed");
     let ulink = ULinkZenoh::new_from_config(config).await.unwrap();
+
+    let sink_uuri = UUri {
+        authority: Some(UAuthority {
+            remote: Some(Remote::Ip(mdevice_ip.clone())),
+        }),
+        entity: None,
+        resource: None,
+    };
+
     let timer_hour_uuri = UUri {
         authority: Some(UAuthority {
             remote: Some(Remote::Ip(uapp_ip.clone())),
@@ -163,7 +172,7 @@ async fn main() {
     let timer_hour_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
-        sink: Some(timer_hour_uuri.clone()),
+        sink: Some(sink_uuri.clone()),
         priority: 0,
         ttl: None,
         permission_level: None,
@@ -175,7 +184,7 @@ async fn main() {
     let timer_minute_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
-        sink: Some(timer_minute_uuri.clone()),
+        sink: Some(sink_uuri.clone()),
         priority: 0,
         ttl: None,
         permission_level: None,
@@ -187,7 +196,7 @@ async fn main() {
     let timer_second_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
-        sink: Some(timer_second_uuri.clone()),
+        sink: Some(sink_uuri.clone()),
         priority: 0,
         ttl: None,
         permission_level: None,
@@ -199,7 +208,7 @@ async fn main() {
     let timer_nanosecond_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
-        sink: Some(timer_nanosecond_uuri.clone()),
+        sink: Some(sink_uuri.clone()),
         priority: 0,
         ttl: None,
         permission_level: None,
