@@ -7,7 +7,7 @@
 #### Run the uStreamer
 
 ```bash
-cargo run --bin ustreamer 
+cargo run --bin ustreamer_basic 
 ```
 
 #### In another terminal run the example uApp subscriber
@@ -27,7 +27,7 @@ cargo run --example mdevice_send_timer
 #### Run the uStreamer
 
 ```bash
-cargo run --bin ustreamer 
+cargo run --bin ustreamer_basic 
 ```
 
 #### In another terminal run the example mDevice subscriber
@@ -49,7 +49,7 @@ cargo run --example uapp_send_timer
 #### Run the uStreamer
 
 ```bash
-cargo run --bin ustreamer 
+cargo run --bin ustreamer_basic 
 ```
 
 #### In another terminal run the example mDevice RPC server
@@ -68,7 +68,7 @@ cargo run --example uapp_hello_world_rpc_client
 #### Run the uStreamer
 
 ```bash
-cargo run --bin ustreamer 
+cargo run --bin ustreamer_basic 
 ```
 
 #### In another terminal run the example uApp RPC server
