@@ -23,9 +23,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::transport::builder::UAttributesBuilder;
-use uprotocol_sdk::uprotocol::{
-    Data, Remote, UAuthority, UMessage, UPriority, UStatus, Uuid,
-};
+use uprotocol_sdk::uprotocol::{Data, Remote, UAuthority, UMessage, UPriority, UStatus, Uuid};
 use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
 use uprotocol_sdk::{
     transport::datamodel::UTransport,

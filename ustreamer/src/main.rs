@@ -230,10 +230,15 @@ async fn main() {
         // ASSUMPTION: By registering an "all remote" listener, we get only those messages which have UAuthority
         match UMessageType::try_from(attributes.r#type) {
             Ok(UMessageType::UmessageTypePublish) => {
-                let block_msg_rx = if let Some(authority) = &source.authority {
+                let Some(destination) = attributes.clone().sink else {
+                    info!("No destination UUri, so no need to route to another device");
+                    return;
+                };
+
+                let block_msg_rx = if let Some(authority) = &destination.authority {
                     if let Some(Remote::Ip(ip)) = &authority.remote {
                         debug!("ip: {:?}", &ip);
-                        *ip == uapp_ip_sommr_callback_clone
+                        *ip != uapp_ip_sommr_callback_clone
                     } else {
                         true
                     }

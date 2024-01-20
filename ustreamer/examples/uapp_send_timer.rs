@@ -48,6 +48,7 @@ async fn main() {
     println!("This is an example (stand-in) sender of Zenoh messages for uStreamer.");
 
     let uapp_ip = vec![192, 168, 3, 100];
+    let mdevice_ip = vec![192, 168, 3, 1];
 
     let mut config = Config::default();
     config

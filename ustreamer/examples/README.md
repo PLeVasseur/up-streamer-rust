@@ -1,49 +1,84 @@
 # uStreamer example apps
 
-## Publish / subscribe example
+## Publish Examples
 
-### Run the uStreamer
+### Publish mDevice -> uApp example
+
+#### Run the uStreamer
 
 ```bash
 cargo run --bin ustreamer 
 ```
 
-### Run the example client app
-
-An example of a client app that interacts with `uStreamer`
+#### In another terminal run the example uApp subscriber
 
 ```bash
 cargo run --example uapp_receive_timer
 ```
 
-### In another terminal run the publish app
-
-This is using a stand-in for the sommR client library to let us exercise the client app and `uSteamer`
+#### In another terminal run the example mDevice publisher
 
 ```bash
 cargo run --example mdevice_send_timer
 ```
 
-## RPC server / RPC client example
+### Publish uApp -> mDevice example
 
-### Run the uStreamer
+#### Run the uStreamer
 
 ```bash
 cargo run --bin ustreamer 
 ```
 
-### Run the example RPC server app
+#### In another terminal run the example mDevice subscriber
 
-An example of a sommR RPC server app that interacts through `uStreamer`
+```bash
+cargo run --example mdevice_receive_timer
+```
+
+#### In another terminal run the example uApp publisher
+
+```bash
+cargo run --example uapp_send_timer
+```
+
+## RPC Examples
+
+### mDevice RPC Server & uApp RPC Client
+
+#### Run the uStreamer
+
+```bash
+cargo run --bin ustreamer 
+```
+
+#### In another terminal run the example mDevice RPC server
 
 ```bash
 cargo run --example mdevice_hello_world_server
 ```
 
-### In another terminal run the RPC client app
-
-An example of an RPC client app that interacts through `uStreamer`
+#### In another terminal run the example uApp RPC client app
 
 ```bash
 cargo run --example uapp_hello_world_rpc_client
+```
+### uApp RPC Server & mDevice RPC Client
+
+#### Run the uStreamer
+
+```bash
+cargo run --bin ustreamer 
+```
+
+#### In another terminal run the example uApp RPC server
+
+```bash
+cargo run --example uapp_hello_world_server
+```
+
+#### In another terminal run the example mDevice RPC client app
+
+```bash
+cargo run --example mdevice_hello_world_rpc_client
 ```

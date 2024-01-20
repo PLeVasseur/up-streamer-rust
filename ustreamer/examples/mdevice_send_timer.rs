@@ -20,7 +20,7 @@ use async_std::task::{self};
 use prost::Message;
 use std::time::Duration;
 use uprotocol_rust_transport_sommr::UTransportSommr;
-use uprotocol_sdk::uprotocol::{u_payload, UAttributes};
+use uprotocol_sdk::uprotocol::{u_payload, Remote, UAttributes, UAuthority};
 use uprotocol_sdk::{
     transport::datamodel::UTransport,
     uprotocol::{UEntity, UMessageType, UPayload, UResource, UUri},
@@ -46,11 +46,23 @@ async fn main() {
     // Your example code goes here
     println!("This is an example (stand-in) sender of sommR messages for uStreamer.");
 
+    let uapp_ip = vec![192, 168, 3, 100];
+    let mdevice_ip = vec![192, 168, 3, 1];
+
     let mut config = Config::default();
     config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Peer failed");
     let ulink = UTransportSommr::new_from_config(config).await.unwrap();
+
+    let sink_uuri = UUri {
+        authority: Some(UAuthority {
+            remote: Some(Remote::Ip(uapp_ip.clone())),
+        }),
+        entity: None,
+        resource: None,
+    };
+
     let timer_hour_uuri = UUri {
         authority: None,
         entity: Option::from(UEntity {
@@ -151,7 +163,7 @@ async fn main() {
     let timer_hour_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
-        sink: Some(timer_hour_uuri.clone()),
+        sink: Some(sink_uuri.clone()),
         priority: 0,
         ttl: None,
         permission_level: None,
@@ -163,7 +175,7 @@ async fn main() {
     let timer_minute_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
-        sink: Some(timer_minute_uuri.clone()),
+        sink: Some(sink_uuri.clone()),
         priority: 0,
         ttl: None,
         permission_level: None,
@@ -175,7 +187,7 @@ async fn main() {
     let timer_second_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
-        sink: Some(timer_second_uuri.clone()),
+        sink: Some(sink_uuri.clone()),
         priority: 0,
         ttl: None,
         permission_level: None,
@@ -187,7 +199,7 @@ async fn main() {
     let timer_nanosecond_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
-        sink: Some(timer_nanosecond_uuri.clone()),
+        sink: Some(sink_uuri.clone()),
         priority: 0,
         ttl: None,
         permission_level: None,
