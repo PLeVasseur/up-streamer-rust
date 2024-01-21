@@ -16,7 +16,8 @@
 use async_std::channel::{self, Receiver, Sender};
 use async_std::task;
 use futures::select;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
+use prost::DecodeError;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::{
@@ -24,7 +25,10 @@ use std::sync::{
     Arc, Mutex,
 };
 use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::{Remote, UAuthority, UEntity, UMessage, UStatus, UUri};
+use uprotocol_sdk::uprotocol::{
+    Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,
+};
+use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction, ZenohPlugin};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
@@ -43,6 +47,7 @@ pub struct IngressRouterStartArgs {
     pub ingress_queue_sender: Sender<UMessage>,
     pub ingress_queue_receiver: Receiver<UMessage>,
     pub egress_queue_sender: Sender<UMessage>,
+    pub up_client_zenoh: Arc<ULinkZenoh>,
     pub transports: Vec<Arc<dyn UTransport>>,
 }
 
@@ -57,12 +62,14 @@ impl Plugin for IngressRouter {
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
         let udevice_authority = start_args.udevice_authority.clone();
         let transports_clone = start_args.transports.clone();
+        let up_client_zenoh = start_args.up_client_zenoh.clone();
         let ingress_queue_sender_clone = start_args.ingress_queue_sender.clone();
         let ingress_queue_receiver_clone = start_args.ingress_queue_receiver.clone();
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
         async_std::task::spawn(run(
             udevice_authority,
             transports_clone,
+            up_client_zenoh,
             ingress_queue_sender_clone,
             ingress_queue_receiver_clone,
             egress_queue_sender_clone,
@@ -107,23 +114,85 @@ impl RunningPluginTrait for RunningPlugin {
     }
 }
 
-async fn ingress_queue_consumer(mut receiver: Receiver<UMessage>) {
+async fn ingress_queue_consumer(
+    mut receiver: Receiver<UMessage>,
+    up_client_zenoh: Arc<ULinkZenoh>,
+) {
     while let Ok(msg) = receiver.recv().await {
         trace!("Ingress Queue: Received msg: {:?}", msg);
 
-        // TODO: Add dispatching logic to point internally
+        let source = match &msg.source {
+            None => {
+                error!("CE pulled from Ingress Queue has no source UUri");
+                return;
+            }
+            Some(source) => source,
+        };
 
-        // TODO: if Publish, then...
-        //  => Need to consider how to get ahold of our up_client_zenoh as a UTransport
-        //     so that we can call send() on it
+        let payload = match &msg.payload {
+            None => {
+                error!("CE pulled from Ingress Queue has no source UUri");
+                return;
+            }
+            Some(payload) => payload,
+        };
 
-        // TODO: if Request, then...
-        //  => Need to consider how to get ahold of our up_client_zenoh as an RpcClient
-        //     so that we can call invoke_method() on it
+        let attributes = match &msg.attributes {
+            None => {
+                error!("CE pulled from Ingress Queue has no UAttributes");
+                return;
+            }
+            Some(attributes) => attributes,
+        };
 
-        // TODO: if Response, then...
-        //  => Need to consider how to get ahold of our raw Zenoh session
-        //     so that we can look up the Zenoh Query to reply back on
+        match UMessageType::try_from(attributes.r#type) {
+            Ok(UMessageType::UmessageTypePublish) => {
+                trace!("UMessageTypePublish being routed internally");
+                // TODO: Add logic here on how to call publish now on the CE we just received
+
+                // TODO: if Publish, then...
+                //  => Need to consider how to get ahold of our up_client_zenoh as a UTransport
+                //     so that we can call send() on it
+                //  ~ Another wrinkle: The way subscribers work in Zenoh, it seems like any subscribers on this uDevice
+                //    would already have received this CE
+
+                match up_client_zenoh
+                    .send(source.clone(), payload.clone(), attributes.clone())
+                    .await
+                {
+                    Ok(_) => {
+                        trace!("Forwarding message internally over Zenoh succeeded");
+                    }
+                    Err(status) => {
+                        error!("Sending timer_hour failed: {:?}", status)
+                    }
+                }
+
+                // up_client_zenoh.send(source.clone(), payload.clone(), attributes.clone());
+            }
+            Ok(UMessageType::UmessageTypeRequest) => {
+                trace!("UMessageTypeRequest being routed internally");
+
+                // TODO: if Request, then...
+                //  => Need to consider how to get ahold of our up_client_zenoh as an RpcClient
+                //     so that we can call invoke_method() on it
+
+                warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
+                return;
+            }
+            Ok(UMessageType::UmessageTypeResponse) => {
+                trace!("UMessageTypeResponse being routed internally");
+
+                // TODO: if Response, then...
+                //  => Need to consider how to get ahold of our raw Zenoh session
+                //     so that we can look up the Zenoh Query to reply back on
+
+                warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
+                return;
+            }
+            Err(_) => {}
+            _ => {}
+        }
     }
 }
 
@@ -191,13 +260,17 @@ fn transport_listener(
 async fn run(
     udevice_authority: UAuthority,
     transports: Vec<Arc<dyn UTransport>>,
+    up_client_zenoh: Arc<ULinkZenoh>,
     ingress_queue_sender: Sender<UMessage>,
     ingress_queue_receiver: Receiver<UMessage>,
     egress_queue_sender: Sender<UMessage>,
 ) {
     let _ = env_logger::try_init();
 
-    let consumer_task = task::spawn(ingress_queue_consumer(ingress_queue_receiver));
+    task::spawn(ingress_queue_consumer(
+        ingress_queue_receiver,
+        up_client_zenoh,
+    ));
 
     let uuri_for_all_remote = UUri {
         authority: Some(UAuthority {

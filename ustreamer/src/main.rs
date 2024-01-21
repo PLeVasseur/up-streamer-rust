@@ -76,15 +76,20 @@ async fn main() {
             .unwrap(),
     );
 
-    let up_client_zenoh_transport: Arc<dyn UTransport> =
-        up_client_zenoh.clone() as Arc<dyn UTransport>;
+    // TODO: Should consider removing up_client_zenoh_transport from the transports the ingress listener listens in on
+    //  as in theory we'd already have received it to any clients apps?
+    //  Feels kinda... wrong. I would prefer there be a way to "force" going through the uStreamer, even for Zenoh
+    //  as it now appears like from further reading that uP-L1 transport must return to use whether we succeed or fail
+    //  Get some feedback on this from @Steven Hartley
+    // let up_client_zenoh_transport: Arc<dyn UTransport> =
+    //     up_client_zenoh.clone() as Arc<dyn UTransport>;
     let up_client_sommr_transport: Arc<dyn UTransport> =
         up_client_sommr.clone() as Arc<dyn UTransport>;
     let up_client_mqtt_transport: Arc<dyn UTransport> =
         up_client_mqtt.clone() as Arc<dyn UTransport>;
 
     let up_clients: Vec<Arc<dyn UTransport>> = vec![
-        up_client_zenoh_transport,
+        // up_client_zenoh_transport,
         up_client_sommr_transport,
         up_client_mqtt_transport,
     ];
@@ -105,6 +110,7 @@ async fn main() {
         ingress_queue_sender: ingress_queue_sender.clone(),
         ingress_queue_receiver: ingress_queue_receiver.clone(),
         egress_queue_sender: egress_queue_sender.clone(),
+        up_client_zenoh: up_client_zenoh.clone(),
         transports: up_clients.clone(),
     };
 
