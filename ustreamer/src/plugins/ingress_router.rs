@@ -4,7 +4,7 @@ use crate::plugins::types::QueueEntry;
 use async_std::channel::{self, Receiver, Sender};
 use async_std::task;
 use futures::select;
-use log::{debug, info};
+use log::{debug, error, info};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::{
@@ -100,11 +100,11 @@ async fn run(transports: Vec<Arc<dyn UTransport>>) {
     for transport in &transports {
         let callback = move |result: Result<UMessage, UStatus>| {
             let Ok(msg) = result else {
-                println!("Unable to retrieve src");
+                error!("Unable to retrieve src");
                 return;
             };
 
-            println!("Message source: {:?}", msg.source);
+            trace!("Message source: {:?}", msg.source);
         };
         let transport_clone = transport.clone();
         let uuri_for_all_remote_clone = uuri_for_all_remote.clone();
@@ -117,8 +117,8 @@ async fn run(transports: Vec<Arc<dyn UTransport>>) {
                 {
                     Ok(registered_key) => registered_key,
                     Err(status) => {
-                        println!(
-                            "Failed to register timer_minute listener: {:?}",
+                        error!(
+                            "Failed to listener: {:?}",
                             status.get_code()
                         );
                         return;
