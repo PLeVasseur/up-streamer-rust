@@ -3035,6 +3035,7 @@ dependencies = [
  "log",
  "prost",
  "transport-router-zenoh-plugin",
+ "uprotocol-rust-transport-mqtt",
  "uprotocol-rust-transport-sommr",
  "uprotocol-sdk",
  "uprotocol_zenoh_rust",

@@ -50,7 +50,7 @@ impl Plugin for IngressRouter {
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
             RunningPluginInner {
                 runtime: start_args.runtime.clone(),
-                transports: transports_plugin_clone
+                transports: transports_plugin_clone,
             },
         )))))
     }
@@ -59,7 +59,7 @@ impl Plugin for IngressRouter {
 // An inner-state for the RunningPlugin
 struct RunningPluginInner {
     runtime: Runtime,
-    transports: Vec<Arc<dyn UTransport>>
+    transports: Vec<Arc<dyn UTransport>>,
 }
 // The RunningPlugin struct implementing the RunningPluginTrait trait
 #[derive(Clone)]
@@ -98,7 +98,6 @@ async fn run(transports: Vec<Arc<dyn UTransport>>) {
         resource: None,
     };
     for transport in &transports {
-
         let callback = move |result: Result<UMessage, UStatus>| {
             let Ok(msg) = result else {
                 println!("Unable to retrieve src");
