@@ -12,7 +12,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::{UMessage, UStatus, UUri};
+use uprotocol_sdk::uprotocol::{Remote, UAuthority, UEntity, UMessage, UStatus, UUri};
 use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction, ZenohPlugin};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
@@ -26,11 +26,11 @@ pub struct IngressRouter {}
 zenoh_plugin_trait::declare_plugin!(IngressRouter);
 
 pub struct IngressRouterStartArgs {
-    runtime: Runtime,
-    egress_queue_sender: Sender<QueueEntry>,
-    ingress_queue_sender: Sender<QueueEntry>,
-    ingress_queue_receiver: Receiver<QueueEntry>,
-    transports: Vec<Arc<dyn UTransport>>,
+    pub runtime: Runtime,
+    // egress_queue_sender: Sender<QueueEntry>,
+    // ingress_queue_sender: Sender<QueueEntry>,
+    // ingress_queue_receiver: Receiver<QueueEntry>,
+    pub transports: Vec<Arc<dyn UTransport>>,
 }
 
 // impl ZenohPlugin for IngressRouter {}
@@ -39,31 +39,18 @@ impl Plugin for IngressRouter {
     type RunningPlugin = zenoh::plugins::RunningPlugin;
 
     // A mandatory const to define, in case of the plugin is built as a standalone executable
-    const STATIC_NAME: &'static str = "example";
+    const STATIC_NAME: &'static str = "ingress_router";
 
     // The first operation called by zenohd on the plugin
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
         let transports_clone = start_args.transports.clone();
         async_std::task::spawn(run(transports_clone));
 
-        // for transport in &start_args.transports {
-        //     let uuri = UUri{
-        //         authority: Default::default(),
-        //         entity: Default::default(),
-        //         resource: Default::default()
-        //     };
-        //     let callback = move |result: Result<UMessage, UStatus>| {
-        //
-        //     };
-        //     let transport_clone = transport.clone();
-        //     task::spawn(async move {
-        //         transport_clone.register_listener(uuri, Box::new(callback));
-        //     });
-        // }
-
+        let transports_plugin_clone = start_args.transports.clone();
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
             RunningPluginInner {
                 runtime: start_args.runtime.clone(),
+                transports: transports_plugin_clone
             },
         )))))
     }
@@ -72,6 +59,7 @@ impl Plugin for IngressRouter {
 // An inner-state for the RunningPlugin
 struct RunningPluginInner {
     runtime: Runtime,
+    transports: Vec<Arc<dyn UTransport>>
 }
 // The RunningPlugin struct implementing the RunningPluginTrait trait
 #[derive(Clone)]
@@ -96,4 +84,48 @@ impl RunningPluginTrait for RunningPlugin {
 
 async fn run(transports: Vec<Arc<dyn UTransport>>) {
     env_logger::init();
+
+    let uuri_for_all_remote = UUri {
+        authority: Some(UAuthority {
+            remote: Some(Remote::Name("*".to_string())),
+        }),
+        entity: Some(UEntity {
+            name: "*".to_string(),
+            id: None,
+            version_major: None,
+            version_minor: None,
+        }),
+        resource: None,
+    };
+    for transport in &transports {
+
+        let callback = move |result: Result<UMessage, UStatus>| {
+            let Ok(msg) = result else {
+                println!("Unable to retrieve src");
+                return;
+            };
+
+            println!("Message source: {:?}", msg.source);
+        };
+        let transport_clone = transport.clone();
+        let uuri_for_all_remote_clone = uuri_for_all_remote.clone();
+        task::spawn(async move {
+            // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
+            let _registered_minute_timer_key = {
+                match transport_clone
+                    .register_listener(uuri_for_all_remote_clone, Box::new(callback))
+                    .await
+                {
+                    Ok(registered_key) => registered_key,
+                    Err(status) => {
+                        println!(
+                            "Failed to register timer_minute listener: {:?}",
+                            status.get_code()
+                        );
+                        return;
+                    }
+                }
+            };
+        });
+    }
 }
