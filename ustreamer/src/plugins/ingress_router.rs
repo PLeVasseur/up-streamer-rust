@@ -93,6 +93,18 @@ async fn ingress_queue_consumer(mut receiver: Receiver<UMessage>) {
         trace!("Received msg: {:?}", msg);
 
         // TODO: Add dispatching logic to point internally
+
+        // TODO: if Publish, then...
+        //  => Need to consider how to get ahold of our up_client_zenoh as a UTransport
+        //     so that we can call send() on it
+
+        // TODO: if Request, then...
+        //  => Need to consider how to get ahold of our up_client_zenoh as an RpcClient
+        //     so that we can call invoke_method() on it
+
+        // TODO: if Response, then...
+        //  => Need to consider how to get ahold of our raw Zenoh session
+        //     so that we can look up the Zenoh Query to reply back on
     }
 }
 
@@ -118,6 +130,8 @@ fn transport_listener(result: Result<UMessage, UStatus>, sender: Sender<UMessage
             trace!("Message source: {:?}", message.source);
 
             // TODO: Add logic here on _when_ to insert into the channel
+            //  if UMessage.UAttributes.sink.UAuthority is Remote and Remote matches us,
+            //  then send to the ingress_queue
             let sender_clone = sender.clone();
             task::spawn(async move {
                 sender_clone.send(message).await.unwrap();
