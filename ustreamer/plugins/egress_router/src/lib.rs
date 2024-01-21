@@ -42,10 +42,7 @@ impl Plugin for EgressRouter {
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
         let egress_queue_receiver_clone = start_args.egress_queue_receiver.clone();
-        async_std::task::spawn(run(
-            egress_queue_sender_clone,
-            egress_queue_receiver_clone,
-        ));
+        async_std::task::spawn(run(egress_queue_sender_clone, egress_queue_receiver_clone));
 
         // let ingress_queue_sender_plugin_clone = start_args.ingress_queue_sender.clone();
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
@@ -89,10 +86,7 @@ async fn egress_queue_consumer(mut receiver: Receiver<UMessage>) {
     }
 }
 
-async fn run(
-    egress_queue_sender: Sender<UMessage>,
-    egress_queue_receiver: Receiver<UMessage>,
-) {
+async fn run(egress_queue_sender: Sender<UMessage>, egress_queue_receiver: Receiver<UMessage>) {
     let _ = env_logger::try_init();
 
     let consumer_task = task::spawn(egress_queue_consumer(egress_queue_receiver));

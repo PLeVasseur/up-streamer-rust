@@ -3049,11 +3049,9 @@ version = "0.1.5-SNAPSHOT"
 dependencies = [
  "async-std",
  "chrono",
- "egress_router",
  "env_logger",
  "example-proto",
  "futures",
- "ingress_router",
  "log",
  "prost",
  "transport-router-zenoh-plugin",

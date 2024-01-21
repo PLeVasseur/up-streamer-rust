@@ -1,25 +1,32 @@
 mod plugins;
 
-use egress_router::{EgressRouter, EgressRouterStartArgs};
-use ingress_router::{IngressRouter, IngressRouterStartArgs};
+// use egress_router::{EgressRouter, EgressRouterStartArgs};
+// use ingress_router::{IngressRouter, IngressRouterStartArgs};
 
-// use crate::plugins::egress_router::{EgressRouter, EgressRouterStartArgs};
-// use crate::plugins::ingress_router::{IngressRouter, IngressRouterStartArgs};
+use crate::plugins::egress_router::{EgressRouter, EgressRouterStartArgs};
+use crate::plugins::ingress_router::{IngressRouter, IngressRouterStartArgs};
 
 use async_std::channel::{self, Receiver, Sender};
+use log::{debug, error, info, trace, warn};
 use std::sync::Arc;
 use uprotocol_rust_transport_mqtt::UTransportMqtt;
 use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::UMessage;
+use uprotocol_sdk::uprotocol::{Remote, UAuthority, UMessage};
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::scouting::WhatAmI;
 
 #[async_std::main]
 async fn main() {
+    env_logger::try_init().unwrap_or_default();
+
     println!("Starting uStreamer!");
 
     // TODO: Add configuration of local UAuthority
+    let ustreamer_device_ip: Vec<u8> = vec![192, 168, 3, 100];
+    let ustreamer_device_authority: UAuthority = UAuthority {
+        remote: Some(Remote::Ip(ustreamer_device_ip)),
+    };
 
     let mut config = zenoh::config::Config::default();
     config
@@ -84,27 +91,33 @@ async fn main() {
 
     let ingress_queue_start_args = IngressRouterStartArgs {
         runtime: runtime.clone(),
-        ingress_queue_sender: ingress_queue_sender,
-        ingress_queue_receiver: ingress_queue_receiver,
+        udevice_authority: ustreamer_device_authority.clone(),
+        ingress_queue_sender: ingress_queue_sender.clone(),
+        ingress_queue_receiver: ingress_queue_receiver.clone(),
+        egress_queue_sender: egress_queue_sender.clone(),
         transports: up_clients.clone(),
     };
 
-    // {
+    {
         use zenoh_plugin_trait::Plugin;
-        IngressRouter::start("ingress_router", &ingress_queue_start_args).unwrap();
-    // }
+        IngressRouter::start("ingress_router", &ingress_queue_start_args)
+            .expect("Failed to start IngressRouter");
+    }
 
+    trace!("uStreamer: started IngressRouter");
 
     let egress_queue_start_args = EgressRouterStartArgs {
         runtime: runtime.clone(),
-        egress_queue_sender: egress_queue_sender,
-        egress_queue_receiver: egress_queue_receiver,
+        egress_queue_sender: egress_queue_sender.clone(),
+        egress_queue_receiver: egress_queue_receiver.clone(),
     };
 
-    // {
-    //     use zenoh_plugin_trait::Plugin;
+    {
+        use zenoh_plugin_trait::Plugin;
         EgressRouter::start("egress_router", &egress_queue_start_args).unwrap();
-    // }
+    }
+
+    trace!("uStreamer: started EgressRouter");
 
     async_std::future::pending::<()>().await;
 }

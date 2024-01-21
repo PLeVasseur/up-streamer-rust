@@ -13,10 +13,10 @@ license.workspace = true
 
 [dependencies]
 async-std = { workspace = true }
-egress_router = { path = "plugins/egress_router" }
+#egress_router = { path = "plugins/egress_router" }
 env_logger = { workspace = true }
 futures = { workspace = true }
-ingress_router = { path = "plugins/ingress_router" }
+#ingress_router = { path = "plugins/ingress_router" }
 log = { workspace = true }
 prost = { workspace = true }
 uprotocol-sdk = { workspace = true }

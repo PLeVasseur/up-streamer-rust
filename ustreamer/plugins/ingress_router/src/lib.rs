@@ -22,7 +22,7 @@ use zenoh_result::{bail, ZResult};
 pub struct IngressRouter {}
 
 // declaration of the plugin's VTable for zenohd to find the plugin's functions to be called
-// zenoh_plugin_trait::declare_plugin!(IngressRouter);
+zenoh_plugin_trait::declare_plugin!(IngressRouter);
 
 pub struct IngressRouterStartArgs {
     pub runtime: Runtime,
@@ -41,6 +41,8 @@ impl Plugin for IngressRouter {
 
     // The first operation called by zenohd on the plugin
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
+        trace!("IngressRouter: entered start()");
+
         let transports_clone = start_args.transports.clone();
         let ingress_queue_sender_clone = start_args.ingress_queue_sender.clone();
         let ingress_queue_receiver_clone = start_args.ingress_queue_receiver.clone();
