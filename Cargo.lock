@@ -719,27 +719,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "545b22097d44f8a9581187cdf93de7a71e4722bf51200cfaba810865b49a495d"
 
 [[package]]
-name = "egress_router"
-version = "0.1.0"
-dependencies = [
- "async-std",
- "env_logger",
- "futures",
- "log",
- "prost",
- "transport-router-zenoh-plugin",
- "uprotocol-rust-transport-mqtt",
- "uprotocol-rust-transport-sommr",
- "uprotocol-sdk",
- "uprotocol_zenoh_rust",
- "zenoh",
- "zenoh-core",
- "zenoh-plugin-trait",
- "zenoh-result",
- "zenoh-util",
-]
-
-[[package]]
 name = "either"
 version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1195,27 +1174,6 @@ checksum = "d530e1a18b1cb4c484e6e34556a0d948706958449fca0cab753d649f2bce3d1f"
 dependencies = [
  "equivalent",
  "hashbrown 0.14.3",
-]
-
-[[package]]
-name = "ingress_router"
-version = "0.1.0"
-dependencies = [
- "async-std",
- "env_logger",
- "futures",
- "log",
- "prost",
- "transport-router-zenoh-plugin",
- "uprotocol-rust-transport-mqtt",
- "uprotocol-rust-transport-sommr",
- "uprotocol-sdk",
- "uprotocol_zenoh_rust",
- "zenoh",
- "zenoh-core",
- "zenoh-plugin-trait",
- "zenoh-result",
- "zenoh-util",
 ]
 
 [[package]]
