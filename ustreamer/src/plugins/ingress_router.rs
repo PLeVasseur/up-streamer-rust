@@ -1,3 +1,16 @@
+/********************************************************************************
+ * Copyright (c) 2023 Contributors to the Eclipse Foundation
+ *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Apache License Version 2.0 which is available at
+ * https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ ********************************************************************************/
+
 #![recursion_limit = "256"]
 
 use async_std::channel::{self, Receiver, Sender};
@@ -152,13 +165,13 @@ fn transport_listener(
             );
 
             if *authority == udevice_authority {
-                trace!("CE for this uDevice. Sending to ingress queue.");
+                info!("CE for this uDevice. Sending to ingress queue.");
                 let ingress_sender_clone = ingress_sender.clone();
                 task::spawn(async move {
                     ingress_sender_clone.send(message).await.unwrap();
                 });
             } else {
-                trace!("CE for another device. Sending to egress queue.");
+                info!("CE for another device. Sending to egress queue.");
                 let egress_sender_clone = egress_sender.clone();
                 task::spawn(async move {
                     egress_sender_clone.send(message).await.unwrap();
