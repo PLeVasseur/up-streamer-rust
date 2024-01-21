@@ -52,7 +52,9 @@ transport-router-zenoh-plugin = { version = "0.1.5-SNAPSHOT", path = "router-plu
 # upstream
 # uprotocol-sdk = { git = "https://github.com/eclipse-uprotocol/uprotocol-rust.git", branch = "main" }
 # zettascale version
-uprotocol-sdk = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust.git", branch = "support_rpcserver" }
+#uprotocol-sdk = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust.git", branch = "support_rpcserver" }
+# Pete one
+uprotocol-sdk = { git = "https://github.com/PLeVasseur/uprotocol-rust_fork.git", branch = "feature/experiment_send_sync" }
 # upstream
 # uprotocol_zenoh_rust = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust-ulink-zenoh.git", branch = "support_rpcserver" }
 # my version, increasing timeout to 2 seconds

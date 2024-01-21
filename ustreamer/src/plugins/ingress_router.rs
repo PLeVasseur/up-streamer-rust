@@ -1,7 +1,7 @@
 #![recursion_limit = "256"]
 
 use crate::plugins::types::QueueEntry;
-use async_std::channel::{self, Sender, Receiver};
+use async_std::channel::{self, Receiver, Sender};
 use async_std::task;
 use futures::select;
 use log::{debug, info};
@@ -11,8 +11,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering::Relaxed},
     Arc, Mutex,
 };
-use uprotocol_sdk::uprotocol::{UMessage, UStatus, UUri};
 use uprotocol_sdk::transport::datamodel::UTransport;
+use uprotocol_sdk::uprotocol::{UMessage, UStatus, UUri};
 use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction, ZenohPlugin};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
@@ -30,7 +30,7 @@ pub struct IngressRouterStartArgs {
     egress_queue_sender: Sender<QueueEntry>,
     ingress_queue_sender: Sender<QueueEntry>,
     ingress_queue_receiver: Receiver<QueueEntry>,
-    transports: Vec<Arc<Mutex<dyn UTransport>>>
+    transports: Vec<Arc<dyn UTransport>>,
 }
 
 // impl ZenohPlugin for IngressRouter {}
@@ -43,30 +43,29 @@ impl Plugin for IngressRouter {
 
     // The first operation called by zenohd on the plugin
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
+        let transports_clone = start_args.transports.clone();
+        async_std::task::spawn(run(transports_clone));
 
-        for transport in start_args.transports {
-            let uuri = UUri{
-                authority: Default::default(),
-                entity: Default::default(),
-                resource: Default::default()
-            };
-            let callback = move |result: Result<UMessage, UStatus>| {
-
-            };
-            task::spawn(async move {
-                transport.lock().unwrap().register_listener(uuri, Box::new(callback));
-            });
-        }
+        // for transport in &start_args.transports {
+        //     let uuri = UUri{
+        //         authority: Default::default(),
+        //         entity: Default::default(),
+        //         resource: Default::default()
+        //     };
+        //     let callback = move |result: Result<UMessage, UStatus>| {
+        //
+        //     };
+        //     let transport_clone = transport.clone();
+        //     task::spawn(async move {
+        //         transport_clone.register_listener(uuri, Box::new(callback));
+        //     });
+        // }
 
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
             RunningPluginInner {
                 runtime: start_args.runtime.clone(),
             },
         )))))
-
-        // spawn the task running the plugin's loop
-        // async_std::task::spawn(run(&start_args.transports));
-        // async_std::task::spawn(run(start_args.runtime.clone(), start_args.transports));
     }
 }
 
@@ -95,8 +94,6 @@ impl RunningPluginTrait for RunningPlugin {
     }
 }
 
-async fn run(transports: &Vec<Arc<Mutex<dyn UTransport>>>) {
-// async fn run(runtime: Runtime, transports: &Vec<Arc<Mutex<dyn UTransport>>>) {
+async fn run(transports: Vec<Arc<dyn UTransport>>) {
     env_logger::init();
-
 }
