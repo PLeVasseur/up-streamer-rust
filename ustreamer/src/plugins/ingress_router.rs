@@ -1,10 +1,9 @@
 #![recursion_limit = "256"]
 
-use crate::plugins::types::QueueEntry;
 use async_std::channel::{self, Receiver, Sender};
 use async_std::task;
 use futures::select;
-use log::{debug, error, info};
+use log::{debug, error, info, trace};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::{
@@ -28,8 +27,8 @@ zenoh_plugin_trait::declare_plugin!(IngressRouter);
 pub struct IngressRouterStartArgs {
     pub runtime: Runtime,
     // egress_queue_sender: Sender<QueueEntry>,
-    // ingress_queue_sender: Sender<QueueEntry>,
-    // ingress_queue_receiver: Receiver<QueueEntry>,
+    pub ingress_queue_sender: Sender<UMessage>,
+    pub ingress_queue_receiver: Receiver<UMessage>,
     pub transports: Vec<Arc<dyn UTransport>>,
 }
 
@@ -44,9 +43,16 @@ impl Plugin for IngressRouter {
     // The first operation called by zenohd on the plugin
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
         let transports_clone = start_args.transports.clone();
-        async_std::task::spawn(run(transports_clone));
+        let ingress_queue_sender_clone = start_args.ingress_queue_sender.clone();
+        let ingress_queue_receiver_clone = start_args.ingress_queue_receiver.clone();
+        async_std::task::spawn(run(
+            transports_clone,
+            ingress_queue_sender_clone,
+            ingress_queue_receiver_clone,
+        ));
 
         let transports_plugin_clone = start_args.transports.clone();
+        // let ingress_queue_sender_plugin_clone = start_args.ingress_queue_sender.clone();
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
             RunningPluginInner {
                 runtime: start_args.runtime.clone(),
@@ -82,8 +88,59 @@ impl RunningPluginTrait for RunningPlugin {
     }
 }
 
-async fn run(transports: Vec<Arc<dyn UTransport>>) {
+async fn ingress_queue_consumer(mut receiver: Receiver<UMessage>) {
+    while let Ok(msg) = receiver.recv().await {
+        trace!("Received msg: {:?}", msg);
+
+        // TODO: Add dispatching logic to point internally
+    }
+}
+
+fn transport_listener(result: Result<UMessage, UStatus>, sender: Sender<UMessage>) {
+    match result {
+        Ok(message) => {
+            let payload = match message.payload {
+                Some(ref payload) => payload,
+                None => {
+                    error!("No payload attached!");
+                    return;
+                }
+            };
+
+            let data = match &payload.data {
+                Some(data) => data,
+                None => {
+                    error!("Empty data payload!");
+                    return;
+                }
+            };
+
+            trace!("Message source: {:?}", message.source);
+
+            // TODO: Add logic here on _when_ to insert into the channel
+            let sender_clone = sender.clone();
+            task::spawn(async move {
+                sender_clone.send(message).await.unwrap();
+            });
+        }
+        Err(status) => {
+            error!(
+                "transport_listener returned UStatus: {:?} msg: {}",
+                status.get_code(),
+                status.message()
+            );
+        }
+    }
+}
+
+async fn run(
+    transports: Vec<Arc<dyn UTransport>>,
+    ingress_queue_sender: Sender<UMessage>,
+    ingress_queue_receiver: Receiver<UMessage>,
+) {
     env_logger::init();
+
+    let consumer_task = task::spawn(ingress_queue_consumer(ingress_queue_receiver));
 
     let uuri_for_all_remote = UUri {
         authority: Some(UAuthority {
@@ -98,29 +155,24 @@ async fn run(transports: Vec<Arc<dyn UTransport>>) {
         resource: None,
     };
     for transport in &transports {
-        let callback = move |result: Result<UMessage, UStatus>| {
-            let Ok(msg) = result else {
-                error!("Unable to retrieve src");
-                return;
-            };
-
-            trace!("Message source: {:?}", msg.source);
-        };
         let transport_clone = transport.clone();
         let uuri_for_all_remote_clone = uuri_for_all_remote.clone();
+        let ingress_queue_sender_clone = ingress_queue_sender.clone();
         task::spawn(async move {
+            let listener_closure = move |result: Result<UMessage, UStatus>| {
+                transport_listener(result, ingress_queue_sender_clone.clone());
+            };
+
             // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
             let _registered_minute_timer_key = {
                 match transport_clone
-                    .register_listener(uuri_for_all_remote_clone, Box::new(callback))
+                    // .register_listener(uuri_for_all_remote_clone, Box::new(transport_listener))
+                    .register_listener(uuri_for_all_remote_clone, Box::new(listener_closure))
                     .await
                 {
                     Ok(registered_key) => registered_key,
                     Err(status) => {
-                        error!(
-                            "Failed to listener: {:?}",
-                            status.get_code()
-                        );
+                        error!("Failed to register listener: {:?}", status.get_code());
                         return;
                     }
                 }

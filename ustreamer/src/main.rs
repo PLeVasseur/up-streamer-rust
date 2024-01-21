@@ -3,10 +3,12 @@ mod plugins;
 use crate::plugins::egress_router::EgressRouter;
 use crate::plugins::ingress_router::{IngressRouter, IngressRouterStartArgs};
 
+use async_std::channel::{self, Receiver, Sender};
 use std::sync::Arc;
 use uprotocol_rust_transport_mqtt::UTransportMqtt;
 use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::transport::datamodel::UTransport;
+use uprotocol_sdk::uprotocol::UMessage;
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::scouting::WhatAmI;
 
@@ -67,8 +69,15 @@ async fn main() {
         up_client_mqtt_transport,
     ];
 
+    // TODO: Add ability to configure this
+    const INGRESS_QUEUE_CAPACITY: usize = 5;
+    let (ingress_queue_sender, ingress_queue_receiver) =
+        channel::bounded::<UMessage>(INGRESS_QUEUE_CAPACITY);
+
     let start_args = IngressRouterStartArgs {
         runtime: runtime,
+        ingress_queue_sender: ingress_queue_sender,
+        ingress_queue_receiver: ingress_queue_receiver,
         transports: up_clients.clone(),
     };
 
