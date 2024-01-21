@@ -18,6 +18,8 @@ members = [
     "router-plugins/retransmitters/retransmitter",
     "router-plugins/retransmitters/retransmitter-zenoh",
     "ustreamer",
+    "ustreamer/plugins/egress_router",
+    "ustreamer/plugins/ingress_router",
     "ustreamer_basic",
     "udiscovery",
     "usubscription",

@@ -1,7 +1,10 @@
 mod plugins;
 
-use crate::plugins::egress_router::EgressRouter;
-use crate::plugins::ingress_router::{IngressRouter, IngressRouterStartArgs};
+use egress_router::{EgressRouter, EgressRouterStartArgs};
+use ingress_router::{IngressRouter, IngressRouterStartArgs};
+
+// use crate::plugins::egress_router::{EgressRouter, EgressRouterStartArgs};
+// use crate::plugins::ingress_router::{IngressRouter, IngressRouterStartArgs};
 
 use async_std::channel::{self, Receiver, Sender};
 use std::sync::Arc;
@@ -74,15 +77,34 @@ async fn main() {
     let (ingress_queue_sender, ingress_queue_receiver) =
         channel::bounded::<UMessage>(INGRESS_QUEUE_CAPACITY);
 
-    let start_args = IngressRouterStartArgs {
-        runtime: runtime,
+    // TODO: Add ability to configure this
+    const EGRESS_QUEUE_CAPACITY: usize = 5;
+    let (egress_queue_sender, egress_queue_receiver) =
+        channel::bounded::<UMessage>(EGRESS_QUEUE_CAPACITY);
+
+    let ingress_queue_start_args = IngressRouterStartArgs {
+        runtime: runtime.clone(),
         ingress_queue_sender: ingress_queue_sender,
         ingress_queue_receiver: ingress_queue_receiver,
         transports: up_clients.clone(),
     };
 
-    use zenoh_plugin_trait::Plugin;
-    IngressRouter::start("ingress_router", &start_args).unwrap();
+    // {
+        use zenoh_plugin_trait::Plugin;
+        IngressRouter::start("ingress_router", &ingress_queue_start_args).unwrap();
+    // }
+
+
+    let egress_queue_start_args = EgressRouterStartArgs {
+        runtime: runtime.clone(),
+        egress_queue_sender: egress_queue_sender,
+        egress_queue_receiver: egress_queue_receiver,
+    };
+
+    // {
+    //     use zenoh_plugin_trait::Plugin;
+        EgressRouter::start("egress_router", &egress_queue_start_args).unwrap();
+    // }
 
     async_std::future::pending::<()>().await;
 }
