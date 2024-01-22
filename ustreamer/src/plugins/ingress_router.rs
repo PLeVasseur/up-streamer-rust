@@ -155,7 +155,7 @@ async fn ingress_queue_consumer(
                 error!("CE pulled from Ingress Queue has no UAttributes");
                 return;
             }
-            Some(attributes) => attributes,
+            Some(attributes) => attributes.clone(),
         };
 
         match UMessageType::try_from(attributes.r#type) {
@@ -188,30 +188,36 @@ async fn ingress_queue_consumer(
                 //     so that we can call invoke_method() on it
                 //  ~ Consider if we should spawn another task so as to not block this function's loop
 
-                let response_source = match &attributes.sink {
+                let response_source = match attributes.sink {
                     None => {
                         error!("CE with UmessageTypeRequest heard by our uDevice doesn't have sink. Should be caught in placement into Ingress Queue");
                         return;
                     }
-                    Some(response_source) => response_source,
+                    Some(ref response_source) => response_source.clone(),
                 };
 
-                let response_reqid = match &attributes.id {
+                debug!("response_source: {:?}", &response_source);
+
+                let response_reqid = match attributes.id {
                     None => {
                         error!("CE with UmessageTypeRequest heard by our uDevice doesn't have id. Should be caught in placement into Ingress Queue");
                         return;
                     }
-                    Some(response_reqid) => response_reqid,
+                    Some(ref response_reqid) => response_reqid.clone(),
                 };
+
+                debug!("response_reqid: {:?}", &response_reqid);
 
                 // TODO: Note that since we only get a UPayload back from calling invoke_method
                 //  we do not have a corresponding `id` for the response
                 //  Unclear if that's a huge deal. For now can simply stamp with the id from uStreamer
                 let id = uuid_builder.build();
 
+                debug!("id for response: {:?}", &id);
+
                 let response_attributes = UAttributes {
                     id: Some(id),
-                    r#type: i32::from(UMessageType::UmessageTypePublish),
+                    r#type: i32::from(UMessageType::UmessageTypeResponse),
                     sink: Some(source.clone()),
                     priority: i32::from(UpriorityCs4), // TODO: What should the priority be?
                     ttl: None,                         // TODO: What should the ttl be?
@@ -221,30 +227,46 @@ async fn ingress_queue_consumer(
                     token: None,
                 };
 
+                debug!("response_attributes: {:?}", &response_attributes);
+
                 let up_client_zenoh_clone = up_client_zenoh.clone();
                 let source_clone = source.clone();
                 let payload_clone = payload.clone();
                 let attributes_clone = attributes.clone();
                 let egress_queue_sender_clone = egress_queue_sender.clone();
+                let response_attributes_clone = response_attributes.clone();
                 task::spawn(async move {
+                    trace!("Inside of async closure to call invoke_method");
+
                     match up_client_zenoh_clone
-                        .invoke_method(source_clone.clone(), payload_clone, attributes_clone)
+                        // TODO: I think this is a hack, right? Shouldn't invoke_method create a Zenoh KeyExpr
+                        //  based on the sink, not the source?
+                        .invoke_method(
+                            response_source.clone(),
+                            payload_clone.clone(),
+                            attributes_clone.clone(),
+                        )
                         .await
                     {
                         Ok(payload) => {
+                            trace!("Received result back from RpcServer");
 
-                            // let response_msg = UMessage{
-                            //     source: Some(response_source.clone()),
-                            //     attributes: Some(response_attributes),
-                            //     payload: Some(payload),
-                            // };
-                            //
-                            // egress_queue_sender_clone.send(response_msg);
+                            let response_msg = UMessage {
+                                source: Some(response_source.clone()),
+                                attributes: Some(response_attributes_clone),
+                                payload: Some(payload),
+                            };
 
-                            // TODO: Put into egress_queue to be shipped back out
+                            egress_queue_sender_clone.send(response_msg).await.unwrap();
+
+                            trace!("Sent response_msg to Egress Queue");
                         }
-                        Err(_) => {}
+                        Err(e) => {
+                            println!("invoke_method failed: {:?}", e)
+                        }
                     }
+
+                    trace!("After invoke_method");
                 });
 
                 // warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
@@ -306,6 +328,8 @@ fn transport_listener(
                 }
                 Some(id) => id,
             };
+
+            debug!("Sniffed CE: {:?}", &message);
 
             debug!(
                 "udevice_authority: {:?} Message sink authority: {:?}",

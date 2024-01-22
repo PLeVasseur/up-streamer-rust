@@ -164,7 +164,7 @@ async fn egress_queue_consumer(
                         .send(source.clone(), payload.clone(), attributes.clone())
                         .await
                     {
-                        // TODO: Would be good to be able to log _which_transport is succeeding or failing
+                        // TODO: Would be good to be able to log _which_ transport is succeeding or failing
                         Ok(_) => {
                             trace!("Forwarding message externally succeeded");
                             let mut transmit_cache = local_transmit_cache.lock().unwrap();
@@ -183,18 +183,40 @@ async fn egress_queue_consumer(
                 //  => Need to consider how to get ahold of our up_client_zenoh as an RpcClient
                 //     so that we can call invoke_method() on it
 
-                warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
-                return;
+                warn!("CE Egress Queue external Request not implemented yet");
+                // return;
             }
             Ok(UMessageType::UmessageTypeResponse) => {
                 trace!("UMessageTypeResponse being routed externally");
 
-                // TODO: if Response, then...
-                //  => Need to consider how to get ahold of our raw Zenoh session
-                //     so that we can look up the Zenoh Query to reply back on
+                debug!("source: {:?}\nattributes: {:?}", &source, &attributes);
 
-                warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
-                return;
+                {
+                    let mut transmit_cache = local_transmit_cache.lock().unwrap();
+                    transmit_cache.put(UuidForHashing::from(id), true);
+                }
+
+                for transport in &transports {
+                    match transport
+                        .send(source.clone(), payload.clone(), attributes.clone())
+                        .await
+                    {
+                        // TODO: Would be good to be able to log _which_ transport is succeeding or failing
+                        Ok(_) => {
+                            trace!("Forwarding response externally succeeded");
+                        }
+                        Err(status) => {
+                            error!("Forwarding response externally failed: {:?}", status)
+                        }
+                    }
+                }
+
+                // TODO: have to disambiguate the case of:
+                //  1. A response intended to be sent out to the world that we generated internally
+                //  2. A response
+
+                // warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
+                // return;
             }
             Err(_) => {}
             _ => {}

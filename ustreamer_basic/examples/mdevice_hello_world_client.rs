@@ -166,7 +166,7 @@ async fn main() {
 
     info!("Register the listener...");
     utransport_sommr_arc
-        .register_listener(hello_world_response_uuri.clone(), Box::new(callback))
+        .register_listener(hello_world_request_uuri.clone(), Box::new(callback))
         .await
         .unwrap();
 

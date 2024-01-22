@@ -13,6 +13,7 @@
 
 use async_std::task::{self, block_on};
 use example_proto::proto::example::hello_world::v1::HelloResponse;
+use log::{error, trace};
 use prost::Message;
 use std::sync::{Arc, Mutex};
 use std::time;
@@ -41,9 +42,7 @@ async fn main() {
     config
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Client failed");
-    let rpc_server = Arc::new(Mutex::new(
-        ULinkZenoh::new_from_config(config).await.unwrap(),
-    ));
+    let rpc_server = Arc::new(ULinkZenoh::new_from_config(config).await.unwrap());
 
     // create uuri
     let uuri = UUri {
@@ -62,7 +61,7 @@ async fn main() {
         )),
     };
 
-    let rpc_server_callback = rpc_server.clone();
+    let rpc_server_for_callback = rpc_server.clone();
     let callback = move |result: Result<UMessage, UStatus>| {
         match result {
             Ok(msg) => {
@@ -73,6 +72,9 @@ async fn main() {
                 } = msg;
                 // Get the UUri
                 let uuri = source.unwrap();
+
+                println!("Prior to printing received value");
+
                 // Build the payload to send back
                 if let Data::Value(v) = payload.unwrap().data.unwrap() {
                     let value = v.into_iter().map(|c| c as char).collect::<String>();
@@ -82,6 +84,7 @@ async fn main() {
                 let hello_response = HelloResponse {
                     message: "Hello there!".to_string(),
                 };
+                println!("hello_response: {:?}", &hello_response);
                 let mut hello_response_buf = Vec::new();
                 hello_response
                     .encode(&mut hello_response_buf)
@@ -91,17 +94,32 @@ async fn main() {
                     format: UPayloadFormat::UpayloadFormatProtobuf as i32,
                     data: Some(Data::Value(hello_response_buf)),
                 };
+                println!("formed payload");
                 // Set the attributes type to Response
                 let mut uattributes = attributes.unwrap();
                 uattributes.set_type(UMessageType::UmessageTypeResponse);
                 // Send back result
-                block_on(
-                    rpc_server_callback
-                        .lock()
-                        .unwrap()
-                        .send(uuri, upayload, uattributes),
-                )
-                .unwrap();
+                // Clone necessary data for async block
+                let rpc_server_for_callback_clone = rpc_server_for_callback.clone();
+                let uuri_clone = uuri.clone();
+                let upayload_clone = upayload.clone();
+                let uattributes_clone = uattributes.clone();
+                task::spawn(async move {
+                    println!("Before calling send()");
+                    match rpc_server_for_callback_clone
+                        .send(uuri_clone, upayload_clone, uattributes_clone)
+                        .await
+                    {
+                        Ok(_) => {
+                            println!("Succeeded in sending back response")
+                        }
+                        Err(e) => {
+                            println!("Failed to send response back: {:?}", e);
+                            return;
+                        }
+                    }
+                    println!("After calling send()");
+                });
             }
             Err(ustatus) => {
                 println!("Internal Error: {:?}", ustatus);
@@ -111,8 +129,6 @@ async fn main() {
 
     println!("Register the listener...");
     rpc_server
-        .lock()
-        .unwrap()
         .register_rpc_listener(uuri, Box::new(callback))
         .await
         .unwrap();
