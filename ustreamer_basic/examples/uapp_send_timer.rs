@@ -21,6 +21,7 @@ use log::{error, info};
 use prost::Message;
 use std::time::Duration;
 use uprotocol_sdk::uprotocol::{u_payload, UAttributes};
+use uprotocol_sdk::uuid::builder::UUIDv8Builder;
 use uprotocol_sdk::{
     transport::datamodel::UTransport,
     uprotocol::{Remote, UAuthority, UEntity, UMessageType, UPayload, UResource, UUri},
@@ -55,6 +56,8 @@ async fn main() {
         .set_mode(Some(WhatAmI::Peer))
         .expect("Setting as Peer failed");
     let ulink = ULinkZenoh::new_from_config(config).await.unwrap();
+
+    let uuid_builder = UUIDv8Builder::new();
 
     let sink_uuri = UUri {
         authority: Some(UAuthority {
@@ -169,7 +172,7 @@ async fn main() {
         }),
     };
 
-    let timer_hour_attributes = UAttributes {
+    let mut timer_hour_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
         sink: Some(sink_uuri.clone()),
@@ -181,7 +184,7 @@ async fn main() {
         token: None,
     };
 
-    let timer_minute_attributes = UAttributes {
+    let mut timer_minute_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
         sink: Some(sink_uuri.clone()),
@@ -193,7 +196,7 @@ async fn main() {
         token: None,
     };
 
-    let timer_second_attributes = UAttributes {
+    let mut timer_second_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
         sink: Some(sink_uuri.clone()),
@@ -205,7 +208,7 @@ async fn main() {
         token: None,
     };
 
-    let timer_nanosecond_attributes = UAttributes {
+    let mut timer_nanosecond_attributes = UAttributes {
         id: None,
         r#type: i32::from(UMessageType::UmessageTypePublish),
         sink: Some(sink_uuri.clone()),
@@ -233,6 +236,8 @@ async fn main() {
             format: 0,
             data: Some(u_payload::Data::Value(hour_timer_buf)),
         };
+
+        timer_hour_attributes.id = Some(uuid_builder.build());
 
         match ulink
             .send(
@@ -267,6 +272,8 @@ async fn main() {
             data: Some(u_payload::Data::Value(minute_timer_buf)),
         };
 
+        timer_minute_attributes.id = Some(uuid_builder.build());
+
         match ulink
             .send(
                 timer_minute_uuri.clone(),
@@ -300,6 +307,8 @@ async fn main() {
             data: Some(u_payload::Data::Value(second_timer_buf)),
         };
 
+        timer_second_attributes.id = Some(uuid_builder.build());
+
         match ulink
             .send(
                 timer_second_uuri.clone(),
@@ -332,6 +341,8 @@ async fn main() {
             format: 0,
             data: Some(u_payload::Data::Value(nanosecond_timer_buf)),
         };
+
+        timer_nanosecond_attributes.id = Some(uuid_builder.build());
 
         match ulink
             .send(

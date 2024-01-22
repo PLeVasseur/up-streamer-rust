@@ -18,12 +18,15 @@ use crate::plugins::ingress_router::{IngressRouter, IngressRouterStartArgs};
 
 use async_std::channel::{self, Receiver, Sender};
 use log::{debug, error, info, trace, warn};
-use std::sync::Arc;
+use lru::LruCache;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
 use uprotocol_rust_transport_mqtt::UTransportMqtt;
 use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::{Remote, UAuthority, UMessage};
+use uprotocol_sdk::uprotocol::{Remote, UAuthority, UMessage, Uuid};
 use uprotocol_zenoh_rust::ULinkZenoh;
+use uuid::Uuid as UuidForHashing;
 use zenoh::scouting::WhatAmI;
 
 #[async_std::main]
@@ -37,6 +40,10 @@ async fn main() {
     let ustreamer_device_authority: UAuthority = UAuthority {
         remote: Some(Remote::Ip(ustreamer_device_ip)),
     };
+
+    // TODO: Should make the transmit_cache configurable
+    let mut transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>> =
+        Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
 
     let mut config = zenoh::config::Config::default();
     config
@@ -112,6 +119,7 @@ async fn main() {
         egress_queue_sender: egress_queue_sender.clone(),
         up_client_zenoh: up_client_zenoh.clone(),
         transports: up_clients.clone(),
+        transmit_cache: transmit_cache.clone(),
     };
 
     {
@@ -129,6 +137,7 @@ async fn main() {
         egress_queue_receiver: egress_queue_receiver.clone(),
         up_client_zenoh: up_client_zenoh.clone(),
         transports: up_clients.clone(),
+        transmit_cache: transmit_cache.clone(),
     };
 
     {

@@ -43,6 +43,7 @@ clap = "4.4.16"
 env_logger = "0.10.1"
 futures = "0.3.30"
 log = "0.4.20"
+lru = "0.12.1"
 prost = "0.12"
 prost-types = "0.12"
 retransmitter = { version = "0.1.5-SNAPSHOT", path = "router-plugins/retransmitters/retransmitter" }
@@ -61,6 +62,7 @@ uprotocol-sdk = { git = "https://github.com/PLeVasseur/uprotocol-rust_fork.git",
 uprotocol-rust-transport-sommr = { git = "https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git", branch = "feature/stand-in_for_uprotocol-rust-transport-sommr" }
 uprotocol-rust-transport-mqtt = { git = "https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git", branch = "feature/stand-in_for_uprotocol-rust-transport-mqtt" }
 uprotocol_zenoh_rust = { git = "https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git", branch = "feature/update_timeout" }
+uuid = "1.7.0"
 zenoh = { version = "0.10.1-rc", features = ["unstable"] }
 zenoh-core = { version = "0.10.1-rc"  }
 zenoh-plugin-trait = { version = "0.10.1-rc" }

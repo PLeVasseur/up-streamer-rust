@@ -17,6 +17,7 @@ use async_std::channel::{self, Receiver, Sender};
 use async_std::task;
 use futures::select;
 use log::{debug, error, info, trace, warn};
+use lru::LruCache;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::{
@@ -28,6 +29,7 @@ use uprotocol_sdk::uprotocol::{
     Remote, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,
 };
 use uprotocol_zenoh_rust::ULinkZenoh;
+use uuid::Uuid as UuidForHashing;
 use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction, ZenohPlugin};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
@@ -47,6 +49,7 @@ pub struct EgressRouterStartArgs {
     pub egress_queue_receiver: Receiver<UMessage>,
     pub up_client_zenoh: Arc<ULinkZenoh>,
     pub transports: Vec<Arc<dyn UTransport>>,
+    pub transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 }
 
 impl Plugin for EgressRouter {
@@ -64,6 +67,7 @@ impl Plugin for EgressRouter {
         let up_client_zenoh_clone = start_args.up_client_zenoh.clone();
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
         let egress_queue_receiver_clone = start_args.egress_queue_receiver.clone();
+        let transmit_cache_clone = start_args.transmit_cache.clone();
         async_std::task::spawn(run(
             runtime_clone,
             udevice_authority_clone,
@@ -71,6 +75,7 @@ impl Plugin for EgressRouter {
             up_client_zenoh_clone,
             egress_queue_sender_clone,
             egress_queue_receiver_clone,
+            transmit_cache_clone,
         ));
 
         // let ingress_queue_sender_plugin_clone = start_args.ingress_queue_sender.clone();
@@ -110,13 +115,15 @@ impl RunningPluginTrait for RunningPlugin {
 async fn egress_queue_consumer(
     mut receiver: Receiver<UMessage>,
     transports: Vec<Arc<dyn UTransport>>,
+    transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 ) {
+    let local_transmit_cache = transmit_cache.clone();
     while let Ok(msg) = receiver.recv().await {
         trace!("Egress Queue: Received msg: {:?}", msg);
 
         let source = match &msg.source {
             None => {
-                error!("CE pulled from Ingress Queue has no source UUri");
+                error!("CE pulled from Egress Queue has no source UUri");
                 return;
             }
             Some(source) => source,
@@ -124,7 +131,7 @@ async fn egress_queue_consumer(
 
         let payload = match &msg.payload {
             None => {
-                error!("CE pulled from Ingress Queue has no source UUri");
+                error!("CE pulled from Egress Queue has no source UUri");
                 return;
             }
             Some(payload) => payload,
@@ -132,10 +139,18 @@ async fn egress_queue_consumer(
 
         let attributes = match &msg.attributes {
             None => {
-                error!("CE pulled from Ingress Queue has no UAttributes");
+                error!("CE pulled from Egress Queue has no UAttributes");
                 return;
             }
             Some(attributes) => attributes,
+        };
+
+        let id = match &attributes.id {
+            None => {
+                error!("CE pulled from Egress Queue does not have an id (UUID)");
+                return;
+            }
+            Some(id) => id,
         };
 
         match UMessageType::try_from(attributes.r#type) {
@@ -150,6 +165,8 @@ async fn egress_queue_consumer(
                         // TODO: Would be good to be able to log _which_transport is succeeding or failing
                         Ok(_) => {
                             trace!("Forwarding message externally succeeded");
+                            let mut transmit_cache = local_transmit_cache.lock().unwrap();
+                            transmit_cache.put(UuidForHashing::from(id), true);
                         }
                         Err(status) => {
                             error!("Forwarding message externally failed: {:?}", status)
@@ -246,12 +263,14 @@ async fn run(
     up_client_zenoh: Arc<ULinkZenoh>,
     egress_queue_sender: Sender<UMessage>,
     egress_queue_receiver: Receiver<UMessage>,
+    transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 ) {
     let _ = env_logger::try_init();
 
     task::spawn(egress_queue_consumer(
         egress_queue_receiver.clone(),
         transports.clone(),
+        transmit_cache.clone(),
     ));
 
     let uuri_for_all_remote = UUri {

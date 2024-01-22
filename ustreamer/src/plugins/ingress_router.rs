@@ -17,6 +17,7 @@ use async_std::channel::{self, Receiver, Sender};
 use async_std::task;
 use futures::select;
 use log::{debug, error, info, trace, warn};
+use lru::LruCache;
 use prost::DecodeError;
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -29,6 +30,7 @@ use uprotocol_sdk::uprotocol::{
     Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,
 };
 use uprotocol_zenoh_rust::ULinkZenoh;
+use uuid::Uuid as UuidForHashing;
 use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction, ZenohPlugin};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
@@ -49,6 +51,7 @@ pub struct IngressRouterStartArgs {
     pub egress_queue_sender: Sender<UMessage>,
     pub up_client_zenoh: Arc<ULinkZenoh>,
     pub transports: Vec<Arc<dyn UTransport>>,
+    pub transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 }
 
 impl Plugin for IngressRouter {
@@ -66,6 +69,7 @@ impl Plugin for IngressRouter {
         let ingress_queue_sender_clone = start_args.ingress_queue_sender.clone();
         let ingress_queue_receiver_clone = start_args.ingress_queue_receiver.clone();
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
+        let transmit_cache_clone = start_args.transmit_cache.clone();
         async_std::task::spawn(run(
             udevice_authority,
             transports_clone,
@@ -73,6 +77,7 @@ impl Plugin for IngressRouter {
             ingress_queue_sender_clone,
             ingress_queue_receiver_clone,
             egress_queue_sender_clone,
+            transmit_cache_clone,
         ));
 
         let transports_plugin_clone = start_args.transports.clone();
@@ -198,6 +203,7 @@ fn transport_listener(
     udevice_authority: UAuthority,
     ingress_sender: Sender<UMessage>,
     egress_sender: Sender<UMessage>,
+    transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 ) {
     match result {
         Ok(message) => {
@@ -225,10 +231,29 @@ fn transport_listener(
                 }
             };
 
+            let id = match &attributes.id {
+                None => {
+                    error!("CE pulled from Egress Queue does not have an id (UUID)");
+                    return;
+                }
+                Some(id) => id,
+            };
+
             debug!(
                 "udevice_authority: {:?} Message sink authority: {:?}",
                 &udevice_authority, &authority
             );
+
+            let uuid_for_hashing = UuidForHashing::from(id);
+            if transmit_cache
+                .lock()
+                .unwrap()
+                .get(&uuid_for_hashing)
+                .is_some()
+            {
+                info!("Already forwarded CE with Uuid: {}", &uuid_for_hashing);
+                return;
+            }
 
             if *authority == udevice_authority {
                 info!("CE for this uDevice. Sending to ingress queue.");
@@ -261,6 +286,7 @@ async fn run(
     ingress_queue_sender: Sender<UMessage>,
     ingress_queue_receiver: Receiver<UMessage>,
     egress_queue_sender: Sender<UMessage>,
+    transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 ) {
     let _ = env_logger::try_init();
 
@@ -287,6 +313,7 @@ async fn run(
         let uuri_for_all_remote_clone = uuri_for_all_remote.clone();
         let ingress_queue_sender_clone = ingress_queue_sender.clone();
         let egress_queue_sender_clone = egress_queue_sender.clone();
+        let transmit_cache_clone = transmit_cache.clone();
         task::spawn(async move {
             let listener_closure = move |result: Result<UMessage, UStatus>| {
                 transport_listener(
@@ -294,6 +321,7 @@ async fn run(
                     udevice_uauthority_clone.clone(),
                     ingress_queue_sender_clone.clone(),
                     egress_queue_sender_clone.clone(),
+                    transmit_cache_clone.clone(),
                 );
             };
 
