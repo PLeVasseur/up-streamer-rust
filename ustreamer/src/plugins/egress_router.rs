@@ -16,7 +16,7 @@
 use async_std::channel::{self, Receiver, Sender};
 use async_std::task;
 use futures::select;
-use log::{debug, error, info, trace};
+use log::{debug, error, info, trace, warn};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::{
@@ -24,7 +24,10 @@ use std::sync::{
     Arc, Mutex,
 };
 use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::{Remote, UAuthority, UEntity, UMessage, UStatus, UUri};
+use uprotocol_sdk::uprotocol::{
+    Remote, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,
+};
+use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction, ZenohPlugin};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
@@ -39,9 +42,11 @@ pub struct EgressRouter {}
 
 pub struct EgressRouterStartArgs {
     pub runtime: Runtime,
+    pub udevice_authority: UAuthority,
     pub egress_queue_sender: Sender<UMessage>,
     pub egress_queue_receiver: Receiver<UMessage>,
-    // pub transports: Vec<Arc<dyn UTransport>>,
+    pub up_client_zenoh: Arc<ULinkZenoh>,
+    pub transports: Vec<Arc<dyn UTransport>>,
 }
 
 impl Plugin for EgressRouter {
@@ -53,9 +58,20 @@ impl Plugin for EgressRouter {
 
     // The first operation called by zenohd on the plugin
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
+        let runtime_clone = start_args.runtime.clone();
+        let udevice_authority_clone = start_args.udevice_authority.clone();
+        let transports_clone = start_args.transports.clone();
+        let up_client_zenoh_clone = start_args.up_client_zenoh.clone();
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
         let egress_queue_receiver_clone = start_args.egress_queue_receiver.clone();
-        async_std::task::spawn(run(egress_queue_sender_clone, egress_queue_receiver_clone));
+        async_std::task::spawn(run(
+            runtime_clone,
+            udevice_authority_clone,
+            transports_clone,
+            up_client_zenoh_clone,
+            egress_queue_sender_clone,
+            egress_queue_receiver_clone,
+        ));
 
         // let ingress_queue_sender_plugin_clone = start_args.ingress_queue_sender.clone();
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
@@ -91,16 +107,188 @@ impl RunningPluginTrait for RunningPlugin {
     }
 }
 
-async fn egress_queue_consumer(mut receiver: Receiver<UMessage>) {
+async fn egress_queue_consumer(
+    mut receiver: Receiver<UMessage>,
+    transports: Vec<Arc<dyn UTransport>>,
+) {
     while let Ok(msg) = receiver.recv().await {
         trace!("Egress Queue: Received msg: {:?}", msg);
 
-        // TODO: Add dispatching logic to point externally
+        let source = match &msg.source {
+            None => {
+                error!("CE pulled from Ingress Queue has no source UUri");
+                return;
+            }
+            Some(source) => source,
+        };
+
+        let payload = match &msg.payload {
+            None => {
+                error!("CE pulled from Ingress Queue has no source UUri");
+                return;
+            }
+            Some(payload) => payload,
+        };
+
+        let attributes = match &msg.attributes {
+            None => {
+                error!("CE pulled from Ingress Queue has no UAttributes");
+                return;
+            }
+            Some(attributes) => attributes,
+        };
+
+        match UMessageType::try_from(attributes.r#type) {
+            Ok(UMessageType::UmessageTypePublish) => {
+                trace!("UMessageTypePublish being routed externally");
+
+                for transport in &transports {
+                    match transport
+                        .send(source.clone(), payload.clone(), attributes.clone())
+                        .await
+                    {
+                        // TODO: Would be good to be able to log _which_transport is succeeding or failing
+                        Ok(_) => {
+                            trace!("Forwarding message externally succeeded");
+                        }
+                        Err(status) => {
+                            error!("Forwarding message externally failed: {:?}", status)
+                        }
+                    }
+                }
+            }
+            Ok(UMessageType::UmessageTypeRequest) => {
+                trace!("UMessageTypeRequest being routed externally");
+
+                // TODO: if Request, then...
+                //  => Need to consider how to get ahold of our up_client_zenoh as an RpcClient
+                //     so that we can call invoke_method() on it
+
+                warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
+                return;
+            }
+            Ok(UMessageType::UmessageTypeResponse) => {
+                trace!("UMessageTypeResponse being routed externally");
+
+                // TODO: if Response, then...
+                //  => Need to consider how to get ahold of our raw Zenoh session
+                //     so that we can look up the Zenoh Query to reply back on
+
+                warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
+                return;
+            }
+            Err(_) => {}
+            _ => {}
+        }
     }
 }
 
-async fn run(egress_queue_sender: Sender<UMessage>, egress_queue_receiver: Receiver<UMessage>) {
+fn transport_listener(
+    result: Result<UMessage, UStatus>,
+    udevice_authority: UAuthority,
+    egress_sender: Sender<UMessage>,
+    egress_receiver: Receiver<UMessage>,
+    transports: Vec<Arc<dyn UTransport>>,
+) {
+    match result {
+        Ok(message) => {
+            let attributes = match &message.attributes {
+                Some(attributes) => attributes,
+                None => {
+                    info!("CE is missing an authority. No need to be routed.");
+                    return;
+                }
+            };
+
+            let sink = match &attributes.sink {
+                Some(sink) => sink,
+                None => {
+                    info!("CE has attributes, but no authority. No need to be routed.");
+                    return;
+                }
+            };
+
+            let authority = match &sink.authority {
+                Some(authority) => authority,
+                None => {
+                    info!("CE has sink, but no authority. No need to be routed.");
+                    return;
+                }
+            };
+
+            debug!(
+                "udevice_authority: {:?} Message sink authority: {:?}",
+                &udevice_authority, &authority
+            );
+
+            if *authority != udevice_authority {
+                info!("CE intended to be sent to another uDevice. Sending to Egress Queue.");
+                let egress_sender_clone = egress_sender.clone();
+                task::spawn(async move {
+                    egress_sender_clone.send(message).await.unwrap();
+                });
+            }
+        }
+        Err(status) => {
+            error!(
+                "transport_listener returned UStatus: {:?} msg: {}",
+                status.get_code(),
+                status.message()
+            );
+        }
+    }
+}
+
+async fn run(
+    runtime: Runtime,
+    udevice_authority: UAuthority,
+    transports: Vec<Arc<dyn UTransport>>,
+    up_client_zenoh: Arc<ULinkZenoh>,
+    egress_queue_sender: Sender<UMessage>,
+    egress_queue_receiver: Receiver<UMessage>,
+) {
     let _ = env_logger::try_init();
 
-    let consumer_task = task::spawn(egress_queue_consumer(egress_queue_receiver));
+    task::spawn(egress_queue_consumer(
+        egress_queue_receiver.clone(),
+        transports.clone(),
+    ));
+
+    let uuri_for_all_remote = UUri {
+        authority: Some(UAuthority {
+            remote: Some(Remote::Name("*".to_string())),
+        }),
+        entity: Some(UEntity {
+            name: "*".to_string(),
+            id: None,
+            version_major: None,
+            version_minor: None,
+        }),
+        resource: None,
+    };
+    task::spawn(async move {
+        let listener_closure = move |result: Result<UMessage, UStatus>| {
+            transport_listener(
+                result,
+                udevice_authority.clone(),
+                egress_queue_sender.clone(),
+                egress_queue_receiver.clone(),
+                transports.clone(),
+            );
+        };
+
+        // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
+        let _registered_all_remote_listener_key = {
+            match up_client_zenoh
+                .register_listener(uuri_for_all_remote, Box::new(listener_closure))
+                .await
+            {
+                Ok(registered_key) => registered_key,
+                Err(status) => {
+                    error!("Failed to register listener: {:?}", status.get_code());
+                    return;
+                }
+            }
+        };
+    });
 }

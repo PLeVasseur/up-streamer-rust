@@ -148,11 +148,7 @@ async fn ingress_queue_consumer(
         match UMessageType::try_from(attributes.r#type) {
             Ok(UMessageType::UmessageTypePublish) => {
                 trace!("UMessageTypePublish being routed internally");
-                // TODO: Add logic here on how to call publish now on the CE we just received
-
-                // TODO: if Publish, then...
-                //  => Need to consider how to get ahold of our up_client_zenoh as a UTransport
-                //     so that we can call send() on it
+                // TODO:
                 //  ~ Another wrinkle: The way subscribers work in Zenoh, it seems like any subscribers on this uDevice
                 //    would already have received this CE
 
@@ -164,11 +160,12 @@ async fn ingress_queue_consumer(
                         trace!("Forwarding message internally over Zenoh succeeded");
                     }
                     Err(status) => {
-                        error!("Sending timer_hour failed: {:?}", status)
+                        error!(
+                            "Forwarding message internally over Zenoh failed: {:?}",
+                            status
+                        )
                     }
                 }
-
-                // up_client_zenoh.send(source.clone(), payload.clone(), attributes.clone());
             }
             Ok(UMessageType::UmessageTypeRequest) => {
                 trace!("UMessageTypeRequest being routed internally");
@@ -301,9 +298,8 @@ async fn run(
             };
 
             // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
-            let _registered_minute_timer_key = {
+            let _registered_all_remote_listener_key = {
                 match transport_clone
-                    // .register_listener(uuri_for_all_remote_clone, Box::new(transport_listener))
                     .register_listener(uuri_for_all_remote_clone, Box::new(listener_closure))
                     .await
                 {

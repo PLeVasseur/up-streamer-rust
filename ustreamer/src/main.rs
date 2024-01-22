@@ -124,8 +124,11 @@ async fn main() {
 
     let egress_queue_start_args = EgressRouterStartArgs {
         runtime: runtime.clone(),
+        udevice_authority: ustreamer_device_authority.clone(),
         egress_queue_sender: egress_queue_sender.clone(),
         egress_queue_receiver: egress_queue_receiver.clone(),
+        up_client_zenoh: up_client_zenoh.clone(),
+        transports: up_clients.clone(),
     };
 
     {
