@@ -25,10 +25,13 @@ use std::sync::{
     atomic::{AtomicBool, Ordering::Relaxed},
     Arc, Mutex,
 };
+use uprotocol_sdk::rpc::{RpcClient, RpcClientResult};
 use uprotocol_sdk::transport::datamodel::UTransport;
+use uprotocol_sdk::uprotocol::UPriority::UpriorityCs4;
 use uprotocol_sdk::uprotocol::{
     Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,
 };
+use uprotocol_sdk::uuid::builder::UUIDv8Builder;
 use uprotocol_zenoh_rust::ULinkZenoh;
 use uuid::Uuid as UuidForHashing;
 use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction, ZenohPlugin};
@@ -44,6 +47,7 @@ pub struct IngressRouter {}
 // zenoh_plugin_trait::declare_plugin!(IngressRouter);
 
 pub struct IngressRouterStartArgs {
+    pub uuid_builder: Arc<UUIDv8Builder>,
     pub runtime: Runtime,
     pub udevice_authority: UAuthority,
     pub ingress_queue_sender: Sender<UMessage>,
@@ -63,6 +67,7 @@ impl Plugin for IngressRouter {
 
     // The first operation called by zenohd on the plugin
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
+        let uuid_builder_clone = start_args.uuid_builder.clone();
         let udevice_authority = start_args.udevice_authority.clone();
         let transports_clone = start_args.transports.clone();
         let up_client_zenoh = start_args.up_client_zenoh.clone();
@@ -71,6 +76,7 @@ impl Plugin for IngressRouter {
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
         let transmit_cache_clone = start_args.transmit_cache.clone();
         async_std::task::spawn(run(
+            uuid_builder_clone,
             udevice_authority,
             transports_clone,
             up_client_zenoh,
@@ -120,10 +126,12 @@ impl RunningPluginTrait for RunningPlugin {
 }
 
 async fn ingress_queue_consumer(
-    mut receiver: Receiver<UMessage>,
+    uuid_builder: Arc<UUIDv8Builder>,
+    mut egress_queue_sender: Sender<UMessage>,
+    mut ingress_queue_receiver: Receiver<UMessage>,
     up_client_zenoh: Arc<ULinkZenoh>,
 ) {
-    while let Ok(msg) = receiver.recv().await {
+    while let Ok(msg) = ingress_queue_receiver.recv().await {
         trace!("Ingress Queue: Received msg: {:?}", msg);
 
         let source = match &msg.source {
@@ -178,9 +186,69 @@ async fn ingress_queue_consumer(
                 // TODO: if Request, then...
                 //  => Need to consider how to get ahold of our up_client_zenoh as an RpcClient
                 //     so that we can call invoke_method() on it
+                //  ~ Consider if we should spawn another task so as to not block this function's loop
 
-                warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
-                return;
+                let response_source = match &attributes.sink {
+                    None => {
+                        error!("CE with UmessageTypeRequest heard by our uDevice doesn't have sink. Should be caught in placement into Ingress Queue");
+                        return;
+                    }
+                    Some(response_source) => response_source,
+                };
+
+                let response_reqid = match &attributes.id {
+                    None => {
+                        error!("CE with UmessageTypeRequest heard by our uDevice doesn't have id. Should be caught in placement into Ingress Queue");
+                        return;
+                    }
+                    Some(response_reqid) => response_reqid,
+                };
+
+                // TODO: Note that since we only get a UPayload back from calling invoke_method
+                //  we do not have a corresponding `id` for the response
+                //  Unclear if that's a huge deal. For now can simply stamp with the id from uStreamer
+                let id = uuid_builder.build();
+
+                let response_attributes = UAttributes {
+                    id: Some(id),
+                    r#type: i32::from(UMessageType::UmessageTypePublish),
+                    sink: Some(source.clone()),
+                    priority: i32::from(UpriorityCs4), // TODO: What should the priority be?
+                    ttl: None,                         // TODO: What should the ttl be?
+                    permission_level: None,
+                    commstatus: None,
+                    reqid: Some(response_reqid.clone()),
+                    token: None,
+                };
+
+                let up_client_zenoh_clone = up_client_zenoh.clone();
+                let source_clone = source.clone();
+                let payload_clone = payload.clone();
+                let attributes_clone = attributes.clone();
+                let egress_queue_sender_clone = egress_queue_sender.clone();
+                task::spawn(async move {
+                    match up_client_zenoh_clone
+                        .invoke_method(source_clone.clone(), payload_clone, attributes_clone)
+                        .await
+                    {
+                        Ok(payload) => {
+
+                            // let response_msg = UMessage{
+                            //     source: Some(response_source.clone()),
+                            //     attributes: Some(response_attributes),
+                            //     payload: Some(payload),
+                            // };
+                            //
+                            // egress_queue_sender_clone.send(response_msg);
+
+                            // TODO: Put into egress_queue to be shipped back out
+                        }
+                        Err(_) => {}
+                    }
+                });
+
+                // warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
+                // return;
             }
             Ok(UMessageType::UmessageTypeResponse) => {
                 trace!("UMessageTypeResponse being routed internally");
@@ -280,6 +348,7 @@ fn transport_listener(
 }
 
 async fn run(
+    uuid_builder: Arc<UUIDv8Builder>,
     udevice_authority: UAuthority,
     transports: Vec<Arc<dyn UTransport>>,
     up_client_zenoh: Arc<ULinkZenoh>,
@@ -290,7 +359,10 @@ async fn run(
 ) {
     let _ = env_logger::try_init();
 
+    let egress_queue_sender_clone = egress_queue_sender.clone();
     task::spawn(ingress_queue_consumer(
+        uuid_builder,
+        egress_queue_sender_clone,
         ingress_queue_receiver,
         up_client_zenoh,
     ));

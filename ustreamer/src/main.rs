@@ -25,6 +25,7 @@ use uprotocol_rust_transport_mqtt::UTransportMqtt;
 use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::{Remote, UAuthority, UMessage, Uuid};
+use uprotocol_sdk::uuid::builder::UUIDv8Builder;
 use uprotocol_zenoh_rust::ULinkZenoh;
 use uuid::Uuid as UuidForHashing;
 use zenoh::scouting::WhatAmI;
@@ -34,6 +35,8 @@ async fn main() {
     env_logger::try_init().unwrap_or_default();
 
     println!("Starting uStreamer!");
+
+    let uuid_builder = Arc::new(UUIDv8Builder::new());
 
     // TODO: Add configuration of local UAuthority
     let ustreamer_device_ip: Vec<u8> = vec![192, 168, 3, 100];
@@ -112,6 +115,7 @@ async fn main() {
         channel::bounded::<UMessage>(EGRESS_QUEUE_CAPACITY);
 
     let ingress_queue_start_args = IngressRouterStartArgs {
+        uuid_builder: uuid_builder.clone(),
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
         ingress_queue_sender: ingress_queue_sender.clone(),
@@ -131,6 +135,7 @@ async fn main() {
     trace!("uStreamer: started IngressRouter");
 
     let egress_queue_start_args = EgressRouterStartArgs {
+        uuid_builder: uuid_builder.clone(),
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
         egress_queue_sender: egress_queue_sender.clone(),

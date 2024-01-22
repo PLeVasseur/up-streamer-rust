@@ -28,6 +28,7 @@ use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::{
     Remote, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,
 };
+use uprotocol_sdk::uuid::builder::UUIDv8Builder;
 use uprotocol_zenoh_rust::ULinkZenoh;
 use uuid::Uuid as UuidForHashing;
 use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction, ZenohPlugin};
@@ -43,6 +44,7 @@ pub struct EgressRouter {}
 // zenoh_plugin_trait::declare_plugin!(EgressRouter);
 
 pub struct EgressRouterStartArgs {
+    pub uuid_builder: Arc<UUIDv8Builder>,
     pub runtime: Runtime,
     pub udevice_authority: UAuthority,
     pub egress_queue_sender: Sender<UMessage>,
