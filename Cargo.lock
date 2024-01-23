@@ -3019,24 +3019,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "ustreamer_basic"
-version = "0.1.5-SNAPSHOT"
-dependencies = [
- "async-std",
- "chrono",
- "env_logger",
- "example-proto",
- "log",
- "prost",
- "uprotocol-rust-transport-mqtt",
- "uprotocol-rust-transport-sommr",
- "uprotocol-sdk",
- "uprotocol_zenoh_rust",
- "zenoh",
- "zenoh-plugin-trait",
-]
-
-[[package]]
 name = "usubscription"
 version = "0.1.0"
 
