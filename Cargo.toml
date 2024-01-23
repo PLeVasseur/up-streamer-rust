@@ -13,10 +13,6 @@
 resolver = "2"
 members = [
     "example-utils/example-proto",
-    "router-plugins/plugins/transport-router-zenoh-plugin",
-    "router-plugins/plugins/transport-router-someip-plugin",
-    "router-plugins/retransmitters/retransmitter",
-    "router-plugins/retransmitters/retransmitter-zenoh",
     "ustreamer",
     "ustreamer_basic",
     "udiscovery",

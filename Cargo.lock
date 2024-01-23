@@ -2081,26 +2081,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c08c74e62047bb2de4ff487b251e4a92e24f48745648451635cec7d591162d9f"
 
 [[package]]
-name = "retransmitter"
-version = "0.1.5-SNAPSHOT"
-dependencies = [
- "async-trait",
- "uprotocol-sdk",
-]
-
-[[package]]
-name = "retransmitter-zenoh"
-version = "0.1.5-SNAPSHOT"
-dependencies = [
- "async-trait",
- "log",
- "retransmitter",
- "uprotocol-sdk",
- "uprotocol_zenoh_rust",
- "zenoh",
-]
-
-[[package]]
 name = "ring"
 version = "0.16.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2799,31 +2779,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "transport-router-someip-plugin"
-version = "0.1.0"
-
-[[package]]
-name = "transport-router-zenoh-plugin"
-version = "0.1.5-SNAPSHOT"
-dependencies = [
- "async-std",
- "clap",
- "env_logger",
- "futures",
- "log",
- "prost",
- "retransmitter",
- "retransmitter-zenoh",
- "serde_json",
- "uprotocol-sdk",
- "zenoh",
- "zenoh-core",
- "zenoh-plugin-trait",
- "zenoh-result",
- "zenoh-util",
-]
-
-[[package]]
 name = "tungstenite"
 version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3051,7 +3006,6 @@ dependencies = [
  "lru",
  "prost",
  "strum",
- "transport-router-zenoh-plugin",
  "uprotocol-rust-transport-mqtt",
  "uprotocol-rust-transport-sommr",
  "uprotocol-sdk",
@@ -3074,7 +3028,6 @@ dependencies = [
  "example-proto",
  "log",
  "prost",
- "transport-router-zenoh-plugin",
  "uprotocol-rust-transport-mqtt",
  "uprotocol-rust-transport-sommr",
  "uprotocol-sdk",
