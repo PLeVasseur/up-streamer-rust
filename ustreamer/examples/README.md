@@ -65,7 +65,7 @@ this is not correct.
 #### Run the uStreamer
 
 ```bash
-cargo run --bin ustreamer_basic 
+cargo run --bin ustreamer 
 ```
 
 #### In another terminal run the example uApp RPC server
