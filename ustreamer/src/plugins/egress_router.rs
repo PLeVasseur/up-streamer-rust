@@ -196,6 +196,8 @@ async fn egress_queue_consumer(
                     transmit_cache.put(UuidForHashing::from(id), true);
                 }
 
+                // TODO: Should ask @Steven Hartley about this:
+                //  I'd like to know if we should attempt to retransmit on those transports that have failed
                 for transport in &transports {
                     match transport
                         .send(source.clone(), payload.clone(), attributes.clone())
@@ -210,13 +212,6 @@ async fn egress_queue_consumer(
                         }
                     }
                 }
-
-                // TODO: have to disambiguate the case of:
-                //  1. A response intended to be sent out to the world that we generated internally
-                //  2. A response
-
-                // warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
-                // return;
             }
             Err(_) => {}
             _ => {}

@@ -183,11 +183,6 @@ async fn ingress_queue_consumer(
             Ok(UMessageType::UmessageTypeRequest) => {
                 trace!("UMessageTypeRequest being routed internally");
 
-                // TODO: if Request, then...
-                //  => Need to consider how to get ahold of our up_client_zenoh as an RpcClient
-                //     so that we can call invoke_method() on it
-                //  ~ Consider if we should spawn another task so as to not block this function's loop
-
                 let response_source = match attributes.sink {
                     None => {
                         error!("CE with UmessageTypeRequest heard by our uDevice doesn't have sink. Should be caught in placement into Ingress Queue");
@@ -239,8 +234,8 @@ async fn ingress_queue_consumer(
                     trace!("Inside of async closure to call invoke_method");
 
                     match up_client_zenoh_clone
-                        // TODO: I think this is a hack, right? Shouldn't invoke_method create a Zenoh KeyExpr
-                        //  based on the sink, not the source?
+                        // Note that in order to be "seen" by the RpcServer::register_rpc_listener() on our device
+                        // we need to use the sink we were given as the topic
                         .invoke_method(
                             response_source.clone(),
                             payload_clone.clone(),
