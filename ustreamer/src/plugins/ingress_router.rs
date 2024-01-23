@@ -423,13 +423,12 @@ async fn run(
 
             // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
             let _registered_all_remote_listener_key = {
-                match transport_clone.up_client
+                match transport_clone
+                    .up_client
                     .register_listener(uuri_for_all_remote_clone, Box::new(listener_closure))
                     .await
                 {
-                    Ok(registered_key) => {
-                        registered_key
-                    },
+                    Ok(registered_key) => registered_key,
                     Err(status) => {
                         error!("Failed to register listener: {:?}", status.get_code());
                         return;

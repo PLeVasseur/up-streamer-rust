@@ -162,13 +162,17 @@ async fn egress_queue_consumer(
                 trace!("UMessageTypePublish being routed externally");
 
                 for transport in &transports {
-                    match transport.up_client
+                    match transport
+                        .up_client
                         .send(source.clone(), payload.clone(), attributes.clone())
                         .await
                     {
                         // TODO: Would be good to be able to log _which_ transport is succeeding or failing
                         Ok(_) => {
-                            trace!("Forwarding message externally succeeded on transport: {}", &transport.tag.to_string());
+                            trace!(
+                                "Forwarding message externally succeeded on transport: {}",
+                                &transport.tag.to_string()
+                            );
                             let mut transmit_cache = local_transmit_cache.lock().unwrap();
                             transmit_cache.put(UuidForHashing::from(id), true);
                         }
@@ -200,13 +204,17 @@ async fn egress_queue_consumer(
                 // TODO: Should ask @Steven Hartley about this:
                 //  I'd like to know if we should attempt to retransmit on every transport that has failed
                 for transport in &transports {
-                    match transport.up_client
+                    match transport
+                        .up_client
                         .send(source.clone(), payload.clone(), attributes.clone())
                         .await
                     {
                         // TODO: Would be good to be able to log _which_ transport is succeeding or failing
                         Ok(_) => {
-                            trace!("Forwarding response externally succeeded on transport: {}", &transport.tag.to_string());
+                            trace!(
+                                "Forwarding response externally succeeded on transport: {}",
+                                &transport.tag.to_string()
+                            );
                         }
                         Err(status) => {
                             error!("Forwarding response externally failed on transport: {} details: {:?}", &transport.tag.to_string(), status)

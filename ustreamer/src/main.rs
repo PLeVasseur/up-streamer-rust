@@ -100,10 +100,12 @@ async fn main() {
         up_client_mqtt.clone() as Arc<dyn UTransport>;
     let up_clients_tagged: TransportVec = vec![
         TaggedTransport {
-            up_client: up_client_sommr_transport_tagged, tag: TransportType::UpClientSommr
+            up_client: up_client_sommr_transport_tagged,
+            tag: TransportType::UpClientSommr,
         },
         TaggedTransport {
-            up_client: up_client_mqtt_transport_tagged, tag: TransportType::UpClientMqtt
+            up_client: up_client_mqtt_transport_tagged,
+            tag: TransportType::UpClientMqtt,
         },
     ];
 

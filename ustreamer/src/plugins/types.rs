@@ -6,7 +6,7 @@ use uprotocol_sdk::transport::datamodel::UTransport;
 pub enum TransportType {
     UpClientZenoh,
     UpClientSommr,
-    UpClientMqtt
+    UpClientMqtt,
 }
 
 #[derive(Clone)]
