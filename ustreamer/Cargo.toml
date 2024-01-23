@@ -18,6 +18,7 @@ futures = { workspace = true }
 log = { workspace = true }
 lru = { workspace = true }
 prost = { workspace = true }
+strum = { workspace = true }
 transport-router-zenoh-plugin = { workspace = true }
 uprotocol-sdk = { workspace = true }
 uprotocol-rust-transport-mqtt = { workspace = true }

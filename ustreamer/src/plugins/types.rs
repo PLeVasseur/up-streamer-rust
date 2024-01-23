@@ -1,10 +1,18 @@
 use std::sync::Arc;
+use strum::EnumString;
 use uprotocol_sdk::transport::datamodel::UTransport;
 
-enum TransportType {
+#[derive(Clone, Debug, EnumString, strum::Display)]
+pub enum TransportType {
     UpClientZenoh,
     UpClientSommr,
     UpClientMqtt
 }
 
-type TransportVec = Vec<(TransportType, Arc<dyn UTransport>)>;
+#[derive(Clone)]
+pub struct TaggedTransport {
+    pub up_client: Arc<dyn UTransport>,
+    pub tag: TransportType,
+}
+
+pub type TransportVec = Vec<TaggedTransport>;

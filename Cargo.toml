@@ -49,6 +49,7 @@ prost-types = "0.12"
 retransmitter = { version = "0.1.5-SNAPSHOT", path = "router-plugins/retransmitters/retransmitter" }
 retransmitter-zenoh = { version = "0.1.5-SNAPSHOT", path = "router-plugins/retransmitters/retransmitter-zenoh" }
 serde_json = "1.0.111"
+strum = { version = "0.25", features = ["derive"] }
 transport-router-zenoh-plugin = { version = "0.1.5-SNAPSHOT", path = "router-plugins/plugins/transport-router-zenoh-plugin" }
 # upstream
 # uprotocol-sdk = { git = "https://github.com/eclipse-uprotocol/uprotocol-rust.git", branch = "main" }

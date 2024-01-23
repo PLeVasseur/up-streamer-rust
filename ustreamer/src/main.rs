@@ -15,6 +15,7 @@ mod plugins;
 
 use crate::plugins::egress_router::{EgressRouter, EgressRouterStartArgs};
 use crate::plugins::ingress_router::{IngressRouter, IngressRouterStartArgs};
+use crate::plugins::types::*;
 
 use async_std::channel::{self, Receiver, Sender};
 use log::{debug, error, info, trace, warn};
@@ -93,15 +94,17 @@ async fn main() {
     //  Get some feedback on this from @Steven Hartley
     // let up_client_zenoh_transport: Arc<dyn UTransport> =
     //     up_client_zenoh.clone() as Arc<dyn UTransport>;
-    let up_client_sommr_transport: Arc<dyn UTransport> =
+    let up_client_sommr_transport_tagged: Arc<dyn UTransport> =
         up_client_sommr.clone() as Arc<dyn UTransport>;
-    let up_client_mqtt_transport: Arc<dyn UTransport> =
+    let up_client_mqtt_transport_tagged: Arc<dyn UTransport> =
         up_client_mqtt.clone() as Arc<dyn UTransport>;
-
-    let up_clients: Vec<Arc<dyn UTransport>> = vec![
-        // up_client_zenoh_transport,
-        up_client_sommr_transport,
-        up_client_mqtt_transport,
+    let up_clients_tagged: TransportVec = vec![
+        TaggedTransport {
+            up_client: up_client_sommr_transport_tagged, tag: TransportType::UpClientSommr
+        },
+        TaggedTransport {
+            up_client: up_client_mqtt_transport_tagged, tag: TransportType::UpClientMqtt
+        },
     ];
 
     // TODO: Add ability to configure this
@@ -122,7 +125,7 @@ async fn main() {
         ingress_queue_receiver: ingress_queue_receiver.clone(),
         egress_queue_sender: egress_queue_sender.clone(),
         up_client_zenoh: up_client_zenoh.clone(),
-        transports: up_clients.clone(),
+        transports: up_clients_tagged.clone(),
         transmit_cache: transmit_cache.clone(),
     };
 
@@ -141,7 +144,7 @@ async fn main() {
         egress_queue_sender: egress_queue_sender.clone(),
         egress_queue_receiver: egress_queue_receiver.clone(),
         up_client_zenoh: up_client_zenoh.clone(),
-        transports: up_clients.clone(),
+        transports: up_clients_tagged.clone(),
         transmit_cache: transmit_cache.clone(),
     };
 

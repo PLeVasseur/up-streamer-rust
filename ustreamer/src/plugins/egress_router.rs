@@ -13,6 +13,8 @@
 
 #![recursion_limit = "256"]
 
+use crate::plugins::types::*;
+
 use async_std::channel::{self, Receiver, Sender};
 use async_std::task;
 use futures::select;
@@ -50,7 +52,7 @@ pub struct EgressRouterStartArgs {
     pub egress_queue_sender: Sender<UMessage>,
     pub egress_queue_receiver: Receiver<UMessage>,
     pub up_client_zenoh: Arc<ULinkZenoh>,
-    pub transports: Vec<Arc<dyn UTransport>>,
+    pub transports: TransportVec,
     pub transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 }
 
@@ -116,7 +118,7 @@ impl RunningPluginTrait for RunningPlugin {
 
 async fn egress_queue_consumer(
     mut receiver: Receiver<UMessage>,
-    transports: Vec<Arc<dyn UTransport>>,
+    transports: TransportVec,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 ) {
     let local_transmit_cache = transmit_cache.clone();
@@ -160,18 +162,18 @@ async fn egress_queue_consumer(
                 trace!("UMessageTypePublish being routed externally");
 
                 for transport in &transports {
-                    match transport
+                    match transport.up_client
                         .send(source.clone(), payload.clone(), attributes.clone())
                         .await
                     {
                         // TODO: Would be good to be able to log _which_ transport is succeeding or failing
                         Ok(_) => {
-                            trace!("Forwarding message externally succeeded");
+                            trace!("Forwarding message externally succeeded on transport: {}", &transport.tag.to_string());
                             let mut transmit_cache = local_transmit_cache.lock().unwrap();
                             transmit_cache.put(UuidForHashing::from(id), true);
                         }
                         Err(status) => {
-                            error!("Forwarding message externally failed: {:?}", status)
+                            error!("Forwarding message externally failed on transport: {} details: {:?}", &transport.tag.to_string(), status)
                         }
                     }
                 }
@@ -179,12 +181,11 @@ async fn egress_queue_consumer(
             Ok(UMessageType::UmessageTypeRequest) => {
                 trace!("UMessageTypeRequest being routed externally");
 
-                // TODO: if Request, then...
-                //  => Need to consider how to get ahold of our up_client_zenoh as an RpcClient
-                //     so that we can call invoke_method() on it
+                // TODO: Need to make the send() here on each transport
+                //  Need to keep track of the id (which will then become the reqid on the Response we get back)
+                //   so that we can response appropriately
 
                 warn!("CE Egress Queue external Request not implemented yet");
-                // return;
             }
             Ok(UMessageType::UmessageTypeResponse) => {
                 trace!("UMessageTypeResponse being routed externally");
@@ -197,18 +198,18 @@ async fn egress_queue_consumer(
                 }
 
                 // TODO: Should ask @Steven Hartley about this:
-                //  I'd like to know if we should attempt to retransmit on those transports that have failed
+                //  I'd like to know if we should attempt to retransmit on every transport that has failed
                 for transport in &transports {
-                    match transport
+                    match transport.up_client
                         .send(source.clone(), payload.clone(), attributes.clone())
                         .await
                     {
                         // TODO: Would be good to be able to log _which_ transport is succeeding or failing
                         Ok(_) => {
-                            trace!("Forwarding response externally succeeded");
+                            trace!("Forwarding response externally succeeded on transport: {}", &transport.tag.to_string());
                         }
                         Err(status) => {
-                            error!("Forwarding response externally failed: {:?}", status)
+                            error!("Forwarding response externally failed on transport: {} details: {:?}", &transport.tag.to_string(), status)
                         }
                     }
                 }
@@ -224,7 +225,7 @@ fn transport_listener(
     udevice_authority: UAuthority,
     egress_sender: Sender<UMessage>,
     egress_receiver: Receiver<UMessage>,
-    transports: Vec<Arc<dyn UTransport>>,
+    transports: TransportVec,
 ) {
     match result {
         Ok(message) => {
@@ -278,7 +279,7 @@ fn transport_listener(
 async fn run(
     runtime: Runtime,
     udevice_authority: UAuthority,
-    transports: Vec<Arc<dyn UTransport>>,
+    transports: TransportVec,
     up_client_zenoh: Arc<ULinkZenoh>,
     egress_queue_sender: Sender<UMessage>,
     egress_queue_receiver: Receiver<UMessage>,

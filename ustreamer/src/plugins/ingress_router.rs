@@ -13,6 +13,8 @@
 
 #![recursion_limit = "256"]
 
+use crate::plugins::types::*;
+
 use async_std::channel::{self, Receiver, Sender};
 use async_std::task;
 use futures::select;
@@ -54,7 +56,7 @@ pub struct IngressRouterStartArgs {
     pub ingress_queue_receiver: Receiver<UMessage>,
     pub egress_queue_sender: Sender<UMessage>,
     pub up_client_zenoh: Arc<ULinkZenoh>,
-    pub transports: Vec<Arc<dyn UTransport>>,
+    pub transports: TransportVec,
     pub transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 }
 
@@ -102,7 +104,7 @@ impl Plugin for IngressRouter {
 struct RunningPluginInner {
     runtime: Runtime,
     udevice_authority: UAuthority,
-    transports: Vec<Arc<dyn UTransport>>,
+    transports: TransportVec,
 }
 // The RunningPlugin struct implementing the RunningPluginTrait trait
 #[derive(Clone)]
@@ -210,6 +212,9 @@ async fn ingress_queue_consumer(
 
                 debug!("id for response: {:?}", &id);
 
+                // TODO: BLOCKER: Currently we don't have UAttributes being returned from invoke_method(), so we fill in what
+                //  we can. This is a problem I noted to @Steven Hartley and will likely drive some change to get
+                //  attributes back from invoke_method as well
                 let response_attributes = UAttributes {
                     id: Some(id),
                     r#type: i32::from(UMessageType::UmessageTypeResponse),
@@ -369,7 +374,7 @@ fn transport_listener(
 async fn run(
     uuid_builder: Arc<UUIDv8Builder>,
     udevice_authority: UAuthority,
-    transports: Vec<Arc<dyn UTransport>>,
+    transports: TransportVec,
     up_client_zenoh: Arc<ULinkZenoh>,
     ingress_queue_sender: Sender<UMessage>,
     ingress_queue_receiver: Receiver<UMessage>,
@@ -418,11 +423,13 @@ async fn run(
 
             // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
             let _registered_all_remote_listener_key = {
-                match transport_clone
+                match transport_clone.up_client
                     .register_listener(uuri_for_all_remote_clone, Box::new(listener_closure))
                     .await
                 {
-                    Ok(registered_key) => registered_key,
+                    Ok(registered_key) => {
+                        registered_key
+                    },
                     Err(status) => {
                         error!("Failed to register listener: {:?}", status.get_code());
                         return;
