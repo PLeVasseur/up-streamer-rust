@@ -286,6 +286,8 @@ async fn ingress_queue_consumer(
             _ => {}
         }
     }
+
+    error!("Something bad happened with the sender to the Ingress Queue, have to stop listening.");
 }
 
 fn transport_listener(

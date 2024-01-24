@@ -226,6 +226,8 @@ async fn egress_queue_consumer(
             _ => {}
         }
     }
+
+    error!("Something bad happened with the sender to the Egress Queue, have to stop listening.");
 }
 
 fn transport_listener(
