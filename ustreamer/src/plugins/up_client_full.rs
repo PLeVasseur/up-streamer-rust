@@ -50,12 +50,14 @@ pub trait UpClientFull: UTransport + RpcServer + RpcClient {}
 impl<T> UpClientFull for T where T: UTransport + RpcServer + RpcClient {}
 
 pub struct UpClientPluginStartArgs {
+    pub host_transport: TransportType,
+    pub transport_type: TransportType,
     pub up_client: RefCell<Option<Box<dyn UpClientFull>>>,
     pub runtime: Runtime,
     pub udevice_authority: UAuthority,
-    pub egress_queue_sender: Sender<UMessage>,
-    pub ingress_queue_sender: Sender<UMessage>,
-    pub transmit_request_queue_receiver: Receiver<UMessage>,
+    pub egress_queue_sender: Sender<UMessageWithRouting>,
+    pub ingress_queue_sender: Sender<UMessageWithRouting>,
+    pub transmit_request_queue_receiver: Receiver<UMessageWithRouting>,
     pub transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 }
 
@@ -80,6 +82,8 @@ impl Plugin for UpClientPlugin {
             return Err(Error::try_from(ValidationError::new("No uP Client provided")).unwrap());
         };
 
+        let host_transport_clone = start_args.host_transport.clone();
+        let transport_type_clone = start_args.transport_type.clone();
         let runtime_clone = start_args.runtime.clone();
         let udevice_authority_clone = start_args.udevice_authority.clone();
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
@@ -88,6 +92,8 @@ impl Plugin for UpClientPlugin {
             start_args.transmit_request_queue_receiver.clone();
         let transmit_cache_clone = start_args.transmit_cache.clone();
         async_std::task::spawn(run(
+            host_transport_clone,
+            transport_type_clone,
             runtime_clone,
             udevice_authority_clone,
             egress_queue_sender_clone,
@@ -131,17 +137,169 @@ impl RunningPluginTrait for RunningPlugin {
     }
 }
 
-async fn transmit_queue_request_consumer<T>(
-    mut receiver: Receiver<UMessage>,
+async fn transmit_queue_request_consumer(
+    transport_type: TransportType,
+    mut receiver: Receiver<UMessageWithRouting>,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
-    up_client: T,
-) where
-    T: UTransport + RpcClient + RpcServer,
-{
+    up_client: Box<dyn UpClientFull>,
+) {
     let local_transmit_cache = transmit_cache.clone();
 
-    while let Ok(msg) = receiver.recv().await {
-        trace!("Transmit Request Queue: Received msg: {:?}", msg);
+    while let Ok(message) = receiver.recv().await {
+        trace!(
+            "Transmit Request Queue: {:?}: Received msg: {:?}",
+            &transport_type,
+            &message
+        );
+
+        let msg = message.msg;
+
+        let source = match &msg.source {
+            None => {
+                error!("CE pulled from Ingress Queue has no source UUri");
+                return;
+            }
+            Some(source) => source,
+        };
+
+        let payload = match &msg.payload {
+            None => {
+                error!("CE pulled from Ingress Queue has no source UUri");
+                return;
+            }
+            Some(payload) => payload,
+        };
+
+        let attributes = match &msg.attributes {
+            None => {
+                error!("CE pulled from Ingress Queue has no UAttributes");
+                return;
+            }
+            Some(attributes) => attributes.clone(),
+        };
+
+        match UMessageType::try_from(attributes.r#type) {
+            Ok(UMessageType::UmessageTypePublish) => {
+                trace!("UMessageTypePublish being routed internally");
+
+                match up_client
+                    .send(source.clone(), payload.clone(), attributes.clone())
+                    .await
+                {
+                    Ok(_) => {
+                        trace!("Forwarding message over {:?} successfully", &transport_type);
+                    }
+                    Err(status) => {
+                        error!(
+                            "Forwarding message internally over {:?} failed: {:?}",
+                            &transport_type, status
+                        )
+                    }
+                }
+            }
+            // Ok(UMessageType::UmessageTypeRequest) => {
+            //     trace!("UMessageTypeRequest being routed internally");
+            //
+            //     let response_source = match attributes.sink {
+            //         None => {
+            //             error!("CE with UmessageTypeRequest heard by our uDevice doesn't have sink. Should be caught in placement into Ingress Queue");
+            //             return;
+            //         }
+            //         Some(ref response_source) => response_source.clone(),
+            //     };
+            //
+            //     debug!("response_source: {:?}", &response_source);
+            //
+            //     let response_reqid = match attributes.id {
+            //         None => {
+            //             error!("CE with UmessageTypeRequest heard by our uDevice doesn't have id. Should be caught in placement into Ingress Queue");
+            //             return;
+            //         }
+            //         Some(ref response_reqid) => response_reqid.clone(),
+            //     };
+            //
+            //     debug!("response_reqid: {:?}", &response_reqid);
+            //
+            //     // TODO: Note that since we only get a UPayload back from calling invoke_method
+            //     //  we do not have a corresponding `id` for the response
+            //     //  Unclear if that's a huge deal. For now can simply stamp with the id from uStreamer
+            //     let id = uuid_builder.build();
+            //
+            //     debug!("id for response: {:?}", &id);
+            //
+            //     // TODO: BLOCKER: Currently we don't have UAttributes being returned from invoke_method(), so we fill in what
+            //     //  we can. This is a problem I noted to @Steven Hartley and will likely drive some change to get
+            //     //  attributes back from invoke_method as well
+            //     let response_attributes = UAttributes {
+            //         id: Some(id),
+            //         r#type: i32::from(UMessageType::UmessageTypeResponse),
+            //         sink: Some(source.clone()),
+            //         priority: i32::from(UpriorityCs4), // TODO: What should the priority be?
+            //         ttl: None,                         // TODO: What should the ttl be?
+            //         permission_level: None,
+            //         commstatus: None,
+            //         reqid: Some(response_reqid.clone()),
+            //         token: None,
+            //     };
+            //
+            //     debug!("response_attributes: {:?}", &response_attributes);
+            //
+            //     let up_client_zenoh_clone = up_client_zenoh.clone();
+            //     let source_clone = source.clone();
+            //     let payload_clone = payload.clone();
+            //     let attributes_clone = attributes.clone();
+            //     let egress_queue_sender_clone = egress_queue_sender.clone();
+            //     let response_attributes_clone = response_attributes.clone();
+            //     task::spawn(async move {
+            //         trace!("Inside of async closure to call invoke_method");
+            //
+            //         match up_client_zenoh_clone
+            //             // Note that in order to be "seen" by the RpcServer::register_rpc_listener() on our device
+            //             // we need to use the sink we were given as the topic
+            //             .invoke_method(
+            //                 response_source.clone(),
+            //                 payload_clone.clone(),
+            //                 attributes_clone.clone(),
+            //             )
+            //             .await
+            //         {
+            //             Ok(payload) => {
+            //                 trace!("Received result back from RpcServer");
+            //
+            //                 let response_msg = UMessage {
+            //                     source: Some(response_source.clone()),
+            //                     attributes: Some(response_attributes_clone),
+            //                     payload: Some(payload),
+            //                 };
+            //
+            //                 egress_queue_sender_clone.send(response_msg).await.unwrap();
+            //
+            //                 trace!("Sent response_msg to Egress Queue");
+            //             }
+            //             Err(e) => {
+            //                 println!("invoke_method failed: {:?}", e)
+            //             }
+            //         }
+            //
+            //         trace!("After invoke_method");
+            //     });
+            //
+            //     // warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
+            //     // return;
+            // }
+            // Ok(UMessageType::UmessageTypeResponse) => {
+            //     trace!("UMessageTypeResponse being routed internally");
+            //
+            //     // TODO: if Response, then...
+            //     //  => Need to consider how to get ahold of our raw Zenoh session
+            //     //     so that we can look up the Zenoh Query to reply back on
+            //
+            //     warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
+            //     return;
+            // }
+            Err(_) => {}
+            _ => {}
+        }
 
         // TODO: How do we get access to the UpClientPlugin? Just take ownership?
 
@@ -156,10 +314,13 @@ async fn transmit_queue_request_consumer<T>(
 
 fn register_all_remote_listener(
     result: Result<UMessage, UStatus>,
+    transport_type: TransportType,
     udevice_authority: UAuthority,
-    egress_sender: Sender<UMessage>,
-    ingress_sender: Sender<UMessage>,
+    egress_sender: Sender<UMessageWithRouting>,
+    ingress_sender: Sender<UMessageWithRouting>,
 ) {
+    trace!("register_all_remote_listener");
+
     match result {
         Ok(message) => {
             let attributes = match &message.attributes {
@@ -195,13 +356,23 @@ fn register_all_remote_listener(
                 info!("CE intended to be sent to another uDevice. Sending to Egress Queue.");
                 let egress_sender_clone = egress_sender.clone();
                 task::spawn(async move {
-                    egress_sender_clone.send(message).await.unwrap();
+                    let routing_message = UMessageWithRouting {
+                        msg: message,
+                        src: transport_type,
+                        dst: TransportType::Multicast,
+                    };
+                    egress_sender_clone.send(routing_message).await.unwrap();
                 });
             } else {
                 info!("CE intended for this uDevice. Sending to Ingress Queue.");
                 let ingress_sender_clone = ingress_sender.clone();
                 task::spawn(async move {
-                    ingress_sender_clone.send(message).await.unwrap();
+                    let routing_message = UMessageWithRouting {
+                        msg: message,
+                        src: transport_type,
+                        dst: TransportType::Multicast,
+                    };
+                    ingress_sender_clone.send(routing_message).await.unwrap();
                 });
             }
         }
@@ -216,11 +387,13 @@ fn register_all_remote_listener(
 }
 
 async fn run(
+    host_transport: TransportType,
+    transport_type: TransportType,
     runtime: Runtime,
     udevice_authority: UAuthority,
-    egress_queue_sender: Sender<UMessage>,
-    ingress_queue_sender: Sender<UMessage>,
-    transmit_request_queue_receiver: Receiver<UMessage>,
+    egress_queue_sender: Sender<UMessageWithRouting>,
+    ingress_queue_sender: Sender<UMessageWithRouting>,
+    transmit_request_queue_receiver: Receiver<UMessageWithRouting>,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
     up_client: Box<dyn UpClientFull>,
 ) {
@@ -238,34 +411,65 @@ async fn run(
         }),
         resource: None,
     };
-    task::spawn(async move {
-        let listener_closure = move |result: Result<UMessage, UStatus>| {
-            register_all_remote_listener(
-                result,
-                udevice_authority.clone(),
-                egress_queue_sender.clone(),
-                ingress_queue_sender.clone(),
-            );
-        };
+    // task::spawn(async move {
+    let transport_type_clone = transport_type.clone();
+    let listener_closure = move |result: Result<UMessage, UStatus>| {
+        let transport_type_clone_clone = transport_type_clone.clone();
+        register_all_remote_listener(
+            result,
+            transport_type_clone_clone,
+            udevice_authority.clone(),
+            egress_queue_sender.clone(),
+            ingress_queue_sender.clone(),
+        );
+    };
 
-        // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
-        let _registered_all_remote_listener_key = {
-            match up_client
-                .register_listener(uuri_for_all_remote, Box::new(listener_closure))
-                .await
-            {
-                Ok(registered_key) => registered_key,
-                Err(status) => {
-                    error!("Failed to register listener: {:?}", status.get_code());
-                    return;
-                }
+    trace!("up_client_full: {:?}", &transport_type);
+
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
+    let _registered_all_remote_listener_key = {
+        match up_client
+            .register_listener(
+                uuri_for_all_remote.clone(),
+                Box::new(listener_closure.clone()),
+            )
+            .await
+        {
+            Ok(registered_key) => registered_key,
+            Err(status) => {
+                error!("Failed to register listener: {:?}", status.get_code());
+                return;
             }
-        };
-    });
-    //
-    // task::spawn(egress_queue_consumer(
-    //     egress_queue_receiver.clone(),
-    //     transports.clone(),
-    //     transmit_cache.clone(),
-    // ));
+        }
+    };
+
+    trace!("register_listener");
+
+    // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
+    let _registered_all_remote_listener_key = {
+        match up_client
+            .register_rpc_listener(
+                uuri_for_all_remote.clone(),
+                Box::new(listener_closure.clone()),
+            )
+            .await
+        {
+            Ok(registered_key) => registered_key,
+            Err(status) => {
+                error!("Failed to register listener: {:?}", status.get_code());
+                return;
+            }
+        }
+    };
+
+    trace!("register_rpc_listener");
+
+    task::spawn(transmit_queue_request_consumer(
+        transport_type.clone(),
+        transmit_request_queue_receiver.clone(),
+        transmit_cache.clone(),
+        up_client,
+    ));
+
+    async_std::future::pending::<()>().await;
 }

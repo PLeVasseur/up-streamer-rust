@@ -47,6 +47,9 @@ async fn main() {
         remote: Some(Remote::Ip(ustreamer_device_ip)),
     };
 
+    // TODO: Add configuration of host transport
+    const HOST_TRANSPORT: TransportType = TransportType::UpClientZenoh;
+
     // TODO: Should make the transmit_cache configurable
     let mut transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
@@ -114,29 +117,29 @@ async fn main() {
     // TODO: Add ability to configure this
     const INGRESS_QUEUE_CAPACITY: usize = 5;
     let (ingress_queue_sender, ingress_queue_receiver) =
-        channel::bounded::<UMessage>(INGRESS_QUEUE_CAPACITY);
+        channel::bounded::<UMessageWithRouting>(INGRESS_QUEUE_CAPACITY);
 
     // TODO: Add ability to configure this
     const EGRESS_QUEUE_CAPACITY: usize = 5;
     let (egress_queue_sender, egress_queue_receiver) =
-        channel::bounded::<UMessage>(EGRESS_QUEUE_CAPACITY);
+        channel::bounded::<UMessageWithRouting>(EGRESS_QUEUE_CAPACITY);
 
     // TODO: Modularize this s.t. we can choose which transports should be started
 
     // TODO: Add ability to configure this
     const ZENOH_UP_CLIENT_QUEUE_CAPACITY: usize = 5;
     let (zenoh_transmit_request_queue_sender, zenoh_transmit_request_queue_receiver) =
-        channel::bounded::<UMessage>(ZENOH_UP_CLIENT_QUEUE_CAPACITY);
+        channel::bounded::<UMessageWithRouting>(ZENOH_UP_CLIENT_QUEUE_CAPACITY);
 
     // TODO: Add ability to configure this
     const SOMMR_UP_CLIENT_QUEUE_CAPACITY: usize = 5;
     let (sommr_transmit_request_queue_sender, sommr_transmit_request_queue_receiver) =
-        channel::bounded::<UMessage>(SOMMR_UP_CLIENT_QUEUE_CAPACITY);
+        channel::bounded::<UMessageWithRouting>(SOMMR_UP_CLIENT_QUEUE_CAPACITY);
 
     // TODO: Add ability to configure this
     const MQTT_UP_CLIENT_QUEUE_CAPACITY: usize = 5;
     let (mqtt_transmit_request_queue_sender, mqtt_transmit_request_queue_receiver) =
-        channel::bounded::<UMessage>(MQTT_UP_CLIENT_QUEUE_CAPACITY);
+        channel::bounded::<UMessageWithRouting>(MQTT_UP_CLIENT_QUEUE_CAPACITY);
 
     let mut up_client_zenoh_config_2 = zenoh::config::Config::default();
     up_client_zenoh_config_2
@@ -149,6 +152,8 @@ async fn main() {
     );
 
     let up_client_zenoh_start_args = UpClientPluginStartArgs {
+        host_transport: HOST_TRANSPORT,
+        transport_type: TransportType::UpClientZenoh,
         up_client: RefCell::new(Some(up_client_zenoh_2)),
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
@@ -175,6 +180,8 @@ async fn main() {
     );
 
     let up_client_sommr_start_args = UpClientPluginStartArgs {
+        host_transport: HOST_TRANSPORT,
+        transport_type: TransportType::UpClientSommr,
         up_client: RefCell::new(Some(up_client_sommr_2)),
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
@@ -201,6 +208,8 @@ async fn main() {
     );
 
     let up_client_mqtt_start_args = UpClientPluginStartArgs {
+        host_transport: HOST_TRANSPORT,
+        transport_type: TransportType::UpClientMqtt,
         up_client: RefCell::new(Some(up_client_mqtt_2)),
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
@@ -216,13 +225,30 @@ async fn main() {
             .expect("Failed to start up_client_mqtt plugin");
     }
 
+    let transmit_queue_senders_tagged = Arc::new(std::collections::HashMap::from([
+        (
+            TransportType::UpClientZenoh,
+            zenoh_transmit_request_queue_sender.clone(),
+        ),
+        (
+            TransportType::UpClientMqtt,
+            mqtt_transmit_request_queue_sender.clone(),
+        ),
+        (
+            TransportType::UpClientSommr,
+            sommr_transmit_request_queue_sender.clone(),
+        ),
+    ]));
+
     let ingress_queue_start_args = IngressRouterStartArgs {
+        host_transport: HOST_TRANSPORT,
         uuid_builder: uuid_builder.clone(),
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
         ingress_queue_sender: ingress_queue_sender.clone(),
         ingress_queue_receiver: ingress_queue_receiver.clone(),
         egress_queue_sender: egress_queue_sender.clone(),
+        transmit_request_senders: transmit_queue_senders_tagged.clone(),
         up_client_zenoh: up_client_zenoh.clone(),
         transports: up_clients_tagged.clone(),
         transmit_cache: transmit_cache.clone(),
@@ -237,6 +263,7 @@ async fn main() {
     trace!("uStreamer: started IngressRouter");
 
     let egress_queue_start_args = EgressRouterStartArgs {
+        host_transport: HOST_TRANSPORT,
         uuid_builder: uuid_builder.clone(),
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),

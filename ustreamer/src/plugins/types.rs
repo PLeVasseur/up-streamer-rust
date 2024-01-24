@@ -3,8 +3,9 @@ use strum::EnumString;
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::UMessage;
 
-#[derive(Clone, Debug, EnumString, strum::Display)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, EnumString, strum::Display)]
 pub enum TransportType {
+    Multicast,
     UpClientZenoh,
     UpClientSommr,
     UpClientMqtt,
@@ -24,4 +25,11 @@ pub enum TaggedUMessage {
     UpClientZenoh(UMessage),
     UpClientSommr(UMessage),
     UpClientMqtt(UMessage),
+}
+
+#[derive(Clone, Debug)]
+pub struct UMessageWithRouting {
+    pub msg: UMessage,
+    pub src: TransportType,
+    pub dst: TransportType,
 }
