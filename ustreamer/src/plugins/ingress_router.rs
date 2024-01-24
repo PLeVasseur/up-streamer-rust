@@ -16,6 +16,7 @@
 use crate::plugins::types::*;
 
 use async_std::channel::{self, Receiver, SendError, Sender};
+use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use futures::select;
 use log::{debug, error, info, trace, warn};
@@ -23,10 +24,7 @@ use lru::LruCache;
 use prost::DecodeError;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::sync::{
-    atomic::{AtomicBool, Ordering::Relaxed},
-    Arc, Mutex,
-};
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use uprotocol_sdk::rpc::{RpcClient, RpcClientResult};
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::UPriority::UpriorityCs4;
@@ -56,7 +54,7 @@ pub struct IngressRouterStartArgs {
     pub ingress_queue_sender: Sender<UMessageWithRouting>,
     pub ingress_queue_receiver: Receiver<UMessageWithRouting>,
     pub egress_queue_sender: Sender<UMessageWithRouting>,
-    pub transmit_request_senders: Arc<HashMap<TransportType, Sender<UMessageWithRouting>>>,
+    pub transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
     pub up_client_zenoh: Arc<ULinkZenoh>,
     pub transports: TransportVec,
     pub transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
@@ -135,11 +133,13 @@ impl RunningPluginTrait for RunningPlugin {
 
 async fn ingress_queue_consumer(
     host_transport: TransportType,
-    transport_request_senders: Arc<HashMap<TransportType, Sender<UMessageWithRouting>>>,
+    transport_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
     uuid_builder: Arc<UUIDv8Builder>,
     mut egress_queue_sender: Sender<UMessageWithRouting>,
     mut ingress_queue_receiver: Receiver<UMessageWithRouting>,
 ) {
+    debug!("host_transport: {:?}", host_transport);
+
     while let Ok(msg) = ingress_queue_receiver.recv().await {
         trace!("Ingress Queue: Received msg: {:?}", msg);
 
@@ -151,7 +151,8 @@ async fn ingress_queue_consumer(
         //   need to bridge into our local network
 
         let send_message = |msg: UMessageWithRouting| async {
-            if let Some(sender) = transport_request_senders.get(&host_transport) {
+            // TODO: Generally remove all the .unwrap() and handle errors properly
+            if let Some(sender) = transport_request_senders.lock().await.get(&host_transport) {
                 match sender.send(msg).await {
                     Ok(_) => info!("Sent message to host transmit queue."),
                     Err(_) => error!("Unable to route message to host transmit queue."),
@@ -164,24 +165,24 @@ async fn ingress_queue_consumer(
             }
         };
 
-        while let Ok(msg) = ingress_queue_receiver.recv().await {
-            trace!("Ingress Queue: Received msg: {:?}", msg);
-
-            match &msg.src {
-                TransportType::Multicast => {
-                    error!("Not possible!");
+        match &msg.src {
+            TransportType::Multicast => {
+                error!("Not possible!");
+                continue;
+            }
+            TransportType::UpClientZenoh => {
+                if host_transport == TransportType::UpClientZenoh {
+                    info!("Source is Zenoh and so is the host, should be routed automatically no need for bridging.");
                     continue;
                 }
-                TransportType::UpClientZenoh => {
-                    if host_transport == TransportType::UpClientZenoh {
-                        info!("Source is Zenoh and so is the host, should be routed automatically no need for bridging.");
-                        continue;
-                    }
-                    send_message(msg).await;
-                }
-                _ => send_message(msg).await,
+                send_message(msg).await;
             }
+            _ => send_message(msg).await,
         }
+
+        // while let Ok(msg) = ingress_queue_receiver.recv().await {
+
+        // }
 
         // let source = match &msg.source {
         //     None => {
@@ -429,10 +430,12 @@ async fn run(
     ingress_queue_sender: Sender<UMessageWithRouting>,
     ingress_queue_receiver: Receiver<UMessageWithRouting>,
     egress_queue_sender: Sender<UMessageWithRouting>,
-    transmit_request_senders: Arc<HashMap<TransportType, Sender<UMessageWithRouting>>>,
+    transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 ) {
     let _ = env_logger::try_init();
+
+    debug!("host_transport: {:?}", &host_transport);
 
     let egress_queue_sender_clone = egress_queue_sender.clone();
     let host_transport_clone = host_transport.clone();
@@ -491,4 +494,6 @@ async fn run(
     //         };
     //     });
     // }
+
+    async_std::future::pending::<()>().await;
 }

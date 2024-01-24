@@ -17,16 +17,14 @@ use crate::plugins::types::*;
 use std::cell::RefCell;
 
 use async_std::channel::{self, Receiver, Sender};
+use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use futures::select;
 use log::{debug, error, info, trace, warn};
 use lru::LruCache;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::sync::{
-    atomic::{AtomicBool, Ordering::Relaxed},
-    Arc, Mutex,
-};
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use uprotocol_sdk::rpc::{RpcClient, RpcServer};
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::{
@@ -145,6 +143,8 @@ async fn transmit_queue_request_consumer(
 ) {
     let local_transmit_cache = transmit_cache.clone();
 
+    trace!("Entered Transmit Request Queue Consumer");
+
     while let Ok(message) = receiver.recv().await {
         trace!(
             "Transmit Request Queue: {:?}: Received msg: {:?}",
@@ -177,6 +177,8 @@ async fn transmit_queue_request_consumer(
             }
             Some(attributes) => attributes.clone(),
         };
+
+        trace!("Passed initial sanity checks of source, payload, attributes existing");
 
         match UMessageType::try_from(attributes.r#type) {
             Ok(UMessageType::UmessageTypePublish) => {
@@ -310,6 +312,8 @@ async fn transmit_queue_request_consumer(
         //    UmessageTypeRequest => {}
         //  }
     }
+
+    error!("Erroneously exited Transmit Request Queue Consumer");
 }
 
 fn register_all_remote_listener(

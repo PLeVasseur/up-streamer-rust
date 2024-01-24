@@ -15,17 +15,15 @@
 
 use crate::plugins::types::*;
 
-use async_std::channel::{self, Receiver, Sender};
+use async_std::channel::{self, Receiver, SendError, Sender};
+use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use futures::select;
 use log::{debug, error, info, trace, warn};
 use lru::LruCache;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::sync::{
-    atomic::{AtomicBool, Ordering::Relaxed},
-    Arc, Mutex,
-};
+use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::{
     Remote, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,
@@ -47,11 +45,13 @@ pub struct EgressRouter {}
 
 pub struct EgressRouterStartArgs {
     pub host_transport: TransportType,
+    pub authority_transport_mapping: Arc<Mutex<HashMap<HashableAuthority, TransportType>>>,
     pub uuid_builder: Arc<UUIDv8Builder>,
     pub runtime: Runtime,
     pub udevice_authority: UAuthority,
     pub egress_queue_sender: Sender<UMessageWithRouting>,
     pub egress_queue_receiver: Receiver<UMessageWithRouting>,
+    pub transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
     pub up_client_zenoh: Arc<ULinkZenoh>,
     pub transports: TransportVec,
     pub transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
@@ -68,18 +68,22 @@ impl Plugin for EgressRouter {
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
         let runtime_clone = start_args.runtime.clone();
         let udevice_authority_clone = start_args.udevice_authority.clone();
+        let authority_transport_mapping_clone = start_args.authority_transport_mapping.clone();
         let transports_clone = start_args.transports.clone();
         let up_client_zenoh_clone = start_args.up_client_zenoh.clone();
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
         let egress_queue_receiver_clone = start_args.egress_queue_receiver.clone();
+        let transmit_request_senders_clone = start_args.transmit_request_senders.clone();
         let transmit_cache_clone = start_args.transmit_cache.clone();
         async_std::task::spawn(run(
             runtime_clone,
             udevice_authority_clone,
+            authority_transport_mapping_clone,
             transports_clone,
             up_client_zenoh_clone,
             egress_queue_sender_clone,
             egress_queue_receiver_clone,
+            transmit_request_senders_clone,
             transmit_cache_clone,
         ));
 
@@ -119,44 +123,103 @@ impl RunningPluginTrait for RunningPlugin {
 
 async fn egress_queue_consumer(
     mut receiver: Receiver<UMessageWithRouting>,
+    authority_transport_mapping: Arc<Mutex<HashMap<HashableAuthority, TransportType>>>,
+    transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
     transports: TransportVec,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 ) {
     let local_transmit_cache = transmit_cache.clone();
-    while let Ok(msg) = receiver.recv().await {
-        trace!("Egress Queue: Received msg: {:?}", msg);
+    let local_authority_transport_mapping = authority_transport_mapping.clone();
+    while let Ok(message) = receiver.recv().await {
+        trace!("Egress Queue: Received msg: {:?}", message);
 
-        // let source = match &msg.source {
-        //     None => {
-        //         error!("CE pulled from Egress Queue has no source UUri");
-        //         return;
-        //     }
-        //     Some(source) => source,
-        // };
-        //
-        // let payload = match &msg.payload {
-        //     None => {
-        //         error!("CE pulled from Egress Queue has no source UUri");
-        //         return;
-        //     }
-        //     Some(payload) => payload,
-        // };
-        //
-        // let attributes = match &msg.attributes {
-        //     None => {
-        //         error!("CE pulled from Egress Queue has no UAttributes");
-        //         return;
-        //     }
-        //     Some(attributes) => attributes,
-        // };
-        //
-        // let id = match &attributes.id {
-        //     None => {
-        //         error!("CE pulled from Egress Queue does not have an id (UUID)");
-        //         return;
-        //     }
-        //     Some(id) => id,
-        // };
+        // TODO: Should be some mechanism by which we have registered UAuthority with a certain TransportType
+        //  If we can find it, great! Send over that
+        //  If we cannot, then ideally we should call uDiscovery
+        //  Perhaps for now we can stub in a way to communicate over Zenoh to the uStreamer that we should add
+        //   a value to the registry of UAuthority => TransportType
+
+        let msg = &message.msg;
+
+        let source = match &msg.source {
+            None => {
+                error!("CE pulled from Egress Queue has no source UUri");
+                continue;
+            }
+            Some(source) => source,
+        };
+
+        let payload = match &msg.payload {
+            None => {
+                error!("CE pulled from Egress Queue has no source UUri");
+                continue;
+            }
+            Some(payload) => payload,
+        };
+
+        let attributes = match &msg.attributes {
+            None => {
+                error!("CE pulled from Egress Queue has no UAttributes");
+                continue;
+            }
+            Some(attributes) => attributes,
+        };
+
+        let id = match &attributes.id {
+            None => {
+                error!("CE pulled from Egress Queue does not have an id (UUID)");
+                continue;
+            }
+            Some(id) => id,
+        };
+
+        let sink = match &attributes.sink {
+            None => {
+                error!("CE pulled from Egress Queue does not have a sink UUri");
+                continue;
+            }
+            Some(sink) => sink,
+        };
+
+        let authority = match &sink.authority {
+            None => {
+                error!("CE pulled from Egress Queue has a sink UUri without a UAuthority");
+                continue;
+            }
+            Some(authority) => authority,
+        };
+
+        match local_authority_transport_mapping
+            .lock()
+            .await
+            .get(&HashableAuthority(authority.clone()))
+        {
+            None => {
+                error!("CE pulled from Egress Queue has a sink UUri whose UAuthority does not match any known mapping to a transport. UAuthority: {:?}", authority);
+                continue;
+            }
+            Some(transport) => match transmit_request_senders.lock().await.get(transport) {
+                None => {
+                    error!("Desired transport to transmit over: {:?} does not have a registered UpClient.", &transport);
+                    continue;
+                }
+                Some(transport_request_sender) => {
+                    match transport_request_sender.send(message).await {
+                        Ok(_) => {
+                            info!(
+                                "Forwarded message to Transmit Request Queue for: {:?}",
+                                &transport
+                            );
+                        }
+                        Err(e) => {
+                            error!("Unable to forward message to Transmit Request Queue for: {:?} with error: {:?}", &transport, e);
+                            continue;
+                        }
+                    }
+                }
+            },
+        }
+
         //
         // match UMessageType::try_from(attributes.r#type) {
         //     Ok(UMessageType::UmessageTypePublish) => {
@@ -290,16 +353,20 @@ async fn egress_queue_consumer(
 async fn run(
     runtime: Runtime,
     udevice_authority: UAuthority,
+    authority_transport_mapping: Arc<Mutex<HashMap<HashableAuthority, TransportType>>>,
     transports: TransportVec,
     up_client_zenoh: Arc<ULinkZenoh>,
     egress_queue_sender: Sender<UMessageWithRouting>,
     egress_queue_receiver: Receiver<UMessageWithRouting>,
+    transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 ) {
     let _ = env_logger::try_init();
 
     task::spawn(egress_queue_consumer(
         egress_queue_receiver.clone(),
+        authority_transport_mapping.clone(),
+        transmit_request_senders.clone(),
         transports.clone(),
         transmit_cache.clone(),
     ));
@@ -341,4 +408,6 @@ async fn run(
     //         }
     //     };
     // });
+
+    async_std::future::pending::<()>().await;
 }

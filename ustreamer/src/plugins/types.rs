@@ -1,7 +1,8 @@
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use strum::EnumString;
 use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::UMessage;
+use uprotocol_sdk::uprotocol::{u_authority, UAuthority, UMessage};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, EnumString, strum::Display)]
 pub enum TransportType {
@@ -32,4 +33,44 @@ pub struct UMessageWithRouting {
     pub msg: UMessage,
     pub src: TransportType,
     pub dst: TransportType,
+}
+
+pub struct HashableAuthority(pub UAuthority);
+
+impl PartialEq for HashableAuthority {
+    fn eq(&self, other: &Self) -> bool {
+        match (&self.0.remote, &other.0.remote) {
+            (Some(u_authority::Remote::Name(name1)), Some(u_authority::Remote::Name(name2))) => {
+                name1 == name2
+            }
+            (Some(u_authority::Remote::Ip(ip1)), Some(u_authority::Remote::Ip(ip2))) => ip1 == ip2,
+            (Some(u_authority::Remote::Id(id1)), Some(u_authority::Remote::Id(id2))) => id1 == id2,
+            (None, None) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for HashableAuthority {}
+
+impl Hash for HashableAuthority {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match &self.0.remote {
+            Some(u_authority::Remote::Name(name)) => {
+                1.hash(state); // Discriminant for the Name variant
+                name.hash(state);
+            }
+            Some(u_authority::Remote::Ip(ip)) => {
+                2.hash(state); // Discriminant for the Ip variant
+                ip.hash(state);
+            }
+            Some(u_authority::Remote::Id(id)) => {
+                3.hash(state); // Discriminant for the Id variant
+                id.hash(state);
+            }
+            None => {
+                0.hash(state); // Discriminant for None
+            }
+        }
+    }
 }
