@@ -16,6 +16,8 @@ mod plugins;
 use crate::plugins::egress_router::{EgressRouter, EgressRouterStartArgs};
 use crate::plugins::ingress_router::{IngressRouter, IngressRouterStartArgs};
 use crate::plugins::types::*;
+use crate::plugins::up_client_full::{UpClientFull, UpClientPlugin, UpClientPluginStartArgs};
+use std::cell::RefCell;
 
 use async_std::channel::{self, Receiver, Sender};
 use log::{debug, error, info, trace, warn};
@@ -118,6 +120,101 @@ async fn main() {
     const EGRESS_QUEUE_CAPACITY: usize = 5;
     let (egress_queue_sender, egress_queue_receiver) =
         channel::bounded::<UMessage>(EGRESS_QUEUE_CAPACITY);
+
+    // TODO: Modularize this s.t. we can choose which transports should be started
+
+    // TODO: Add ability to configure this
+    const ZENOH_UP_CLIENT_QUEUE_CAPACITY: usize = 5;
+    let (zenoh_transmit_request_queue_sender, zenoh_transmit_request_queue_receiver) =
+        channel::bounded::<UMessage>(ZENOH_UP_CLIENT_QUEUE_CAPACITY);
+
+    // TODO: Add ability to configure this
+    const SOMMR_UP_CLIENT_QUEUE_CAPACITY: usize = 5;
+    let (sommr_transmit_request_queue_sender, sommr_transmit_request_queue_receiver) =
+        channel::bounded::<UMessage>(SOMMR_UP_CLIENT_QUEUE_CAPACITY);
+
+    // TODO: Add ability to configure this
+    const MQTT_UP_CLIENT_QUEUE_CAPACITY: usize = 5;
+    let (mqtt_transmit_request_queue_sender, mqtt_transmit_request_queue_receiver) =
+        channel::bounded::<UMessage>(MQTT_UP_CLIENT_QUEUE_CAPACITY);
+
+    let mut up_client_zenoh_config_2 = zenoh::config::Config::default();
+    up_client_zenoh_config_2
+        .set_mode(Some(WhatAmI::Peer))
+        .expect("Unable to configure as Peer");
+    let up_client_zenoh_2: Box<dyn UpClientFull> = Box::new(
+        ULinkZenoh::new_from_config(up_client_zenoh_config_2)
+            .await
+            .unwrap(),
+    );
+
+    let up_client_zenoh_start_args = UpClientPluginStartArgs {
+        up_client: RefCell::new(Some(up_client_zenoh_2)),
+        runtime: runtime.clone(),
+        udevice_authority: ustreamer_device_authority.clone(),
+        egress_queue_sender: egress_queue_sender.clone(),
+        ingress_queue_sender: ingress_queue_sender.clone(),
+        transmit_request_queue_receiver: zenoh_transmit_request_queue_receiver.clone(),
+        transmit_cache: transmit_cache.clone(),
+    };
+
+    {
+        use zenoh_plugin_trait::Plugin;
+        UpClientPlugin::start("up_client_zenoh", &up_client_zenoh_start_args)
+            .expect("Failed to start up_client_zenoh plugin");
+    }
+
+    let mut up_client_sommr_config_2 = zenoh::config::Config::default();
+    up_client_sommr_config_2
+        .set_mode(Some(WhatAmI::Peer))
+        .expect("Unable to configure as Peer");
+    let up_client_sommr_2: Box<dyn UpClientFull> = Box::new(
+        UTransportSommr::new_from_config(up_client_sommr_config_2)
+            .await
+            .unwrap(),
+    );
+
+    let up_client_sommr_start_args = UpClientPluginStartArgs {
+        up_client: RefCell::new(Some(up_client_sommr_2)),
+        runtime: runtime.clone(),
+        udevice_authority: ustreamer_device_authority.clone(),
+        egress_queue_sender: egress_queue_sender.clone(),
+        ingress_queue_sender: ingress_queue_sender.clone(),
+        transmit_request_queue_receiver: zenoh_transmit_request_queue_receiver.clone(),
+        transmit_cache: transmit_cache.clone(),
+    };
+
+    {
+        use zenoh_plugin_trait::Plugin;
+        UpClientPlugin::start("up_client_sommr", &up_client_sommr_start_args)
+            .expect("Failed to start up_client_sommr plugin");
+    }
+
+    let mut up_client_mqtt_config_2 = zenoh::config::Config::default();
+    up_client_mqtt_config_2
+        .set_mode(Some(WhatAmI::Peer))
+        .expect("Unable to configure as Peer");
+    let up_client_mqtt_2: Box<dyn UpClientFull> = Box::new(
+        UTransportMqtt::new_from_config(up_client_mqtt_config_2)
+            .await
+            .unwrap(),
+    );
+
+    let up_client_mqtt_start_args = UpClientPluginStartArgs {
+        up_client: RefCell::new(Some(up_client_mqtt_2)),
+        runtime: runtime.clone(),
+        udevice_authority: ustreamer_device_authority.clone(),
+        egress_queue_sender: egress_queue_sender.clone(),
+        ingress_queue_sender: ingress_queue_sender.clone(),
+        transmit_request_queue_receiver: mqtt_transmit_request_queue_receiver.clone(),
+        transmit_cache: transmit_cache.clone(),
+    };
+
+    {
+        use zenoh_plugin_trait::Plugin;
+        UpClientPlugin::start("up_client_mqtt", &up_client_mqtt_start_args)
+            .expect("Failed to start up_client_mqtt plugin");
+    }
 
     let ingress_queue_start_args = IngressRouterStartArgs {
         uuid_builder: uuid_builder.clone(),
