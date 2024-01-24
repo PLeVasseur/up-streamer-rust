@@ -213,7 +213,7 @@ async fn main() {
         udevice_authority: ustreamer_device_authority.clone(),
         egress_queue_sender: egress_queue_sender.clone(),
         ingress_queue_sender: ingress_queue_sender.clone(),
-        transmit_request_queue_receiver: zenoh_transmit_request_queue_receiver.clone(),
+        transmit_request_queue_receiver: sommr_transmit_request_queue_receiver.clone(),
         transmit_cache: transmit_cache.clone(),
     };
 
