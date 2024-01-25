@@ -240,10 +240,6 @@ impl Plugin for UpClientPlugin {
     const STATIC_NAME: &'static str = "up_client_plugin";
 
     // The first operation called by zenohd on the plugin
-
-    // TODO: Bit of a problem. If UTransport, RpcClient, RpcServer are not Send + Sync, then I cannot
-    //  clone them to get them "into" the main part of the plugin, the run function
-    // Perhaps I should break with the idea of using Zenoh plugin? Hmmm...
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
         trace!("entered up_client_full: start");
 
@@ -323,7 +319,7 @@ async fn transmit_queue_request_consumer(
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
     up_client: Arc<Mutex<Box<dyn UpClientFull>>>,
 ) {
-    let local_transmit_cache = transmit_cache.clone();
+    let mut local_transmit_cache = transmit_cache.clone();
 
     trace!("Entered Transmit Request Queue Consumer");
 
@@ -338,27 +334,47 @@ async fn transmit_queue_request_consumer(
 
         let source = match &msg.source {
             None => {
-                error!("CE pulled from Ingress Queue has no source UUri");
-                return;
+                error!("CE pulled from Transmit Request Queue has no source UUri");
+                continue;
             }
             Some(source) => source,
         };
 
         let payload = match &msg.payload {
             None => {
-                error!("CE pulled from Ingress Queue has no source UUri");
-                return;
+                error!("CE pulled from Transmit Request Queue has no source UUri");
+                continue;
             }
             Some(payload) => payload,
         };
 
         let attributes = match &msg.attributes {
             None => {
-                error!("CE pulled from Ingress Queue has no UAttributes");
-                return;
+                error!("CE pulled from Transmit Request Queue has no UAttributes");
+                continue;
             }
             Some(attributes) => attributes.clone(),
         };
+
+        let id = match &attributes.id {
+            None => {
+                error!("CE pulled from Transmit Request Queue hsa no id in UAttributes");
+                continue;
+            }
+            Some(id) => id.clone(),
+        };
+
+        let uuid_for_hashing = UuidForHashing::from(id.clone());
+
+        if local_transmit_cache
+            .lock()
+            .await
+            .get(&uuid_for_hashing)
+            .is_some()
+        {
+            info!("Already forwarded CE with Uuid: {}", &uuid_for_hashing);
+            continue;
+        }
 
         trace!("Passed initial sanity checks of source, payload, attributes existing");
 
@@ -370,6 +386,12 @@ async fn transmit_queue_request_consumer(
                 let up_client_send =
                     up_client_lock.send(source.clone(), payload.clone(), attributes.clone());
 
+                local_transmit_cache
+                    .lock()
+                    .await
+                    .put(uuid_for_hashing.clone(), true);
+
+                let mut transmit_cache_within_send = local_transmit_cache.clone();
                 match up_client_send.await {
                     Ok(_) => {
                         trace!("Forwarding message over {:?} successfully", &transport_type);
@@ -378,7 +400,12 @@ async fn transmit_queue_request_consumer(
                         error!(
                             "Forwarding message internally over {:?} failed: {:?}",
                             &transport_type, status
-                        )
+                        );
+
+                        transmit_cache_within_send
+                            .lock()
+                            .await
+                            .pop(&uuid_for_hashing);
                     }
                 }
             }

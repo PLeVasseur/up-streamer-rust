@@ -1,13 +1,13 @@
+use crate::plugins::types::TransportType;
+use crate::plugins::up_client_full::{UpClientFull, UpClientFullFactory};
+use async_std::pin::Pin;
+use async_std::sync::Mutex;
 use std::future::Future;
 use std::sync::Arc;
-use async_std::sync::Mutex;
-use async_std::pin::Pin;
 use uprotocol_rust_transport_mqtt::UTransportMqtt;
 use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::config::WhatAmI;
-use crate::plugins::types::TransportType;
-use crate::plugins::up_client_full::{UpClientFull, UpClientFullFactory};
 
 pub struct ULinkZenohFactory {}
 impl UpClientFullFactory for ULinkZenohFactory {
