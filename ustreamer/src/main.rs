@@ -17,11 +17,16 @@ use crate::plugins::egress_router::{EgressRouter, EgressRouterStartArgs};
 use crate::plugins::ingress_router::{IngressRouter, IngressRouterStartArgs};
 use crate::plugins::types::*;
 use crate::plugins::up_client_full::{
-    UpClientFull, UpClientFullFactory, UpClientPlugin, UpClientPluginStartArgs,
+    UpClientFull, UpClientFullFactory, UpClientFullPlugin, UpClientFullPluginStartArgs,
 };
 use crate::plugins::up_client_full_factories::*;
+use crate::plugins::up_client_transport::UpClientTransportFactory;
+use crate::plugins::up_client_transport_factories::*;
 use std::cell::RefCell;
 
+use crate::plugins::up_client_transport::{
+    UpClientTransportPlugin, UpClientTransportPluginStartArgs,
+};
 use async_std::channel::{self, Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
 use log::{debug, error, info, trace, warn};
@@ -46,24 +51,37 @@ async fn main() {
     let uuid_builder = Arc::new(UUIDv8Builder::new());
 
     // TODO: Add configuration of local UAuthority
-    let ustreamer_device_ip: Vec<u8> = vec![192, 168, 3, 100];
+    // let ustreamer_device_ip: Vec<u8> = vec![192, 168, 3, 100];
+    // let ustreamer_device_authority: UAuthority = UAuthority {
+    //     remote: Some(Remote::Ip(ustreamer_device_ip)),
+    // };
+    let ustreamer_device_name = "uDeviceZenoh";
     let ustreamer_device_authority: UAuthority = UAuthority {
-        remote: Some(Remote::Ip(ustreamer_device_ip)),
+        remote: Some(Remote::Name(ustreamer_device_name.to_string())),
     };
 
     // TODO: Add configuration of host transport
     const HOST_TRANSPORT: TransportType = TransportType::UpClientZenoh;
 
     // TODO: Add configuration of UAuthority => TransportType
-    let uapp_authority = UAuthority {
-        remote: Some(Remote::Ip(vec![192, 168, 3, 100])),
-    };
+    // let uapp_authority = UAuthority {
+    //     remote: Some(Remote::Ip(vec![192, 168, 3, 100])),
+    // };
     let mdevice_authority = UAuthority {
         remote: Some(Remote::Ip(vec![192, 168, 3, 1])),
     };
     let cloud_authority = UAuthority {
         remote: Some(Remote::Ip(vec![192, 168, 3, 200])),
     };
+    let uapp_authority = UAuthority {
+        remote: Some(Remote::Name("uDeviceZenoh".to_string())),
+    };
+    // let mdevice_authority = UAuthority {
+    //     remote: Some(Remote::Name("mDeviceSommr".to_string())),
+    // };
+    // let cloud_authority = UAuthority {
+    //     remote: Some(Remote::Name("uDeviceMqtt".to_string())),
+    // };
     let authority_transport_mapping = Arc::new(Mutex::new(HashMap::from([
         (
             HashableAuthority(uapp_authority.clone()),
@@ -119,7 +137,7 @@ async fn main() {
 
     let up_client_zenoh_factory: RefCell<Option<Box<dyn UpClientFullFactory>>> =
         RefCell::new(Some(Box::new(ULinkZenohFactory {})));
-    let up_client_zenoh_start_args = UpClientPluginStartArgs {
+    let up_client_zenoh_start_args = UpClientFullPluginStartArgs {
         host_transport: HOST_TRANSPORT,
         transport_type: TransportType::UpClientZenoh,
         up_client_factory: up_client_zenoh_factory,
@@ -133,13 +151,13 @@ async fn main() {
 
     {
         use zenoh_plugin_trait::Plugin;
-        UpClientPlugin::start("up_client_zenoh", &up_client_zenoh_start_args)
+        UpClientFullPlugin::start("up_client_zenoh", &up_client_zenoh_start_args)
             .expect("Failed to start up_client_zenoh plugin");
     }
 
-    let up_client_sommr_factory: RefCell<Option<Box<dyn UpClientFullFactory>>> =
+    let up_client_sommr_factory: RefCell<Option<Box<dyn UpClientTransportFactory>>> =
         RefCell::new(Some(Box::new(UTransportSommrFactory {})));
-    let up_client_sommr_start_args = UpClientPluginStartArgs {
+    let up_client_sommr_start_args = UpClientTransportPluginStartArgs {
         host_transport: HOST_TRANSPORT,
         transport_type: TransportType::UpClientSommr,
         up_client_factory: up_client_sommr_factory,
@@ -153,13 +171,13 @@ async fn main() {
 
     {
         use zenoh_plugin_trait::Plugin;
-        UpClientPlugin::start("up_client_sommr", &up_client_sommr_start_args)
+        UpClientTransportPlugin::start("up_client_sommr", &up_client_sommr_start_args)
             .expect("Failed to start up_client_sommr plugin");
     }
 
     let up_client_mqtt_factory: RefCell<Option<Box<dyn UpClientFullFactory>>> =
         RefCell::new(Some(Box::new(UTransportMqttFactory {})));
-    let up_client_mqtt_start_args = UpClientPluginStartArgs {
+    let up_client_mqtt_start_args = UpClientFullPluginStartArgs {
         host_transport: HOST_TRANSPORT,
         transport_type: TransportType::UpClientMqtt,
         up_client_factory: up_client_mqtt_factory,
@@ -173,7 +191,7 @@ async fn main() {
 
     {
         use zenoh_plugin_trait::Plugin;
-        UpClientPlugin::start("up_client_mqtt", &up_client_mqtt_start_args)
+        UpClientFullPlugin::start("up_client_mqtt", &up_client_mqtt_start_args)
             .expect("Failed to start up_client_mqtt plugin");
     }
 

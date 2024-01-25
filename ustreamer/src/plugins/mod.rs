@@ -17,3 +17,4 @@ pub mod types;
 pub mod up_client_full;
 pub mod up_client_full_factories;
 pub mod up_client_transport;
+pub mod up_client_transport_factories;

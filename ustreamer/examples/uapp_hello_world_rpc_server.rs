@@ -38,6 +38,9 @@ async fn main() {
     let uapp_ip = vec![192, 168, 3, 100];
     let mdevice_ip = vec![192, 168, 3, 1];
 
+    let udevice_name = "uDeviceZenoh";
+    let mdevice_name = "mDeviceSommr";
+
     let mut config = Config::default();
     config
         .set_mode(Some(WhatAmI::Peer))
@@ -45,10 +48,8 @@ async fn main() {
     let rpc_server = Arc::new(ULinkZenoh::new_from_config(config).await.unwrap());
 
     // create uuri
-    let uuri = UUri {
-        authority: Some(UAuthority {
-            remote: Some(Remote::Ip(uapp_ip.clone())),
-        }),
+    let method_uuri = UUri {
+        authority: None,
         entity: Some(UEntity {
             name: "hello_world_service".to_string(),
             id: Some(111),
@@ -60,6 +61,21 @@ async fn main() {
             Some(1),
         )),
     };
+    // let method_uuri = UUri {
+    //     authority: Some(UAuthority {
+    //         remote: Some(Remote::Ip(uapp_ip.clone())),
+    //     }),
+    //     entity: Some(UEntity {
+    //         name: "hello_world_service".to_string(),
+    //         id: Some(111),
+    //         version_major: Some(1),
+    //         ..Default::default()
+    //     }),
+    //     resource: Some(UResourceBuilder::for_rpc_request(
+    //         Some("get_hello".to_string()),
+    //         Some(1),
+    //     )),
+    // };
 
     let rpc_server_for_callback = rpc_server.clone();
     let callback = move |result: Result<UMessage, UStatus>| {
@@ -129,7 +145,7 @@ async fn main() {
 
     println!("Register the listener...");
     rpc_server
-        .register_rpc_listener(uuri, Box::new(callback))
+        .register_rpc_listener(method_uuri, Box::new(callback))
         .await
         .unwrap();
 

@@ -81,6 +81,10 @@ async fn main() {
     println!("This is an example client for uStreamer on an mDevice over sommR");
 
     let uapp_ip = vec![192, 168, 3, 100];
+    let mdevice_ip = vec![192, 168, 3, 1];
+
+    let udevice_name = "uDeviceZenoh";
+    let mdevice_name = "mDeviceSommr";
 
     let mut config = Config::default();
     config
@@ -88,7 +92,8 @@ async fn main() {
         .expect("Setting as Client failed");
     let utransport_sommr = UTransportSommr::new_from_config(config).await.unwrap();
     let authority = UAuthority {
-        remote: Some(Remote::Ip(uapp_ip.clone())),
+        // remote: Some(Remote::Ip(uapp_ip.clone())),
+        remote: Some(Remote::Name(udevice_name.to_string())),
     };
     let timer_hour_uuri = UUri {
         authority: Some(authority.clone()),

@@ -50,6 +50,9 @@ async fn main() {
     let uapp_ip = vec![192, 168, 3, 100];
     let mdevice_ip = vec![192, 168, 3, 1];
 
+    let udevice_name = "uDeviceZenoh";
+    let mdevice_name = "mDeviceSommr";
+
     let mut config = Config::default();
     config
         .set_mode(Some(WhatAmI::Peer))
@@ -58,16 +61,27 @@ async fn main() {
 
     let uuid_builder = UUIDv8Builder::new();
 
+    // let sink_uuri = UUri {
+    //     authority: Some(UAuthority {
+    //         remote: Some(Remote::Ip(uapp_ip.clone())),
+    //     }),
+    //     entity: None,
+    //     resource: None,
+    // };
+
     let sink_uuri = UUri {
         authority: Some(UAuthority {
-            remote: Some(Remote::Ip(uapp_ip.clone())),
+            remote: Some(Remote::Name(udevice_name.to_string())),
         }),
         entity: None,
         resource: None,
     };
 
     let timer_hour_uuri = UUri {
-        authority: None,
+        // authority: None,
+        authority: Some(UAuthority {
+            remote: Some(Remote::Ip(mdevice_ip.clone())),
+        }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),
             id: Option::Some(123),
@@ -82,7 +96,10 @@ async fn main() {
         }),
     };
     let timer_minute_uuri = UUri {
-        authority: None,
+        // authority: None,
+        authority: Some(UAuthority {
+            remote: Some(Remote::Ip(mdevice_ip.clone())),
+        }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),
             id: Option::Some(123),
@@ -97,7 +114,10 @@ async fn main() {
         }),
     };
     let timer_second_uuri = UUri {
-        authority: None,
+        // authority: None,
+        authority: Some(UAuthority {
+            remote: Some(Remote::Ip(mdevice_ip.clone())),
+        }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),
             id: Option::Some(123),
@@ -112,7 +132,10 @@ async fn main() {
         }),
     };
     let timer_nanosecond_uuri = UUri {
-        authority: None,
+        // authority: None,
+        authority: Some(UAuthority {
+            remote: Some(Remote::Ip(mdevice_ip.clone())),
+        }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),
             id: Option::Some(123),

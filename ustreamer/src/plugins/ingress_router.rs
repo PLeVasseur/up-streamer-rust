@@ -143,6 +143,7 @@ async fn ingress_queue_consumer(
 
         let send_message = |msg: UMessageWithRouting| async {
             // TODO: Generally remove all the .unwrap() and handle errors properly
+
             if let Some(sender) = transport_request_senders.lock().await.get(&host_transport) {
                 match sender.send(msg).await {
                     Ok(_) => info!("Sent message to host transmit queue."),

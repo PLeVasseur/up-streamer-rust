@@ -51,6 +51,9 @@ async fn main() {
     let uapp_ip = vec![192, 168, 3, 100];
     let mdevice_ip = vec![192, 168, 3, 1];
 
+    let udevice_name = "uDeviceZenoh";
+    let mdevice_name = "mDeviceSommr";
+
     let mut config = Config::default();
     config
         .set_mode(Some(WhatAmI::Peer))
@@ -69,7 +72,8 @@ async fn main() {
 
     let timer_hour_uuri = UUri {
         authority: Some(UAuthority {
-            remote: Some(Remote::Ip(uapp_ip.clone())),
+            // remote: Some(Remote::Ip(uapp_ip.clone())),
+            remote: Some(Remote::Name(udevice_name.to_string())),
         }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),
@@ -86,7 +90,8 @@ async fn main() {
     };
     let timer_minute_uuri = UUri {
         authority: Some(UAuthority {
-            remote: Some(Remote::Ip(uapp_ip.clone())),
+            // remote: Some(Remote::Ip(uapp_ip.clone())),
+            remote: Some(Remote::Name(udevice_name.to_string())),
         }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),
@@ -103,7 +108,8 @@ async fn main() {
     };
     let timer_second_uuri = UUri {
         authority: Some(UAuthority {
-            remote: Some(Remote::Ip(uapp_ip.clone())),
+            // remote: Some(Remote::Ip(uapp_ip.clone())),
+            remote: Some(Remote::Name(udevice_name.to_string())),
         }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),
@@ -120,7 +126,8 @@ async fn main() {
     };
     let timer_nanosecond_uuri = UUri {
         authority: Some(UAuthority {
-            remote: Some(Remote::Ip(uapp_ip.clone())),
+            // remote: Some(Remote::Ip(uapp_ip.clone())),
+            remote: Some(Remote::Name(udevice_name.to_string())),
         }),
         entity: Option::from(UEntity {
             name: "timer_service".to_string(),

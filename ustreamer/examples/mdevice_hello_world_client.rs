@@ -43,6 +43,9 @@ async fn main() {
     let uapp_ip = vec![192, 168, 3, 100];
     let mdevice_ip = vec![192, 168, 3, 1];
 
+    let udevice_name = "uDeviceZenoh";
+    let mdevice_name = "mDeviceSommr";
+
     let mut config = Config::default();
     config
         .set_mode(Some(WhatAmI::Peer))
@@ -67,7 +70,8 @@ async fn main() {
         UResourceBuilder::for_rpc_request(Some("get_hello".to_string()), Some(1));
     let hello_world_request_uuri = UUri {
         authority: Some(UAuthority {
-            remote: Some(Remote::Ip(uapp_ip.clone())),
+            // remote: Some(Remote::Ip(uapp_ip.clone())),
+            remote: Some(Remote::Name(udevice_name.to_string())),
         }),
         entity: Option::from(UEntity {
             name: "hello_world_service".to_string(),
@@ -92,6 +96,8 @@ async fn main() {
     .build();
 
     attributes.sink = Some(hello_world_request_uuri.clone());
+
+    println!("attributes: {:?}", &attributes);
 
     let utransport_sommr_arc = Arc::new(utransport_sommr);
 
@@ -166,7 +172,7 @@ async fn main() {
 
     info!("Register the listener...");
     utransport_sommr_arc
-        .register_listener(hello_world_request_uuri.clone(), Box::new(callback))
+        .register_listener(hello_world_response_uuri.clone(), Box::new(callback))
         .await
         .unwrap();
 

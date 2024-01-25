@@ -30,8 +30,9 @@ use std::convert::TryFrom;
 use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use uprotocol_sdk::rpc::{RpcClient, RpcServer};
 use uprotocol_sdk::transport::datamodel::UTransport;
+use uprotocol_sdk::uprotocol::UPriority::UpriorityCs4;
 use uprotocol_sdk::uprotocol::{
-    Remote, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,
+    Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,
 };
 use uprotocol_sdk::uri::validator::ValidationError;
 use uprotocol_sdk::uuid::builder::UUIDv8Builder;
@@ -44,7 +45,7 @@ use zenoh_core::zlock;
 use zenoh_result::{bail, Error, ZResult};
 
 // The struct implementing the ZenohPlugin and ZenohPlugin traits
-pub struct UpClientPlugin;
+pub struct UpClientFullPlugin;
 
 pub trait UpClientFull: UTransport + RpcServer + RpcClient {}
 
@@ -93,7 +94,7 @@ pub trait UpClientFullFactory: Send + Sync {
                 &up_client,
                 transport_type_clone_1,
                 udevice_authority,
-                egress_queue_sender,
+                egress_queue_sender.clone(),
                 ingress_queue_sender,
             );
 
@@ -103,6 +104,7 @@ pub trait UpClientFullFactory: Send + Sync {
                 up_client,
                 transport_type_clone_2,
                 transmit_request_queue_receiver,
+                egress_queue_sender.clone(),
                 transmit_cache,
             );
 
@@ -204,12 +206,14 @@ fn start_transmit_queue_receiver(
     up_client: Arc<Mutex<Box<dyn UpClientFull>>>,
     transport_type: TransportType,
     transmit_request_queue_receiver: Receiver<UMessageWithRouting>,
+    egress_queue_sender: Sender<UMessageWithRouting>,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 ) {
     task::spawn_local(async move {
         transmit_queue_request_consumer(
             transport_type.clone(),
             transmit_request_queue_receiver.clone(),
+            egress_queue_sender.clone(),
             transmit_cache.clone(),
             up_client,
         )
@@ -217,7 +221,7 @@ fn start_transmit_queue_receiver(
     });
 }
 
-pub struct UpClientPluginStartArgs {
+pub struct UpClientFullPluginStartArgs {
     pub host_transport: TransportType,
     pub transport_type: TransportType,
     pub up_client_factory: RefCell<Option<Box<dyn UpClientFullFactory>>>,
@@ -232,8 +236,8 @@ pub struct UpClientPluginStartArgs {
 // declaration of the plugin's VTable for zenohd to find the plugin's functions to be called
 // zenoh_plugin_trait::declare_plugin!(EgressRouter);
 
-impl Plugin for UpClientPlugin {
-    type StartArgs = UpClientPluginStartArgs;
+impl Plugin for UpClientFullPlugin {
+    type StartArgs = UpClientFullPluginStartArgs;
     type RunningPlugin = zenoh::plugins::RunningPlugin;
 
     // A mandatory const to define, in case of the plugin is built as a standalone executable
@@ -316,6 +320,7 @@ impl RunningPluginTrait for RunningPlugin {
 async fn transmit_queue_request_consumer(
     transport_type: TransportType,
     mut receiver: Receiver<UMessageWithRouting>,
+    egress_queue_sender: Sender<UMessageWithRouting>,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
     up_client: Arc<Mutex<Box<dyn UpClientFull>>>,
 ) {
@@ -409,96 +414,123 @@ async fn transmit_queue_request_consumer(
                     }
                 }
             }
-            // Ok(UMessageType::UmessageTypeRequest) => {
-            //     trace!("UMessageTypeRequest being routed internally");
-            //
-            //     let response_source = match attributes.sink {
-            //         None => {
-            //             error!("CE with UmessageTypeRequest heard by our uDevice doesn't have sink. Should be caught in placement into Ingress Queue");
-            //             return;
-            //         }
-            //         Some(ref response_source) => response_source.clone(),
-            //     };
-            //
-            //     debug!("response_source: {:?}", &response_source);
-            //
-            //     let response_reqid = match attributes.id {
-            //         None => {
-            //             error!("CE with UmessageTypeRequest heard by our uDevice doesn't have id. Should be caught in placement into Ingress Queue");
-            //             return;
-            //         }
-            //         Some(ref response_reqid) => response_reqid.clone(),
-            //     };
-            //
-            //     debug!("response_reqid: {:?}", &response_reqid);
-            //
-            //     // TODO: Note that since we only get a UPayload back from calling invoke_method
-            //     //  we do not have a corresponding `id` for the response
-            //     //  Unclear if that's a huge deal. For now can simply stamp with the id from uStreamer
-            //     let id = uuid_builder.build();
-            //
-            //     debug!("id for response: {:?}", &id);
-            //
-            //     // TODO: BLOCKER: Currently we don't have UAttributes being returned from invoke_method(), so we fill in what
-            //     //  we can. This is a problem I noted to @Steven Hartley and will likely drive some change to get
-            //     //  attributes back from invoke_method as well
-            //     let response_attributes = UAttributes {
-            //         id: Some(id),
-            //         r#type: i32::from(UMessageType::UmessageTypeResponse),
-            //         sink: Some(source.clone()),
-            //         priority: i32::from(UpriorityCs4), // TODO: What should the priority be?
-            //         ttl: None,                         // TODO: What should the ttl be?
-            //         permission_level: None,
-            //         commstatus: None,
-            //         reqid: Some(response_reqid.clone()),
-            //         token: None,
-            //     };
-            //
-            //     debug!("response_attributes: {:?}", &response_attributes);
-            //
-            //     let up_client_zenoh_clone = up_client_zenoh.clone();
-            //     let source_clone = source.clone();
-            //     let payload_clone = payload.clone();
-            //     let attributes_clone = attributes.clone();
-            //     let egress_queue_sender_clone = egress_queue_sender.clone();
-            //     let response_attributes_clone = response_attributes.clone();
-            //     task::spawn(async move {
-            //         trace!("Inside of async closure to call invoke_method");
-            //
-            //         match up_client_zenoh_clone
-            //             // Note that in order to be "seen" by the RpcServer::register_rpc_listener() on our device
-            //             // we need to use the sink we were given as the topic
-            //             .invoke_method(
-            //                 response_source.clone(),
-            //                 payload_clone.clone(),
-            //                 attributes_clone.clone(),
-            //             )
-            //             .await
-            //         {
-            //             Ok(payload) => {
-            //                 trace!("Received result back from RpcServer");
-            //
-            //                 let response_msg = UMessage {
-            //                     source: Some(response_source.clone()),
-            //                     attributes: Some(response_attributes_clone),
-            //                     payload: Some(payload),
-            //                 };
-            //
-            //                 egress_queue_sender_clone.send(response_msg).await.unwrap();
-            //
-            //                 trace!("Sent response_msg to Egress Queue");
-            //             }
-            //             Err(e) => {
-            //                 println!("invoke_method failed: {:?}", e)
-            //             }
-            //         }
-            //
-            //         trace!("After invoke_method");
-            //     });
-            //
-            //     // warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
-            //     // return;
-            // }
+            Ok(UMessageType::UmessageTypeRequest) => {
+                trace!("UMessageTypeRequest being routed internally");
+
+                let response_source = match attributes.sink {
+                    None => {
+                        error!("CE with UmessageTypeRequest heard by our uDevice doesn't have sink. Should be caught in placement into Ingress Queue");
+                        return;
+                    }
+                    Some(ref response_source) => response_source.clone(),
+                };
+
+                debug!("response_source: {:?}", &response_source);
+
+                // TODO: _For now_ consider that internally routed messages should have their source UUri stripped of
+                //  UAuthority, but their sink UUri should have UAuthority left intact
+                //  Why? Well we know where it's headed internally, but in theory on the way out it could get routed
+                //  differently
+
+                let mut response_source_no_authority = response_source.clone();
+                response_source_no_authority.authority = None;
+
+                debug!(
+                    "response_source post stripping its UAuthority: {:?}",
+                    &response_source_no_authority
+                );
+
+                let response_reqid = match attributes.id {
+                    None => {
+                        error!("CE with UmessageTypeRequest heard by our uDevice doesn't have id. Should be caught in placement into Ingress Queue");
+                        return;
+                    }
+                    Some(ref response_reqid) => response_reqid.clone(),
+                };
+
+                debug!("response_reqid: {:?}", &response_reqid);
+
+                // TODO: Note that since we only get a UPayload back from calling invoke_method
+                //  we do not have a corresponding `id` for the response
+                //  Unclear if that's a huge deal. For now can simply stamp with the id from uStreamer
+                let id = UUIDv8Builder::new().build();
+
+                debug!("id for response: {:?}", &id);
+
+                // TODO: BLOCKER: Currently we don't have UAttributes being returned from invoke_method(), so we fill in what
+                //  we can. This is a problem I noted to @Steven Hartley and will likely drive some change to get
+                //  attributes back from invoke_method as well
+                let response_attributes = UAttributes {
+                    id: Some(id),
+                    r#type: i32::from(UMessageType::UmessageTypeResponse),
+                    sink: Some(response_source.clone()),
+                    // sink: Some(source.clone()),
+                    priority: i32::from(UpriorityCs4), // TODO: What should the priority be?
+                    ttl: None,                         // TODO: What should the ttl be?
+                    permission_level: None,
+                    commstatus: None,
+                    reqid: Some(response_reqid.clone()),
+                    token: None,
+                };
+
+                debug!("response_attributes: {:?}", &response_attributes);
+
+                let payload_clone = payload.clone();
+                let attributes_clone = attributes.clone();
+                let egress_queue_sender_clone = egress_queue_sender.clone();
+                let response_attributes_clone = response_attributes.clone();
+                trace!("before call invoke_method");
+
+                let up_client_lock = up_client.lock().await;
+                // Note that in order to be "seen" by the RpcServer::register_rpc_listener() on our device
+                // we need to use the sink we were given as the topic
+                let up_client_invoke_method = up_client_lock.invoke_method(
+                    response_source_no_authority.clone(),
+                    payload_clone,
+                    attributes_clone,
+                );
+
+                // TODO: We don't want to "extraneously" react upon the response coming back
+                let reqid_for_hashing = UuidForHashing::from(response_reqid.clone());
+                local_transmit_cache
+                    .lock()
+                    .await
+                    .put(reqid_for_hashing.clone(), true);
+
+                match up_client_invoke_method.await {
+                    Ok(payload) => {
+                        trace!("Received result back from RpcServer");
+
+                        let response_msg = UMessage {
+                            // source: Some(response_source.clone()), // TODO: Ask @Steven Hartley about this... just doesn't make sense
+                            source: Some(source.clone()), //  to me that we'd respond
+                            attributes: Some(response_attributes_clone),
+                            payload: Some(payload),
+                        };
+
+                        let response_message = UMessageWithRouting {
+                            msg: response_msg,
+                            src: transport_type.clone(),
+                            dst: TransportType::Multicast,
+                        };
+
+                        debug!("Message to send to Egress Queue: {:?}", &response_message);
+
+                        egress_queue_sender_clone
+                            .send(response_message)
+                            .await
+                            .unwrap();
+
+                        trace!("Sent response_msg to Egress Queue");
+                    }
+                    Err(e) => {
+                        println!("invoke_method failed: {:?}", e);
+                        continue;
+                    }
+                }
+
+                trace!("After invoke_method");
+            }
             // Ok(UMessageType::UmessageTypeResponse) => {
             //     trace!("UMessageTypeResponse being routed internally");
             //
@@ -509,8 +541,17 @@ async fn transmit_queue_request_consumer(
             //     warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
             //     return;
             // }
-            Err(_) => {}
-            _ => {}
+            Err(e) => {
+                error!(
+                    "Error in converting UAttributes.type to a UMessageType: {:?}",
+                    e
+                );
+                continue;
+            }
+            _ => {
+                warn!("Unsupported UMessageType");
+                continue;
+            }
         }
 
         // TODO: How do we get access to the UpClientPlugin? Just take ownership?
