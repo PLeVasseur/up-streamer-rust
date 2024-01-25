@@ -2998,6 +2998,7 @@ name = "ustreamer"
 version = "0.1.5-SNAPSHOT"
 dependencies = [
  "async-std",
+ "async-trait",
  "chrono",
  "env_logger",
  "example-proto",

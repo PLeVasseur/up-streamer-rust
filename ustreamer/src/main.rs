@@ -16,7 +16,7 @@ mod plugins;
 use crate::plugins::egress_router::{EgressRouter, EgressRouterStartArgs};
 use crate::plugins::ingress_router::{IngressRouter, IngressRouterStartArgs};
 use crate::plugins::types::*;
-use crate::plugins::up_client_full::{UpClientFull, UpClientPlugin, UpClientPluginStartArgs};
+use crate::plugins::up_client_full::{UpClientFull, UpClientFullFactory, UpClientPlugin, UpClientPluginStartArgs};
 use std::cell::RefCell;
 
 use async_std::channel::{self, Receiver, Sender};
@@ -124,10 +124,24 @@ async fn main() {
             .unwrap(),
     );
 
+    let up_client_zenoh_builder = async {
+        let mut up_client_zenoh_config_2 = zenoh::config::Config::default();
+        up_client_zenoh_config_2
+            .set_mode(Some(WhatAmI::Peer))
+            .expect("Unable to configure as Peer");
+        let up_client_zenoh_2: Box<dyn UpClientFull> = Box::new(
+            ULinkZenoh::new_from_config(up_client_zenoh_config_2)
+                .await
+                .unwrap(),
+        );
+        up_client_zenoh_2
+    };
+
+    let up_client_zenoh_factory: RefCell<Option<Box<dyn UpClientFullFactory>>> = RefCell::new(Some(Box::new(ULinkZenohFactory{})));
     let up_client_zenoh_start_args = UpClientPluginStartArgs {
         host_transport: HOST_TRANSPORT,
         transport_type: TransportType::UpClientZenoh,
-        up_client: RefCell::new(Some(up_client_zenoh_2)),
+        up_client_factory: up_client_zenoh_factory,
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
         egress_queue_sender: egress_queue_sender.clone(),
@@ -152,10 +166,24 @@ async fn main() {
             .unwrap(),
     );
 
+    let up_client_sommr_builder = async {
+        let mut up_client_sommr_config_2 = zenoh::config::Config::default();
+        up_client_sommr_config_2
+            .set_mode(Some(WhatAmI::Peer))
+            .expect("Unable to configure as Peer");
+        let up_client_sommr_2: Box<dyn UpClientFull> = Box::new(
+            UTransportSommr::new_from_config(up_client_sommr_config_2)
+                .await
+                .unwrap(),
+        );
+        up_client_sommr_2
+    };
+
+    let up_client_sommr_factory: RefCell<Option<Box<dyn UpClientFullFactory>>> = RefCell::new(Some(Box::new(UTransportSommrFactory{})));
     let up_client_sommr_start_args = UpClientPluginStartArgs {
         host_transport: HOST_TRANSPORT,
         transport_type: TransportType::UpClientSommr,
-        up_client: RefCell::new(Some(up_client_sommr_2)),
+        up_client_factory: up_client_sommr_factory,
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
         egress_queue_sender: egress_queue_sender.clone(),
@@ -180,10 +208,24 @@ async fn main() {
             .unwrap(),
     );
 
+    let up_client_mqtt_builder = async {
+        let mut up_client_mqtt_config_2 = zenoh::config::Config::default();
+        up_client_mqtt_config_2
+            .set_mode(Some(WhatAmI::Peer))
+            .expect("Unable to configure as Peer");
+        let up_client_mqtt_2: Box<dyn UpClientFull> = Box::new(
+            UTransportMqtt::new_from_config(up_client_mqtt_config_2)
+                .await
+                .unwrap(),
+        );
+        up_client_mqtt_2
+    };
+
+    let up_client_mqtt_factory: RefCell<Option<Box<dyn UpClientFullFactory>>> = RefCell::new(Some(Box::new(UTransportMqttFactory{})));
     let up_client_mqtt_start_args = UpClientPluginStartArgs {
         host_transport: HOST_TRANSPORT,
         transport_type: TransportType::UpClientMqtt,
-        up_client: RefCell::new(Some(up_client_mqtt_2)),
+        up_client_factory: up_client_mqtt_factory,
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
         egress_queue_sender: egress_queue_sender.clone(),
