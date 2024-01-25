@@ -55,8 +55,6 @@ pub struct IngressRouterStartArgs {
     pub ingress_queue_receiver: Receiver<UMessageWithRouting>,
     pub egress_queue_sender: Sender<UMessageWithRouting>,
     pub transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
-    pub up_client_zenoh: Arc<ULinkZenoh>,
-    pub transports: TransportVec,
     pub transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 }
 
@@ -72,8 +70,6 @@ impl Plugin for IngressRouter {
         let host_transport_clone = start_args.host_transport.clone();
         let uuid_builder_clone = start_args.uuid_builder.clone();
         let udevice_authority = start_args.udevice_authority.clone();
-        let transports_clone = start_args.transports.clone();
-        let up_client_zenoh = start_args.up_client_zenoh.clone();
         let ingress_queue_sender_clone = start_args.ingress_queue_sender.clone();
         let ingress_queue_receiver_clone = start_args.ingress_queue_receiver.clone();
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
@@ -83,8 +79,6 @@ impl Plugin for IngressRouter {
             host_transport_clone,
             uuid_builder_clone,
             udevice_authority,
-            transports_clone,
-            up_client_zenoh,
             ingress_queue_sender_clone,
             ingress_queue_receiver_clone,
             egress_queue_sender_clone,
@@ -92,13 +86,11 @@ impl Plugin for IngressRouter {
             transmit_cache_clone,
         ));
 
-        let transports_plugin_clone = start_args.transports.clone();
         // let ingress_queue_sender_plugin_clone = start_args.ingress_queue_sender.clone();
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
             RunningPluginInner {
                 runtime: start_args.runtime.clone(),
                 udevice_authority: start_args.udevice_authority.clone(),
-                transports: transports_plugin_clone,
             },
         )))))
     }
@@ -108,7 +100,6 @@ impl Plugin for IngressRouter {
 struct RunningPluginInner {
     runtime: Runtime,
     udevice_authority: UAuthority,
-    transports: TransportVec,
 }
 // The RunningPlugin struct implementing the RunningPluginTrait trait
 #[derive(Clone)]
@@ -425,8 +416,6 @@ async fn run(
     host_transport: TransportType,
     uuid_builder: Arc<UUIDv8Builder>,
     udevice_authority: UAuthority,
-    transports: TransportVec,
-    up_client_zenoh: Arc<ULinkZenoh>,
     ingress_queue_sender: Sender<UMessageWithRouting>,
     ingress_queue_receiver: Receiver<UMessageWithRouting>,
     egress_queue_sender: Sender<UMessageWithRouting>,
@@ -447,53 +436,6 @@ async fn run(
         egress_queue_sender_clone,
         ingress_queue_receiver,
     ));
-
-    // let uuri_for_all_remote = UUri {
-    //     authority: Some(UAuthority {
-    //         remote: Some(Remote::Name("*".to_string())),
-    //     }),
-    //     entity: Some(UEntity {
-    //         name: "*".to_string(),
-    //         id: None,
-    //         version_major: None,
-    //         version_minor: None,
-    //     }),
-    //     resource: None,
-    // };
-    // for transport in &transports {
-    //     let udevice_uauthority_clone = udevice_authority.clone();
-    //     let transport_clone = transport.clone();
-    //     let uuri_for_all_remote_clone = uuri_for_all_remote.clone();
-    //     let ingress_queue_sender_clone = ingress_queue_sender.clone();
-    //     let egress_queue_sender_clone = egress_queue_sender.clone();
-    //     let transmit_cache_clone = transmit_cache.clone();
-    //     task::spawn(async move {
-    //         let listener_closure = move |result: Result<UMessage, UStatus>| {
-    //             transport_listener(
-    //                 result,
-    //                 udevice_uauthority_clone.clone(),
-    //                 ingress_queue_sender_clone.clone(),
-    //                 egress_queue_sender_clone.clone(),
-    //                 transmit_cache_clone.clone(),
-    //             );
-    //         };
-    //
-    //         // You might normally keep track of the registered listener's key so you can remove it later with unregister_listener
-    //         let _registered_all_remote_listener_key = {
-    //             match transport_clone
-    //                 .up_client
-    //                 .register_listener(uuri_for_all_remote_clone, Box::new(listener_closure))
-    //                 .await
-    //             {
-    //                 Ok(registered_key) => registered_key,
-    //                 Err(status) => {
-    //                     error!("Failed to register listener: {:?}", status.get_code());
-    //                     return;
-    //                 }
-    //             }
-    //         };
-    //     });
-    // }
 
     async_std::future::pending::<()>().await;
 }

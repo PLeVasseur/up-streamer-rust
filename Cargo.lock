@@ -2896,7 +2896,7 @@ dependencies = [
 [[package]]
 name = "uprotocol-rust-transport-mqtt"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/stand-in_for_uprotocol-rust-transport-mqtt#23746066a3019e5ad9ebb3132534e0928e8f9ffd"
+source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/stand-in_for_uprotocol-rust-transport-mqtt#338e14309138fcef17792988a3e8849dfe452317"
 dependencies = [
  "anyhow",
  "async-std",
@@ -2912,7 +2912,7 @@ dependencies = [
 [[package]]
 name = "uprotocol-rust-transport-sommr"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/stand-in_for_uprotocol-rust-transport-sommr#bf449ae01d0a8e8a7f4c18bf800ce7acaa18def9"
+source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/stand-in_for_uprotocol-rust-transport-sommr#6308f3f13d006b53defb9a229ff8533f7759c8ef"
 dependencies = [
  "anyhow",
  "async-std",
@@ -2928,7 +2928,7 @@ dependencies = [
 [[package]]
 name = "uprotocol-sdk"
 version = "0.1.5"
-source = "git+https://github.com/PLeVasseur/uprotocol-rust_fork.git?branch=feature/experiment_send_sync#5007091554373ed4bd449712f096e89dca6ad1ce"
+source = "git+https://github.com/PLeVasseur/uprotocol-rust_fork.git?branch=feature/turn_send_sync_back_off#008103509de3adc5cc0a7d0f2c0ce055a735b33f"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -2952,7 +2952,7 @@ dependencies = [
 [[package]]
 name = "uprotocol_zenoh_rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/update_timeout#b3b577e3c98800d3daaa9d6c58397c8d10acad28"
+source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/update_timeout#0a07246a175749b5103709efb49e338f1631ccd8"
 dependencies = [
  "anyhow",
  "async-std",

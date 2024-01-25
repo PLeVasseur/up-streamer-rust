@@ -41,17 +41,14 @@ log = "0.4.20"
 lru = "0.12.1"
 prost = "0.12"
 prost-types = "0.12"
-retransmitter = { version = "0.1.5-SNAPSHOT", path = "router-plugins/retransmitters/retransmitter" }
-retransmitter-zenoh = { version = "0.1.5-SNAPSHOT", path = "router-plugins/retransmitters/retransmitter-zenoh" }
 serde_json = "1.0.111"
 strum = { version = "0.25", features = ["derive"] }
-transport-router-zenoh-plugin = { version = "0.1.5-SNAPSHOT", path = "router-plugins/plugins/transport-router-zenoh-plugin" }
 # upstream
 # uprotocol-sdk = { git = "https://github.com/eclipse-uprotocol/uprotocol-rust.git", branch = "main" }
 # zettascale version
 #uprotocol-sdk = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust.git", branch = "support_rpcserver" }
 # Pete one
-uprotocol-sdk = { git = "https://github.com/PLeVasseur/uprotocol-rust_fork.git", branch = "feature/experiment_send_sync" }
+uprotocol-sdk = { git = "https://github.com/PLeVasseur/uprotocol-rust_fork.git", branch = "feature/turn_send_sync_back_off" }
 # upstream
 # uprotocol_zenoh_rust = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust-ulink-zenoh.git", branch = "support_rpcserver" }
 # my version, increasing timeout to 2 seconds

@@ -89,17 +89,19 @@ impl Plugin for UpClientPlugin {
         let transmit_request_queue_receiver_clone =
             start_args.transmit_request_queue_receiver.clone();
         let transmit_cache_clone = start_args.transmit_cache.clone();
-        async_std::task::spawn(run(
-            host_transport_clone,
-            transport_type_clone,
-            runtime_clone,
-            udevice_authority_clone,
-            egress_queue_sender_clone,
-            ingress_queue_sender_clone,
-            transmit_request_queue_receiver_clone,
-            transmit_cache_clone,
-            up_client,
-        ));
+        async_std::task::spawn_local(async move {
+            run(
+                host_transport_clone,
+                transport_type_clone,
+                runtime_clone,
+                udevice_authority_clone,
+                egress_queue_sender_clone,
+                ingress_queue_sender_clone,
+                transmit_request_queue_receiver_clone,
+                transmit_cache_clone,
+                up_client,
+            )
+        });
 
         // let ingress_queue_sender_plugin_clone = start_args.ingress_queue_sender.clone();
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
@@ -468,12 +470,14 @@ async fn run(
 
     trace!("register_rpc_listener");
 
-    task::spawn(transmit_queue_request_consumer(
-        transport_type.clone(),
-        transmit_request_queue_receiver.clone(),
-        transmit_cache.clone(),
-        up_client,
-    ));
+    task::spawn_local(async move {
+        transmit_queue_request_consumer(
+            transport_type.clone(),
+            transmit_request_queue_receiver.clone(),
+            transmit_cache.clone(),
+            up_client,
+        )
+    });
 
     async_std::future::pending::<()>().await;
 }

@@ -87,59 +87,6 @@ async fn main() {
 
     let runtime = zenoh::runtime::Runtime::new(config).await.unwrap();
 
-    // TODO: Add configuration of which up-clients to start
-    let mut up_client_zenoh_config = zenoh::config::Config::default();
-    up_client_zenoh_config
-        .set_mode(Some(WhatAmI::Peer))
-        .expect("Unable to configure as Peer");
-    let up_client_zenoh = Arc::new(
-        ULinkZenoh::new_from_config(up_client_zenoh_config)
-            .await
-            .unwrap(),
-    );
-
-    let mut up_client_sommr_config = zenoh::config::Config::default();
-    up_client_sommr_config
-        .set_mode(Some(WhatAmI::Peer))
-        .expect("Unable to configure as Peer");
-    let up_client_sommr = Arc::new(
-        UTransportSommr::new_from_config(up_client_sommr_config)
-            .await
-            .unwrap(),
-    );
-
-    let mut up_client_mqtt_config = zenoh::config::Config::default();
-    up_client_mqtt_config
-        .set_mode(Some(WhatAmI::Peer))
-        .expect("Unable to configure as Peer");
-    let up_client_mqtt = Arc::new(
-        UTransportMqtt::new_from_config(up_client_mqtt_config)
-            .await
-            .unwrap(),
-    );
-
-    // TODO: Should consider removing up_client_zenoh_transport from the transports the ingress listener listens in on
-    //  as in theory we'd already have received it to any clients apps?
-    //  Feels kinda... wrong. I would prefer there be a way to "force" going through the uStreamer, even for Zenoh
-    //  as it now appears like from further reading that uP-L1 transport must return to use whether we succeed or fail
-    //  Get some feedback on this from @Steven Hartley
-    // let up_client_zenoh_transport: Arc<dyn UTransport> =
-    //     up_client_zenoh.clone() as Arc<dyn UTransport>;
-    let up_client_sommr_transport_tagged: Arc<dyn UTransport> =
-        up_client_sommr.clone() as Arc<dyn UTransport>;
-    let up_client_mqtt_transport_tagged: Arc<dyn UTransport> =
-        up_client_mqtt.clone() as Arc<dyn UTransport>;
-    let up_clients_tagged: TransportVec = vec![
-        TaggedTransport {
-            up_client: up_client_sommr_transport_tagged,
-            tag: TransportType::UpClientSommr,
-        },
-        TaggedTransport {
-            up_client: up_client_mqtt_transport_tagged,
-            tag: TransportType::UpClientMqtt,
-        },
-    ];
-
     // TODO: Add ability to configure this
     const INGRESS_QUEUE_CAPACITY: usize = 100;
     let (ingress_queue_sender, ingress_queue_receiver) =
@@ -275,8 +222,6 @@ async fn main() {
         ingress_queue_receiver: ingress_queue_receiver.clone(),
         egress_queue_sender: egress_queue_sender.clone(),
         transmit_request_senders: transmit_queue_senders_tagged.clone(),
-        up_client_zenoh: up_client_zenoh.clone(),
-        transports: up_clients_tagged.clone(),
         transmit_cache: transmit_cache.clone(),
     };
 
@@ -297,8 +242,6 @@ async fn main() {
         egress_queue_sender: egress_queue_sender.clone(),
         egress_queue_receiver: egress_queue_receiver.clone(),
         transmit_request_senders: transmit_queue_senders_tagged.clone(),
-        up_client_zenoh: up_client_zenoh.clone(),
-        transports: up_clients_tagged.clone(),
         transmit_cache: transmit_cache.clone(),
     };
 

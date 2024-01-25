@@ -52,8 +52,6 @@ pub struct EgressRouterStartArgs {
     pub egress_queue_sender: Sender<UMessageWithRouting>,
     pub egress_queue_receiver: Receiver<UMessageWithRouting>,
     pub transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
-    pub up_client_zenoh: Arc<ULinkZenoh>,
-    pub transports: TransportVec,
     pub transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 }
 
@@ -69,8 +67,6 @@ impl Plugin for EgressRouter {
         let runtime_clone = start_args.runtime.clone();
         let udevice_authority_clone = start_args.udevice_authority.clone();
         let authority_transport_mapping_clone = start_args.authority_transport_mapping.clone();
-        let transports_clone = start_args.transports.clone();
-        let up_client_zenoh_clone = start_args.up_client_zenoh.clone();
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
         let egress_queue_receiver_clone = start_args.egress_queue_receiver.clone();
         let transmit_request_senders_clone = start_args.transmit_request_senders.clone();
@@ -79,8 +75,6 @@ impl Plugin for EgressRouter {
             runtime_clone,
             udevice_authority_clone,
             authority_transport_mapping_clone,
-            transports_clone,
-            up_client_zenoh_clone,
             egress_queue_sender_clone,
             egress_queue_receiver_clone,
             transmit_request_senders_clone,
@@ -125,7 +119,6 @@ async fn egress_queue_consumer(
     mut receiver: Receiver<UMessageWithRouting>,
     authority_transport_mapping: Arc<Mutex<HashMap<HashableAuthority, TransportType>>>,
     transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
-    transports: TransportVec,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 ) {
     let local_transmit_cache = transmit_cache.clone();
@@ -354,8 +347,6 @@ async fn run(
     runtime: Runtime,
     udevice_authority: UAuthority,
     authority_transport_mapping: Arc<Mutex<HashMap<HashableAuthority, TransportType>>>,
-    transports: TransportVec,
-    up_client_zenoh: Arc<ULinkZenoh>,
     egress_queue_sender: Sender<UMessageWithRouting>,
     egress_queue_receiver: Receiver<UMessageWithRouting>,
     transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
@@ -367,7 +358,6 @@ async fn run(
         egress_queue_receiver.clone(),
         authority_transport_mapping.clone(),
         transmit_request_senders.clone(),
-        transports.clone(),
         transmit_cache.clone(),
     ));
 
