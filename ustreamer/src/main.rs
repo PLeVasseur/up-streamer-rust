@@ -19,6 +19,7 @@ use crate::plugins::types::*;
 use crate::plugins::up_client_full::{
     UpClientFull, UpClientFullFactory, UpClientPlugin, UpClientPluginStartArgs,
 };
+use crate::plugins::up_client_full_factories::*;
 use std::cell::RefCell;
 
 use async_std::channel::{self, Receiver, Sender};

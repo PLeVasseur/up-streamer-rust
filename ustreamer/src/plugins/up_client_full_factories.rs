@@ -1,0 +1,86 @@
+use std::future::Future;
+use std::sync::Arc;
+use async_std::sync::Mutex;
+use async_std::pin::Pin;
+use uprotocol_rust_transport_mqtt::UTransportMqtt;
+use uprotocol_rust_transport_sommr::UTransportSommr;
+use uprotocol_zenoh_rust::ULinkZenoh;
+use zenoh::config::WhatAmI;
+use crate::plugins::types::TransportType;
+use crate::plugins::up_client_full::{UpClientFull, UpClientFullFactory};
+
+pub struct ULinkZenohFactory {}
+impl UpClientFullFactory for ULinkZenohFactory {
+    fn transport_type(&self) -> &'static TransportType {
+        &TransportType::UpClientZenoh
+    }
+    fn create_up_client(
+        &self,
+    ) -> Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Arc<Mutex<Box<dyn UpClientFull>>>> + Send>>>
+    {
+        Box::new(|| {
+            Box::pin(async move {
+                let mut up_client_config = zenoh::config::Config::default();
+                up_client_config
+                    .set_mode(Some(WhatAmI::Peer))
+                    .expect("Unable to configure as Peer");
+                let up_client: Arc<Mutex<Box<dyn UpClientFull>>> = Arc::new(Mutex::new(Box::new(
+                    ULinkZenoh::new_from_config(up_client_config).await.unwrap(),
+                )));
+                up_client
+            })
+        })
+    }
+}
+
+pub struct UTransportSommrFactory {}
+impl UpClientFullFactory for UTransportSommrFactory {
+    fn transport_type(&self) -> &'static TransportType {
+        &TransportType::UpClientSommr
+    }
+    fn create_up_client(
+        &self,
+    ) -> Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Arc<Mutex<Box<dyn UpClientFull>>>> + Send>>>
+    {
+        Box::new(|| {
+            Box::pin(async move {
+                let mut up_client_config = zenoh::config::Config::default();
+                up_client_config
+                    .set_mode(Some(WhatAmI::Peer))
+                    .expect("Unable to configure as Peer");
+                let up_client: Arc<Mutex<Box<dyn UpClientFull>>> = Arc::new(Mutex::new(Box::new(
+                    UTransportSommr::new_from_config(up_client_config)
+                        .await
+                        .unwrap(),
+                )));
+                up_client
+            })
+        })
+    }
+}
+
+pub struct UTransportMqttFactory {}
+impl UpClientFullFactory for UTransportMqttFactory {
+    fn transport_type(&self) -> &'static TransportType {
+        &TransportType::UpClientMqtt
+    }
+    fn create_up_client(
+        &self,
+    ) -> Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Arc<Mutex<Box<dyn UpClientFull>>>> + Send>>>
+    {
+        Box::new(|| {
+            Box::pin(async move {
+                let mut up_client_config = zenoh::config::Config::default();
+                up_client_config
+                    .set_mode(Some(WhatAmI::Peer))
+                    .expect("Unable to configure as Peer");
+                let up_client: Arc<Mutex<Box<dyn UpClientFull>>> = Arc::new(Mutex::new(Box::new(
+                    UTransportMqtt::new_from_config(up_client_config)
+                        .await
+                        .unwrap(),
+                )));
+                up_client
+            })
+        })
+    }
+}
