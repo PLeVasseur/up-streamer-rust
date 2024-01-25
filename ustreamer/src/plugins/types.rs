@@ -89,14 +89,6 @@ impl UpClientFullFactory for ULinkZenohFactory {
     fn transport_type(&self) -> &'static TransportType {
         &TransportType::UpClientZenoh
     }
-
-    // fn create_up_client(&self) -> Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Arc<Mutex<Box<dyn UpClientFull>>>> + Send>>> {
-    //     Box::new(|| {
-    //         Box::pin(async move {
-    //             // your existing code
-    //         })
-    //     })
-    // }
     fn create_up_client(
         &self,
     ) -> Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Arc<Mutex<Box<dyn UpClientFull>>>> + Send>>>

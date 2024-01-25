@@ -116,29 +116,6 @@ async fn main() {
     let (mqtt_transmit_request_queue_sender, mqtt_transmit_request_queue_receiver) =
         channel::bounded::<UMessageWithRouting>(MQTT_UP_CLIENT_QUEUE_CAPACITY);
 
-    let mut up_client_zenoh_config_2 = zenoh::config::Config::default();
-    up_client_zenoh_config_2
-        .set_mode(Some(WhatAmI::Peer))
-        .expect("Unable to configure as Peer");
-    let up_client_zenoh_2: Box<dyn UpClientFull> = Box::new(
-        ULinkZenoh::new_from_config(up_client_zenoh_config_2)
-            .await
-            .unwrap(),
-    );
-
-    let up_client_zenoh_builder = async {
-        let mut up_client_zenoh_config_2 = zenoh::config::Config::default();
-        up_client_zenoh_config_2
-            .set_mode(Some(WhatAmI::Peer))
-            .expect("Unable to configure as Peer");
-        let up_client_zenoh_2: Box<dyn UpClientFull> = Box::new(
-            ULinkZenoh::new_from_config(up_client_zenoh_config_2)
-                .await
-                .unwrap(),
-        );
-        up_client_zenoh_2
-    };
-
     let up_client_zenoh_factory: RefCell<Option<Box<dyn UpClientFullFactory>>> =
         RefCell::new(Some(Box::new(ULinkZenohFactory {})));
     let up_client_zenoh_start_args = UpClientPluginStartArgs {
@@ -159,29 +136,6 @@ async fn main() {
             .expect("Failed to start up_client_zenoh plugin");
     }
 
-    let mut up_client_sommr_config_2 = zenoh::config::Config::default();
-    up_client_sommr_config_2
-        .set_mode(Some(WhatAmI::Peer))
-        .expect("Unable to configure as Peer");
-    let up_client_sommr_2: Box<dyn UpClientFull> = Box::new(
-        UTransportSommr::new_from_config(up_client_sommr_config_2)
-            .await
-            .unwrap(),
-    );
-
-    let up_client_sommr_builder = async {
-        let mut up_client_sommr_config_2 = zenoh::config::Config::default();
-        up_client_sommr_config_2
-            .set_mode(Some(WhatAmI::Peer))
-            .expect("Unable to configure as Peer");
-        let up_client_sommr_2: Box<dyn UpClientFull> = Box::new(
-            UTransportSommr::new_from_config(up_client_sommr_config_2)
-                .await
-                .unwrap(),
-        );
-        up_client_sommr_2
-    };
-
     let up_client_sommr_factory: RefCell<Option<Box<dyn UpClientFullFactory>>> =
         RefCell::new(Some(Box::new(UTransportSommrFactory {})));
     let up_client_sommr_start_args = UpClientPluginStartArgs {
@@ -201,29 +155,6 @@ async fn main() {
         UpClientPlugin::start("up_client_sommr", &up_client_sommr_start_args)
             .expect("Failed to start up_client_sommr plugin");
     }
-
-    let mut up_client_mqtt_config_2 = zenoh::config::Config::default();
-    up_client_mqtt_config_2
-        .set_mode(Some(WhatAmI::Peer))
-        .expect("Unable to configure as Peer");
-    let up_client_mqtt_2: Box<dyn UpClientFull> = Box::new(
-        UTransportMqtt::new_from_config(up_client_mqtt_config_2)
-            .await
-            .unwrap(),
-    );
-
-    let up_client_mqtt_builder = async {
-        let mut up_client_mqtt_config_2 = zenoh::config::Config::default();
-        up_client_mqtt_config_2
-            .set_mode(Some(WhatAmI::Peer))
-            .expect("Unable to configure as Peer");
-        let up_client_mqtt_2: Box<dyn UpClientFull> = Box::new(
-            UTransportMqtt::new_from_config(up_client_mqtt_config_2)
-                .await
-                .unwrap(),
-        );
-        up_client_mqtt_2
-    };
 
     let up_client_mqtt_factory: RefCell<Option<Box<dyn UpClientFullFactory>>> =
         RefCell::new(Some(Box::new(UTransportMqttFactory {})));
