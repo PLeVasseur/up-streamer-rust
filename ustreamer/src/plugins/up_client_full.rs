@@ -19,8 +19,8 @@ use std::cell::RefCell;
 use async_std::channel::{self, Receiver, Sender};
 use async_std::pin::Pin;
 use async_std::prelude::Future;
-use async_std::task;
 use async_std::sync::{Arc, Mutex};
+use async_std::task;
 use async_trait::async_trait;
 use futures::select;
 use log::{debug, error, info, trace, warn};
@@ -50,16 +50,22 @@ pub trait UpClientFull: UTransport + RpcServer + RpcClient {}
 
 impl<T> UpClientFull for T where T: UTransport + RpcServer + RpcClient {}
 
-
 #[async_trait]
 pub trait UpClientFullFactory: Send + Sync {
-
     fn transport_type(&self) -> &'static TransportType;
 
-    fn create_up_client(&self) -> Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Arc<Mutex<Box<dyn UpClientFull>>>> + Send>>>;
+    fn create_up_client(
+        &self,
+    ) -> Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Arc<Mutex<Box<dyn UpClientFull>>>> + Send>>>;
 
-    async fn create_and_setup(&self, udevice_authority: UAuthority, egress_queue_sender: Sender<UMessageWithRouting>, ingress_queue_sender: Sender<UMessageWithRouting>, transmit_request_queue_receiver: Receiver<UMessageWithRouting>, transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>)
-    {
+    async fn create_and_setup(
+        &self,
+        udevice_authority: UAuthority,
+        egress_queue_sender: Sender<UMessageWithRouting>,
+        ingress_queue_sender: Sender<UMessageWithRouting>,
+        transmit_request_queue_receiver: Receiver<UMessageWithRouting>,
+        transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
+    ) {
         trace!("entered create_and_setup");
 
         let up_client = task::block_on({
@@ -83,11 +89,22 @@ pub trait UpClientFullFactory: Send + Sync {
             // let up_client = self.create_up_client();
 
             // Use a local async block for setup_remote_listeners
-            setup_remote_listeners(&up_client, transport_type_clone_1, udevice_authority, egress_queue_sender, ingress_queue_sender);
+            setup_remote_listeners(
+                &up_client,
+                transport_type_clone_1,
+                udevice_authority,
+                egress_queue_sender,
+                ingress_queue_sender,
+            );
 
             trace!("after setup_remote_listeners");
 
-            start_transmit_queue_receiver(up_client, transport_type_clone_2, transmit_request_queue_receiver, transmit_cache);
+            start_transmit_queue_receiver(
+                up_client,
+                transport_type_clone_2,
+                transmit_request_queue_receiver,
+                transmit_cache,
+            );
 
             trace!("after transmit_queue_receiver");
 
@@ -96,11 +113,13 @@ pub trait UpClientFullFactory: Send + Sync {
     }
 }
 
-fn setup_remote_listeners(up_client: &Arc<Mutex<Box<dyn UpClientFull>>>, transport_type: TransportType, udevice_authority: UAuthority,
-                          egress_queue_sender: Sender<UMessageWithRouting>,
-                          ingress_queue_sender: Sender<UMessageWithRouting>,
+fn setup_remote_listeners(
+    up_client: &Arc<Mutex<Box<dyn UpClientFull>>>,
+    transport_type: TransportType,
+    udevice_authority: UAuthority,
+    egress_queue_sender: Sender<UMessageWithRouting>,
+    ingress_queue_sender: Sender<UMessageWithRouting>,
 ) {
-
     let uuri_for_all_remote = UUri {
         authority: Some(UAuthority {
             remote: Some(Remote::Name("*".to_string())),
@@ -134,16 +153,18 @@ fn setup_remote_listeners(up_client: &Arc<Mutex<Box<dyn UpClientFull>>>, transpo
     task::block_on(async move {
         let _registered_all_remote_listener_key = {
             let up_client_lock = up_client.lock().await;
-            let up_client_register_listener_result = up_client_lock
-                .register_listener(
-                    uuri_for_all_remote_register_listener,
-                    Box::new(listener_closure_register_listener),
-                );
+            let up_client_register_listener_result = up_client_lock.register_listener(
+                uuri_for_all_remote_register_listener,
+                Box::new(listener_closure_register_listener),
+            );
 
             let registration_result = up_client_register_listener_result.await;
 
             if registration_result.is_err() {
-                error!("Failed to register listener: {:?}", registration_result.unwrap_err().get_code());
+                error!(
+                    "Failed to register listener: {:?}",
+                    registration_result.unwrap_err().get_code()
+                );
                 return;
             }
 
@@ -159,16 +180,18 @@ fn setup_remote_listeners(up_client: &Arc<Mutex<Box<dyn UpClientFull>>>, transpo
     task::block_on(async move {
         let _registered_all_remote_listener_key = {
             let up_client_lock = up_client.lock().await;
-            let up_client_register_rpc_listener_result = up_client_lock
-                .register_rpc_listener(
-                    uuri_for_all_remote_register_rpc_listener,
-                    Box::new(listener_closure_register_rpc_listener),
-                );
+            let up_client_register_rpc_listener_result = up_client_lock.register_rpc_listener(
+                uuri_for_all_remote_register_rpc_listener,
+                Box::new(listener_closure_register_rpc_listener),
+            );
 
             let registration_result = up_client_register_rpc_listener_result.await;
 
             if registration_result.is_err() {
-                error!("Failed to register listener: {:?}", registration_result.unwrap_err().get_code());
+                error!(
+                    "Failed to register listener: {:?}",
+                    registration_result.unwrap_err().get_code()
+                );
                 return;
             }
 
@@ -177,15 +200,20 @@ fn setup_remote_listeners(up_client: &Arc<Mutex<Box<dyn UpClientFull>>>, transpo
     });
 }
 
-fn start_transmit_queue_receiver(up_client: Arc<Mutex<Box<dyn UpClientFull>>>, transport_type: TransportType,
-                                 transmit_request_queue_receiver: Receiver<UMessageWithRouting>, transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>) {
+fn start_transmit_queue_receiver(
+    up_client: Arc<Mutex<Box<dyn UpClientFull>>>,
+    transport_type: TransportType,
+    transmit_request_queue_receiver: Receiver<UMessageWithRouting>,
+    transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
+) {
     task::spawn_local(async move {
         transmit_queue_request_consumer(
             transport_type.clone(),
             transmit_request_queue_receiver.clone(),
             transmit_cache.clone(),
             up_client,
-        ).await;
+        )
+        .await;
     });
 }
 
@@ -217,7 +245,6 @@ impl Plugin for UpClientPlugin {
     //  clone them to get them "into" the main part of the plugin, the run function
     // Perhaps I should break with the idea of using Zenoh plugin? Hmmm...
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
-
         trace!("entered up_client_full: start");
 
         let Some(up_client_factory) = start_args.up_client_factory.borrow_mut().take() else {
@@ -238,7 +265,6 @@ impl Plugin for UpClientPlugin {
         let transmit_cache_clone = start_args.transmit_cache.clone();
         trace!("up_client_full: start: before running run");
         async_std::task::spawn(async move {
-
             trace!("inside of spawn, before calling run");
 
             run(
@@ -251,7 +277,8 @@ impl Plugin for UpClientPlugin {
                 transmit_request_queue_receiver_clone,
                 transmit_cache_clone,
                 up_client_factory,
-            ).await;
+            )
+            .await;
 
             trace!("inside of spawn, after calling run");
         });
@@ -340,12 +367,10 @@ async fn transmit_queue_request_consumer(
                 trace!("UMessageTypePublish being routed internally");
 
                 let up_client_lock = up_client.lock().await;
-                let up_client_send = up_client_lock
-                    .send(source.clone(), payload.clone(), attributes.clone());
+                let up_client_send =
+                    up_client_lock.send(source.clone(), payload.clone(), attributes.clone());
 
-                match up_client_send
-                    .await
-                {
+                match up_client_send.await {
                     Ok(_) => {
                         trace!("Forwarding message over {:?} successfully", &transport_type);
                     }
@@ -563,13 +588,15 @@ async fn run(
 
     trace!("before create_and_setup");
 
-    up_client_factory.create_and_setup(
-        udevice_authority.clone(),
-        egress_queue_sender.clone(),
-        ingress_queue_sender.clone(),
-        transmit_request_queue_receiver.clone(),
-        transmit_cache.clone(),
-    ).await;
+    up_client_factory
+        .create_and_setup(
+            udevice_authority.clone(),
+            egress_queue_sender.clone(),
+            ingress_queue_sender.clone(),
+            transmit_request_queue_receiver.clone(),
+            transmit_cache.clone(),
+        )
+        .await;
 
     trace!("after create_and_setup");
 
