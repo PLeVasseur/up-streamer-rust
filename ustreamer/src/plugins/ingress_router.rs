@@ -128,7 +128,7 @@ async fn ingress_queue_consumer(
 ) {
     debug!("host_transport: {:?}", &host_transport);
 
-    while let Ok(mut msg) = ingress_queue_receiver.recv().await {
+    while let Ok(msg) = ingress_queue_receiver.recv().await {
         trace!("Ingress Queue: Received msg: {:?}", &msg);
 
         let send_message = |mut msg: UMessageWithRouting| async {

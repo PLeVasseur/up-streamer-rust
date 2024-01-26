@@ -28,7 +28,6 @@ use lru::LruCache;
 use std::convert::TryFrom;
 use uprotocol_sdk::rpc::{RpcClient, RpcServer};
 use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::UMessageType::UmessageTypeResponse;
 use uprotocol_sdk::uprotocol::UPriority::UpriorityCs4;
 use uprotocol_sdk::uprotocol::{
     Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,

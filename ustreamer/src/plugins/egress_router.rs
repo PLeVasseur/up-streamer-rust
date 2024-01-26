@@ -23,7 +23,6 @@ use log::*;
 use lru::LruCache;
 use std::collections::HashMap;
 use uprotocol_sdk::uprotocol::UAuthority;
-use uprotocol_sdk::uprotocol::UMessageType::UmessageTypeResponse;
 use uprotocol_sdk::uuid::builder::UUIDv8Builder;
 use uuid::Uuid as UuidForHashing;
 // TODO: If we want to make this a stand-alone plugin that can compile to a dylib (.so), then we need to
@@ -128,21 +127,12 @@ async fn egress_queue_consumer(
         let msg = message.msg.clone();
 
         // TODO: Unclear if source needed in egress router
-        let source = match &msg.source {
+        let _source = match &msg.source {
             None => {
                 error!("CE pulled from Egress Queue has no source UUri");
                 continue;
             }
             Some(source) => source,
-        };
-
-        // TODO: Unclear if source needed in egress router
-        let _payload = match &msg.payload {
-            None => {
-                error!("CE pulled from Egress Queue has no source UUri");
-                continue;
-            }
-            Some(payload) => payload,
         };
 
         let attributes = match &msg.attributes {
