@@ -51,6 +51,8 @@ pub struct UpClientFullPlugin;
 //  zenoh_plugin_trait::declare_plugin!(UpClientFullPlugin);
 
 pub trait UpClientFull: UTransport + RpcServer + RpcClient {}
+pub type UpClientFullFactoryFunction =
+    Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Arc<Mutex<Box<dyn UpClientFull>>>> + Send>>>;
 
 impl<T> UpClientFull for T where T: UTransport + RpcServer + RpcClient {}
 
@@ -58,9 +60,7 @@ impl<T> UpClientFull for T where T: UTransport + RpcServer + RpcClient {}
 pub trait UpClientFullFactory: Send + Sync {
     fn transport_type(&self) -> &'static TransportType;
 
-    fn create_up_client(
-        &self,
-    ) -> Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Arc<Mutex<Box<dyn UpClientFull>>>> + Send>>>;
+    fn create_up_client(&self) -> UpClientFullFactoryFunction;
 
     async fn create_and_setup(
         &self,
@@ -74,9 +74,7 @@ pub trait UpClientFullFactory: Send + Sync {
 
         let up_client = task::block_on({
             // Call the boxed function to get the future
-            let up_client_future = (self.create_up_client())();
-            // Await the future to get the Arc<Mutex<Box<dyn UpClientFull>>>
-            up_client_future
+            self.create_up_client()()
         });
 
         trace!("after creating up_client");
@@ -397,7 +395,7 @@ async fn transmit_queue_request_consumer(
                 local_transmit_cache
                     .lock()
                     .await
-                    .put(uuid_for_hashing.clone(), true);
+                    .put(uuid_for_hashing, true);
 
                 let transmit_cache_within_send = local_transmit_cache.clone();
                 match up_client_send.await {
@@ -517,7 +515,7 @@ async fn transmit_queue_request_consumer(
                 local_transmit_cache
                     .lock()
                     .await
-                    .put(reqid_for_hashing.clone(), true);
+                    .put(reqid_for_hashing, true);
 
                 match up_client_invoke_method.await {
                     Ok(payload) => {
