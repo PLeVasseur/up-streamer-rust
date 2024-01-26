@@ -103,7 +103,7 @@ async fn main() {
     ])));
 
     // TODO: Should make the transmit_cache configurable
-    let mut transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>> =
+    let transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>> =
         Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1000).unwrap())));
 
     let mut config = zenoh::config::Config::default();
@@ -144,7 +144,6 @@ async fn main() {
         RefCell::new(Some(Box::new(ULinkZenohFactory {})));
     let up_client_zenoh_start_args = UpClientFullPluginStartArgs {
         host_transport: HOST_TRANSPORT,
-        transport_type: TransportType::UpClientZenoh,
         up_client_factory: up_client_zenoh_factory,
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
@@ -164,7 +163,6 @@ async fn main() {
         RefCell::new(Some(Box::new(UTransportSommrFactory {})));
     let up_client_sommr_start_args = UpClientTransportPluginStartArgs {
         host_transport: HOST_TRANSPORT,
-        transport_type: TransportType::UpClientSommr,
         up_client_factory: up_client_sommr_factory,
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
@@ -184,7 +182,6 @@ async fn main() {
         RefCell::new(Some(Box::new(UTransportMqttFactory {})));
     let up_client_mqtt_start_args = UpClientFullPluginStartArgs {
         host_transport: HOST_TRANSPORT,
-        transport_type: TransportType::UpClientMqtt,
         up_client_factory: up_client_mqtt_factory,
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
@@ -217,7 +214,6 @@ async fn main() {
 
     let ingress_queue_start_args = IngressRouterStartArgs {
         host_transport: HOST_TRANSPORT,
-        uuid_builder: uuid_builder.clone(),
         runtime: runtime.clone(),
         udevice_authority: ustreamer_device_authority.clone(),
         ingress_queue_sender: ingress_queue_sender.clone(),

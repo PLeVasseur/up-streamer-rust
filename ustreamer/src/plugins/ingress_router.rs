@@ -22,9 +22,7 @@ use async_std::task;
 use log::*;
 use lru::LruCache;
 use std::collections::HashMap;
-use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::UAuthority;
-use uprotocol_sdk::uuid::builder::UUIDv8Builder;
 use uuid::Uuid as UuidForHashing;
 // TODO: If we want to make this a stand-alone plugin that can compile to a dylib (.so), then we need to
 //  use ZenohPlugin
@@ -43,7 +41,6 @@ pub struct IngressRouter {}
 
 pub struct IngressRouterStartArgs {
     pub host_transport: TransportType,
-    pub uuid_builder: Arc<UUIDv8Builder>,
     pub runtime: Runtime,
     pub udevice_authority: UAuthority,
     pub ingress_queue_sender: Sender<UMessageWithRouting>,
@@ -61,9 +58,12 @@ impl Plugin for IngressRouter {
     const STATIC_NAME: &'static str = "ingress_router";
 
     // The first operation called by zenohd on the plugin
-    fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
+    // TODO: Think about how we can use _name
+    //  My first thought is to use this as a prepend, e.g. up-admin/provided_name/foo
+    //  To allow us to control configuration at run-time
+    fn start(_name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
+        trace!("entered up_client_full: start");
         let host_transport_clone = start_args.host_transport.clone();
-        let uuid_builder_clone = start_args.uuid_builder.clone();
         let udevice_authority = start_args.udevice_authority.clone();
         let ingress_queue_sender_clone = start_args.ingress_queue_sender.clone();
         let ingress_queue_receiver_clone = start_args.ingress_queue_receiver.clone();
@@ -72,7 +72,6 @@ impl Plugin for IngressRouter {
         let transmit_cache_clone = start_args.transmit_cache.clone();
         async_std::task::spawn(run(
             host_transport_clone,
-            uuid_builder_clone,
             udevice_authority,
             ingress_queue_sender_clone,
             ingress_queue_receiver_clone,
@@ -84,8 +83,8 @@ impl Plugin for IngressRouter {
         // let ingress_queue_sender_plugin_clone = start_args.ingress_queue_sender.clone();
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
             RunningPluginInner {
-                runtime: start_args.runtime.clone(),
-                udevice_authority: start_args.udevice_authority.clone(),
+                _runtime: start_args.runtime.clone(),
+                _udevice_authority: start_args.udevice_authority.clone(),
             },
         )))))
     }
@@ -93,8 +92,11 @@ impl Plugin for IngressRouter {
 
 // An inner-state for the RunningPlugin
 struct RunningPluginInner {
-    runtime: Runtime,
-    udevice_authority: UAuthority,
+    // TODO: Eventually, we can use this to receive admin messages addressed to us for live configuration
+    //  over up-admin/provided_name/foo
+    _runtime: Runtime,
+    // TODO: Unclear if udevice_authority needed
+    _udevice_authority: UAuthority,
 }
 // The RunningPlugin struct implementing the RunningPluginTrait trait
 #[derive(Clone)]
@@ -120,9 +122,9 @@ impl RunningPluginTrait for RunningPlugin {
 async fn ingress_queue_consumer(
     host_transport: TransportType,
     transport_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
-    uuid_builder: Arc<UUIDv8Builder>,
-    mut egress_queue_sender: Sender<UMessageWithRouting>,
-    mut ingress_queue_receiver: Receiver<UMessageWithRouting>,
+    // TODO: Unclear if egress_queue_sender needed here
+    _egress_queue_sender: Sender<UMessageWithRouting>,
+    ingress_queue_receiver: Receiver<UMessageWithRouting>,
 ) {
     debug!("host_transport: {:?}", host_transport);
 
@@ -165,13 +167,15 @@ async fn ingress_queue_consumer(
 
 async fn run(
     host_transport: TransportType,
-    uuid_builder: Arc<UUIDv8Builder>,
-    udevice_authority: UAuthority,
-    ingress_queue_sender: Sender<UMessageWithRouting>,
+    // TODO: Unclear if udevice_authority needed
+    _udevice_authority: UAuthority,
+    // TODO: Unclear if ingress_queue_sender needed
+    _ingress_queue_sender: Sender<UMessageWithRouting>,
     ingress_queue_receiver: Receiver<UMessageWithRouting>,
     egress_queue_sender: Sender<UMessageWithRouting>,
     transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
-    transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
+    // TODO: Unclear if transmit_cache needed
+    _transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
 ) {
     let _ = env_logger::try_init();
 
@@ -183,7 +187,6 @@ async fn run(
     task::spawn(ingress_queue_consumer(
         host_transport_clone,
         transmit_request_senders_clone,
-        uuid_builder,
         egress_queue_sender_clone,
         ingress_queue_receiver,
     ));

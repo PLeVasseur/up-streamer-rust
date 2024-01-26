@@ -218,7 +218,6 @@ fn start_transmit_queue_receiver(
 
 pub struct UpClientFullPluginStartArgs {
     pub host_transport: TransportType,
-    pub transport_type: TransportType,
     pub up_client_factory: RefCell<Option<Box<dyn UpClientFullFactory>>>,
     pub runtime: Runtime,
     pub udevice_authority: UAuthority,
@@ -239,7 +238,10 @@ impl Plugin for UpClientFullPlugin {
     const STATIC_NAME: &'static str = "up_client_plugin";
 
     // The first operation called by zenohd on the plugin
-    fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
+    // TODO: Think about how we can use _name
+    //  My first thought is to use this as a prepend, e.g. up-admin/provided_name/foo
+    //  To allow us to control configuration at run-time
+    fn start(_name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
         trace!("entered up_client_full: start");
 
         let Some(up_client_factory) = start_args.up_client_factory.borrow_mut().take() else {
@@ -250,8 +252,6 @@ impl Plugin for UpClientFullPlugin {
         trace!("up_client_full: start: after obtaining factory");
 
         let host_transport_clone = start_args.host_transport.clone();
-        let transport_type_clone = start_args.transport_type.clone();
-        let runtime_clone = start_args.runtime.clone();
         let udevice_authority_clone = start_args.udevice_authority.clone();
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
         let ingress_queue_sender_clone = start_args.ingress_queue_sender.clone();
@@ -264,8 +264,6 @@ impl Plugin for UpClientFullPlugin {
 
             run(
                 host_transport_clone,
-                transport_type_clone,
-                runtime_clone,
                 udevice_authority_clone,
                 egress_queue_sender_clone,
                 ingress_queue_sender_clone,
@@ -281,7 +279,7 @@ impl Plugin for UpClientFullPlugin {
         // let ingress_queue_sender_plugin_clone = start_args.ingress_queue_sender.clone();
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
             RunningPluginInner {
-                runtime: start_args.runtime.clone(),
+                _runtime: start_args.runtime.clone(),
             },
         )))))
     }
@@ -289,7 +287,9 @@ impl Plugin for UpClientFullPlugin {
 
 // An inner-state for the RunningPlugin
 struct RunningPluginInner {
-    runtime: Runtime,
+    // TODO: Eventually, we can use this to receive admin messages addressed to us for live configuration
+    //  over up-admin/provided_name/foo
+    _runtime: Runtime,
 }
 // The RunningPlugin struct implementing the RunningPluginTrait trait
 #[derive(Clone)]
@@ -314,12 +314,12 @@ impl RunningPluginTrait for RunningPlugin {
 
 async fn transmit_queue_request_consumer(
     transport_type: TransportType,
-    mut receiver: Receiver<UMessageWithRouting>,
+    receiver: Receiver<UMessageWithRouting>,
     egress_queue_sender: Sender<UMessageWithRouting>,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
     up_client: Arc<Mutex<Box<dyn UpClientFull>>>,
 ) {
-    let mut local_transmit_cache = transmit_cache.clone();
+    let local_transmit_cache = transmit_cache.clone();
 
     trace!("Entered Transmit Request Queue Consumer");
 
@@ -391,7 +391,7 @@ async fn transmit_queue_request_consumer(
                     .await
                     .put(uuid_for_hashing.clone(), true);
 
-                let mut transmit_cache_within_send = local_transmit_cache.clone();
+                let transmit_cache_within_send = local_transmit_cache.clone();
                 match up_client_send.await {
                     Ok(_) => {
                         trace!("Forwarding message over {:?} successfully", &transport_type);
@@ -629,9 +629,8 @@ fn register_all_remote_listener(
 }
 
 async fn run(
-    host_transport: TransportType,
-    transport_type: TransportType,
-    runtime: Runtime,
+    // TODO: Unclear if host_transport needed
+    _host_transport: TransportType,
     udevice_authority: UAuthority,
     egress_queue_sender: Sender<UMessageWithRouting>,
     ingress_queue_sender: Sender<UMessageWithRouting>,

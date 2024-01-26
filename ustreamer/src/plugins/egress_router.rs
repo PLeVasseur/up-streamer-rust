@@ -22,7 +22,6 @@ use async_std::task;
 use log::*;
 use lru::LruCache;
 use std::collections::HashMap;
-use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::UAuthority;
 use uprotocol_sdk::uuid::builder::UUIDv8Builder;
 use uuid::Uuid as UuidForHashing;
@@ -60,8 +59,10 @@ impl Plugin for EgressRouter {
     const STATIC_NAME: &'static str = "egress_router";
 
     // The first operation called by zenohd on the plugin
-    fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
-        let runtime_clone = start_args.runtime.clone();
+    // TODO: Think about how we can use _name
+    //  My first thought is to use this as a prepend, e.g. up-admin/provided_name/foo
+    //  To allow us to control configuration at run-time
+    fn start(_name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
         let udevice_authority_clone = start_args.udevice_authority.clone();
         let authority_transport_mapping_clone = start_args.authority_transport_mapping.clone();
         let egress_queue_sender_clone = start_args.egress_queue_sender.clone();
@@ -69,7 +70,6 @@ impl Plugin for EgressRouter {
         let transmit_request_senders_clone = start_args.transmit_request_senders.clone();
         let transmit_cache_clone = start_args.transmit_cache.clone();
         async_std::task::spawn(run(
-            runtime_clone,
             udevice_authority_clone,
             authority_transport_mapping_clone,
             egress_queue_sender_clone,
@@ -81,7 +81,7 @@ impl Plugin for EgressRouter {
         // let ingress_queue_sender_plugin_clone = start_args.ingress_queue_sender.clone();
         Ok(Box::new(RunningPlugin(Arc::new(Mutex::new(
             RunningPluginInner {
-                runtime: start_args.runtime.clone(),
+                _runtime: start_args.runtime.clone(),
             },
         )))))
     }
@@ -89,7 +89,9 @@ impl Plugin for EgressRouter {
 
 // An inner-state for the RunningPlugin
 struct RunningPluginInner {
-    runtime: Runtime,
+    // TODO: Eventually, we can use this to receive admin messages addressed to us for live configuration
+    //  over up-admin/provided_name/foo
+    _runtime: Runtime,
 }
 // The RunningPlugin struct implementing the RunningPluginTrait trait
 #[derive(Clone)]
@@ -113,19 +115,19 @@ impl RunningPluginTrait for RunningPlugin {
 }
 
 async fn egress_queue_consumer(
-    mut receiver: Receiver<UMessageWithRouting>,
+    receiver: Receiver<UMessageWithRouting>,
     authority_transport_mapping: Arc<Mutex<HashMap<HashableAuthority, TransportType>>>,
     transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
-    transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
+    _transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>, // TODO: Consider if we need transmit_cache in EgressRouter
 ) {
-    let local_transmit_cache = transmit_cache.clone();
     let local_authority_transport_mapping = authority_transport_mapping.clone();
     while let Ok(message) = receiver.recv().await {
         trace!("Egress Queue: Received msg: {:?}", message);
 
         let msg = &message.msg;
 
-        let source = match &msg.source {
+        // TODO: Unclear if source needed in egress router
+        let _source = match &msg.source {
             None => {
                 error!("CE pulled from Egress Queue has no source UUri");
                 continue;
@@ -133,7 +135,8 @@ async fn egress_queue_consumer(
             Some(source) => source,
         };
 
-        let payload = match &msg.payload {
+        // TODO: Unclear if source needed in egress router
+        let _payload = match &msg.payload {
             None => {
                 error!("CE pulled from Egress Queue has no source UUri");
                 continue;
@@ -149,7 +152,8 @@ async fn egress_queue_consumer(
             Some(attributes) => attributes,
         };
 
-        let id = match &attributes.id {
+        // TODO: Unclear if id needed in egress router
+        let _id = match &attributes.id {
             None => {
                 error!("CE pulled from Egress Queue does not have an id (UUID)");
                 continue;
@@ -208,10 +212,11 @@ async fn egress_queue_consumer(
 }
 
 async fn run(
-    runtime: Runtime,
-    udevice_authority: UAuthority,
+    // TODO: Unclear if udevice_authority needed
+    _udevice_authority: UAuthority,
     authority_transport_mapping: Arc<Mutex<HashMap<HashableAuthority, TransportType>>>,
-    egress_queue_sender: Sender<UMessageWithRouting>,
+    // TODO: Unclear if egress_queue_sender needed
+    _egress_queue_sender: Sender<UMessageWithRouting>,
     egress_queue_receiver: Receiver<UMessageWithRouting>,
     transmit_request_senders: Arc<Mutex<HashMap<TransportType, Sender<UMessageWithRouting>>>>,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
