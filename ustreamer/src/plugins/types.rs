@@ -1,16 +1,21 @@
-use async_std::channel::{Receiver, Sender};
-use async_std::sync::{Arc, Mutex};
-use async_std::task;
-use std::future::Future;
+/********************************************************************************
+ * Copyright (c) 2023 Contributors to the Eclipse Foundation
+ *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Apache License Version 2.0 which is available at
+ * https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ ********************************************************************************/
+
+use async_std::sync::Arc;
 use std::hash::{Hash, Hasher};
-use std::pin::Pin;
 use strum::EnumString;
-use uprotocol_rust_transport_mqtt::UTransportMqtt;
-use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::{u_authority, UAuthority, UMessage, UUri};
-use uprotocol_zenoh_rust::ULinkZenoh;
-use zenoh::config::WhatAmI;
+use uprotocol_sdk::uprotocol::{u_authority, UAuthority, UMessage};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, EnumString, strum::Display)]
 pub enum TransportType {

@@ -1,3 +1,16 @@
+/********************************************************************************
+ * Copyright (c) 2023 Contributors to the Eclipse Foundation
+ *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Apache License Version 2.0 which is available at
+ * https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ ********************************************************************************/
+
 use crate::plugins::types::TransportType;
 use crate::plugins::up_client_full::{UpClientFull, UpClientFullFactory};
 use async_std::pin::Pin;
@@ -5,7 +18,6 @@ use async_std::sync::Mutex;
 use std::future::Future;
 use std::sync::Arc;
 use uprotocol_rust_transport_mqtt::UTransportMqtt;
-use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_zenoh_rust::ULinkZenoh;
 use zenoh::config::WhatAmI;
 

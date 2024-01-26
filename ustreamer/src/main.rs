@@ -17,7 +17,7 @@ use crate::plugins::egress_router::{EgressRouter, EgressRouterStartArgs};
 use crate::plugins::ingress_router::{IngressRouter, IngressRouterStartArgs};
 use crate::plugins::types::*;
 use crate::plugins::up_client_full::{
-    UpClientFull, UpClientFullFactory, UpClientFullPlugin, UpClientFullPluginStartArgs,
+    UpClientFullFactory, UpClientFullPlugin, UpClientFullPluginStartArgs,
 };
 use crate::plugins::up_client_full_factories::*;
 use crate::plugins::up_client_transport::UpClientTransportFactory;
@@ -27,18 +27,14 @@ use std::cell::RefCell;
 use crate::plugins::up_client_transport::{
     UpClientTransportPlugin, UpClientTransportPluginStartArgs,
 };
-use async_std::channel::{self, Receiver, Sender};
+use async_std::channel::{self};
 use async_std::sync::{Arc, Mutex};
-use log::{debug, error, info, trace, warn};
+use log::*;
 use lru::LruCache;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
-use uprotocol_rust_transport_mqtt::UTransportMqtt;
-use uprotocol_rust_transport_sommr::UTransportSommr;
-use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::{Remote, UAuthority, UMessage, Uuid};
+use uprotocol_sdk::uprotocol::{Remote, UAuthority};
 use uprotocol_sdk::uuid::builder::UUIDv8Builder;
-use uprotocol_zenoh_rust::ULinkZenoh;
 use uuid::Uuid as UuidForHashing;
 use zenoh::scouting::WhatAmI;
 
@@ -82,6 +78,15 @@ async fn main() {
     // let cloud_authority = UAuthority {
     //     remote: Some(Remote::Name("uDeviceMqtt".to_string())),
     // };
+
+    // TODO: Alternative / additional formulation
+    //  Map UAuthority => { Internal, External }
+    //  Seems that it's possible for there to be > 1 UAuthority on a uDevice, so this can let us know
+    //  when we receive a message on whether we should route internally or externally
+    //  ~ Could allow us to modify behavior in publish / request / response ~
+    //  => Primarily thought of this as a way of handling a request as externally sending uP-L1 or
+    //     internally as using uP-L2
+
     let authority_transport_mapping = Arc::new(Mutex::new(HashMap::from([
         (
             HashableAuthority(uapp_authority.clone()),

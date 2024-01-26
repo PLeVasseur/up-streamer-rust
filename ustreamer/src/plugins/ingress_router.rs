@@ -11,40 +11,35 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-#![recursion_limit = "256"]
+// TODO: Would be used if we made this compile to its own dylib as a stand-alone Zenoh Plugin
+//  #![recursion_limit = "256"]
 
 use crate::plugins::types::*;
 
-use async_std::channel::{self, Receiver, SendError, Sender};
+use async_std::channel::{Receiver, Sender};
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
-use futures::select;
-use log::{debug, error, info, trace, warn};
+use log::*;
 use lru::LruCache;
-use prost::DecodeError;
 use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
-use uprotocol_sdk::rpc::{RpcClient, RpcClientResult};
 use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::UPriority::UpriorityCs4;
-use uprotocol_sdk::uprotocol::{
-    Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,
-};
+use uprotocol_sdk::uprotocol::UAuthority;
 use uprotocol_sdk::uuid::builder::UUIDv8Builder;
-use uprotocol_zenoh_rust::ULinkZenoh;
 use uuid::Uuid as UuidForHashing;
-use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction, ZenohPlugin};
+// TODO: If we want to make this a stand-alone plugin that can compile to a dylib (.so), then we need to
+//  use ZenohPlugin
+//  use zenoh::plugins::{ZenohPlugin};
+use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
-use zenoh_core::zlock;
-use zenoh_result::{bail, ZResult};
+use zenoh_result::ZResult;
 
 // The struct implementing the ZenohPlugin and ZenohPlugin traits
 pub struct IngressRouter {}
 
-// declaration of the plugin's VTable for zenohd to find the plugin's functions to be called
-// zenoh_plugin_trait::declare_plugin!(IngressRouter);
+// TODO: If we want to make this a stand-alone plugin that can compile to a dylib (.so), then we need to
+//  declaration of the plugin's VTable for zenohd to find the plugin's functions to be called
+//  zenoh_plugin_trait::declare_plugin!(EgressRouter);
 
 pub struct IngressRouterStartArgs {
     pub host_transport: TransportType,
@@ -134,13 +129,6 @@ async fn ingress_queue_consumer(
     while let Ok(msg) = ingress_queue_receiver.recv().await {
         trace!("Ingress Queue: Received msg: {:?}", msg);
 
-        // TODO: May want to make the logic pluggable here
-        //  Why? Well imagine in the case that the host_transport is Zenoh and we get a remote Zenoh message,
-        //   intended for our device, we need not do anything
-        //   VS
-        //  The case where the remote message is Binder and our host_transport is Binder we (may?)
-        //   need to bridge into our local network
-
         let send_message = |msg: UMessageWithRouting| async {
             // TODO: Generally remove all the .unwrap() and handle errors properly
 
@@ -171,247 +159,9 @@ async fn ingress_queue_consumer(
             }
             _ => send_message(msg).await,
         }
-
-        // while let Ok(msg) = ingress_queue_receiver.recv().await {
-
-        // }
-
-        // let source = match &msg.source {
-        //     None => {
-        //         error!("CE pulled from Ingress Queue has no source UUri");
-        //         return;
-        //     }
-        //     Some(source) => source,
-        // };
-        //
-        // let payload = match &msg.payload {
-        //     None => {
-        //         error!("CE pulled from Ingress Queue has no source UUri");
-        //         return;
-        //     }
-        //     Some(payload) => payload,
-        // };
-        //
-        // let attributes = match &msg.attributes {
-        //     None => {
-        //         error!("CE pulled from Ingress Queue has no UAttributes");
-        //         return;
-        //     }
-        //     Some(attributes) => attributes.clone(),
-        // };
-        //
-        // match UMessageType::try_from(attributes.r#type) {
-        //     Ok(UMessageType::UmessageTypePublish) => {
-        //         trace!("UMessageTypePublish being routed internally");
-        //         // TODO:
-        //         //  ~ Another wrinkle: The way subscribers work in Zenoh, it seems like any subscribers on this uDevice
-        //         //    would already have received this CE
-        //
-        //         match up_client_zenoh
-        //             .send(source.clone(), payload.clone(), attributes.clone())
-        //             .await
-        //         {
-        //             Ok(_) => {
-        //                 trace!("Forwarding message internally over Zenoh succeeded");
-        //             }
-        //             Err(status) => {
-        //                 error!(
-        //                     "Forwarding message internally over Zenoh failed: {:?}",
-        //                     status
-        //                 )
-        //             }
-        //         }
-        //     }
-        //     Ok(UMessageType::UmessageTypeRequest) => {
-        //         trace!("UMessageTypeRequest being routed internally");
-        //
-        //         let response_source = match attributes.sink {
-        //             None => {
-        //                 error!("CE with UmessageTypeRequest heard by our uDevice doesn't have sink. Should be caught in placement into Ingress Queue");
-        //                 return;
-        //             }
-        //             Some(ref response_source) => response_source.clone(),
-        //         };
-        //
-        //         debug!("response_source: {:?}", &response_source);
-        //
-        //         let response_reqid = match attributes.id {
-        //             None => {
-        //                 error!("CE with UmessageTypeRequest heard by our uDevice doesn't have id. Should be caught in placement into Ingress Queue");
-        //                 return;
-        //             }
-        //             Some(ref response_reqid) => response_reqid.clone(),
-        //         };
-        //
-        //         debug!("response_reqid: {:?}", &response_reqid);
-        //
-        //         // TODO: Note that since we only get a UPayload back from calling invoke_method
-        //         //  we do not have a corresponding `id` for the response
-        //         //  Unclear if that's a huge deal. For now can simply stamp with the id from uStreamer
-        //         let id = uuid_builder.build();
-        //
-        //         debug!("id for response: {:?}", &id);
-        //
-        //         // TODO: BLOCKER: Currently we don't have UAttributes being returned from invoke_method(), so we fill in what
-        //         //  we can. This is a problem I noted to @Steven Hartley and will likely drive some change to get
-        //         //  attributes back from invoke_method as well
-        //         let response_attributes = UAttributes {
-        //             id: Some(id),
-        //             r#type: i32::from(UMessageType::UmessageTypeResponse),
-        //             sink: Some(source.clone()),
-        //             priority: i32::from(UpriorityCs4), // TODO: What should the priority be?
-        //             ttl: None,                         // TODO: What should the ttl be?
-        //             permission_level: None,
-        //             commstatus: None,
-        //             reqid: Some(response_reqid.clone()),
-        //             token: None,
-        //         };
-        //
-        //         debug!("response_attributes: {:?}", &response_attributes);
-        //
-        //         let up_client_zenoh_clone = up_client_zenoh.clone();
-        //         let source_clone = source.clone();
-        //         let payload_clone = payload.clone();
-        //         let attributes_clone = attributes.clone();
-        //         let egress_queue_sender_clone = egress_queue_sender.clone();
-        //         let response_attributes_clone = response_attributes.clone();
-        //         task::spawn(async move {
-        //             trace!("Inside of async closure to call invoke_method");
-        //
-        //             match up_client_zenoh_clone
-        //                 // Note that in order to be "seen" by the RpcServer::register_rpc_listener() on our device
-        //                 // we need to use the sink we were given as the topic
-        //                 .invoke_method(
-        //                     response_source.clone(),
-        //                     payload_clone.clone(),
-        //                     attributes_clone.clone(),
-        //                 )
-        //                 .await
-        //             {
-        //                 Ok(payload) => {
-        //                     trace!("Received result back from RpcServer");
-        //
-        //                     let response_msg = UMessage {
-        //                         source: Some(response_source.clone()),
-        //                         attributes: Some(response_attributes_clone),
-        //                         payload: Some(payload),
-        //                     };
-        //
-        //                     egress_queue_sender_clone.send(response_msg).await.unwrap();
-        //
-        //                     trace!("Sent response_msg to Egress Queue");
-        //                 }
-        //                 Err(e) => {
-        //                     println!("invoke_method failed: {:?}", e)
-        //                 }
-        //             }
-        //
-        //             trace!("After invoke_method");
-        //         });
-        //
-        //         // warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
-        //         // return;
-        //     }
-        //     Ok(UMessageType::UmessageTypeResponse) => {
-        //         trace!("UMessageTypeResponse being routed internally");
-        //
-        //         // TODO: if Response, then...
-        //         //  => Need to consider how to get ahold of our raw Zenoh session
-        //         //     so that we can look up the Zenoh Query to reply back on
-        //
-        //         warn!("CE Ingress Queue -> uDevice internal Request not implemented yet");
-        //         return;
-        //     }
-        //     Err(_) => {}
-        //     _ => {}
-        // }
     }
-
     error!("Something bad happened with the sender to the Ingress Queue, have to stop listening.");
 }
-
-// fn transport_listener(
-//     result: Result<UMessage, UStatus>,
-//     udevice_authority: UAuthority,
-//     ingress_sender: Sender<UMessageWithRouting>,
-//     egress_sender: Sender<UMessageWithRouting>,
-//     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
-// ) {
-//     match result {
-//         Ok(message) => {
-//             let attributes = match &message.attributes {
-//                 Some(attributes) => attributes,
-//                 None => {
-//                     info!("CE is missing an authority. No need to be routed.");
-//                     return;
-//                 }
-//             };
-//
-//             let sink = match &attributes.sink {
-//                 Some(sink) => sink,
-//                 None => {
-//                     info!("CE has attributes, but no authority. No need to be routed.");
-//                     return;
-//                 }
-//             };
-//
-//             let authority = match &sink.authority {
-//                 Some(authority) => authority,
-//                 None => {
-//                     info!("CE has sink, but no authority. No need to be routed.");
-//                     return;
-//                 }
-//             };
-//
-//             let id = match &attributes.id {
-//                 None => {
-//                     error!("CE pulled from Egress Queue does not have an id (UUID)");
-//                     return;
-//                 }
-//                 Some(id) => id,
-//             };
-//
-//             debug!("Sniffed CE: {:?}", &message);
-//
-//             debug!(
-//                 "udevice_authority: {:?} Message sink authority: {:?}",
-//                 &udevice_authority, &authority
-//             );
-//
-//             let uuid_for_hashing = UuidForHashing::from(id);
-//             if transmit_cache
-//                 .lock()
-//                 .unwrap()
-//                 .get(&uuid_for_hashing)
-//                 .is_some()
-//             {
-//                 info!("Already forwarded CE with Uuid: {}", &uuid_for_hashing);
-//                 return;
-//             }
-//
-//             if *authority == udevice_authority {
-//                 info!("CE for this uDevice. Sending to ingress queue.");
-//                 let ingress_sender_clone = ingress_sender.clone();
-//                 task::spawn(async move {
-//                     ingress_sender_clone.send(message).await.unwrap();
-//                 });
-//             } else {
-//                 info!("CE for another device. Sending to egress queue.");
-//                 let egress_sender_clone = egress_sender.clone();
-//                 task::spawn(async move {
-//                     egress_sender_clone.send(message).await.unwrap();
-//                 });
-//             }
-//         }
-//         Err(status) => {
-//             error!(
-//                 "transport_listener returned UStatus: {:?} msg: {}",
-//                 status.get_code(),
-//                 status.message()
-//             );
-//         }
-//     }
-// }
 
 async fn run(
     host_transport: TransportType,

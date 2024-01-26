@@ -11,23 +11,21 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-#![recursion_limit = "256"]
+// TODO: Would be used if we made this compile to its own dylib as a stand-alone Zenoh Plugin
+//  #![recursion_limit = "256"]
 
 use crate::plugins::types::*;
 use std::cell::RefCell;
 
-use async_std::channel::{self, Receiver, Sender};
+use async_std::channel::{Receiver, Sender};
 use async_std::pin::Pin;
 use async_std::prelude::Future;
 use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use async_trait::async_trait;
-use futures::select;
-use log::{debug, error, info, trace, warn};
+use log::*;
 use lru::LruCache;
-use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::sync::atomic::{AtomicBool, Ordering::Relaxed};
 use uprotocol_sdk::rpc::{RpcClient, RpcServer};
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::UPriority::UpriorityCs4;
@@ -36,16 +34,21 @@ use uprotocol_sdk::uprotocol::{
 };
 use uprotocol_sdk::uri::validator::ValidationError;
 use uprotocol_sdk::uuid::builder::UUIDv8Builder;
-use uprotocol_zenoh_rust::ULinkZenoh;
 use uuid::Uuid as UuidForHashing;
-use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction, ZenohPlugin};
+// TODO: If we want to make this a stand-alone plugin that can compile to a dylib (.so), then we need to
+//  use ZenohPlugin
+//  use zenoh::plugins::{ZenohPlugin};
+use zenoh::plugins::{Plugin, RunningPluginTrait, ValidationFunction};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
-use zenoh_core::zlock;
-use zenoh_result::{bail, Error, ZResult};
+use zenoh_result::{Error, ZResult};
 
 // The struct implementing the ZenohPlugin and ZenohPlugin traits
 pub struct UpClientTransportPlugin;
+
+// TODO: If we want to make this a stand-alone plugin that can compile to a dylib (.so), then we need to
+//  declaration of the plugin's VTable for zenohd to find the plugin's functions to be called
+//  zenoh_plugin_trait::declare_plugin!(UpClientTransportPlugin);
 
 pub trait UpClientTransport: UTransport + RpcServer + RpcClient {}
 
@@ -84,25 +87,17 @@ pub trait UpClientTransportFactory: Send + Sync {
         let transport_type_clone_1 = self.transport_type().clone();
         let transport_type_clone_2 = self.transport_type().clone();
 
+        setup_remote_listeners(
+            &up_client,
+            transport_type_clone_1,
+            udevice_authority,
+            egress_queue_sender.clone(),
+            ingress_queue_sender,
+        );
+
+        trace!("after setup_remote_listeners");
+
         task::spawn_local(async move {
-            // // Call the boxed function to get the future
-            // let up_client_future = (self.create_up_client())();
-            // // Await the future to get the Arc<Mutex<Box<dyn UpClientFull>>>
-            // let up_client = up_client_future.await;
-
-            // let up_client = self.create_up_client();
-
-            // Use a local async block for setup_remote_listeners
-            setup_remote_listeners(
-                &up_client,
-                transport_type_clone_1,
-                udevice_authority,
-                egress_queue_sender.clone(),
-                ingress_queue_sender,
-            );
-
-            trace!("after setup_remote_listeners");
-
             start_transmit_queue_receiver(
                 up_client,
                 transport_type_clone_2,
@@ -566,17 +561,7 @@ async fn transmit_queue_request_consumer(
                 continue;
             }
         }
-
-        // TODO: How do we get access to the UpClientPlugin? Just take ownership?
-
-        // TODO: Unpack the UAttributes and then match over the UMessageType
-        //  match &type {
-        //    UmessageTypePublish => {}
-        //    UmessageTypeResponse => {}
-        //    UmessageTypeRequest => {}
-        //  }
     }
-
     error!("Erroneously exited Transmit Request Queue Consumer");
 }
 
