@@ -51,9 +51,8 @@ pub struct UpClientTransportPlugin;
 //  zenoh_plugin_trait::declare_plugin!(UpClientTransportPlugin);
 
 pub trait UpClientTransport: UTransport + RpcServer + RpcClient {}
-pub type UpClientTransportFactoryFunction = Box<
-    dyn FnOnce() -> Pin<Box<dyn Future<Output = Arc<Mutex<Box<dyn UpClientTransport>>>> + Send>>,
->;
+pub type UpClientTransportFactoryFunction =
+    Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = Box<dyn UpClientTransport>>>> + Send>;
 
 impl<T> UpClientTransport for T where T: UTransport + RpcServer + RpcClient {}
 
@@ -109,8 +108,9 @@ pub trait UpClientTransportFactory: Send + Sync {
     }
 }
 
+#[allow(clippy::borrowed_box)]
 fn setup_remote_listeners(
-    up_client: &Arc<Mutex<Box<dyn UpClientTransport>>>,
+    up_client: &Box<dyn UpClientTransport>,
     transport_type: TransportType,
     udevice_authority: UAuthority,
     egress_queue_sender: Sender<UMessageWithRouting>,
@@ -148,8 +148,7 @@ fn setup_remote_listeners(
     let uuri_for_all_remote_register_listener = uuri_for_all_remote.clone();
     task::block_on(async move {
         let _registered_all_remote_listener_key = {
-            let up_client_lock = up_client.lock().await;
-            let up_client_register_listener_result = up_client_lock.register_listener(
+            let up_client_register_listener_result = up_client.register_listener(
                 uuri_for_all_remote_register_listener,
                 Box::new(listener_closure_register_listener),
             );
@@ -175,8 +174,7 @@ fn setup_remote_listeners(
     let uuri_for_all_remote_register_rpc_listener = uuri_for_all_remote.clone();
     task::block_on(async move {
         let _registered_all_remote_listener_key = {
-            let up_client_lock = up_client.lock().await;
-            let up_client_register_rpc_listener_result = up_client_lock.register_rpc_listener(
+            let up_client_register_rpc_listener_result = up_client.register_rpc_listener(
                 uuri_for_all_remote_register_rpc_listener,
                 Box::new(listener_closure_register_rpc_listener),
             );
@@ -197,7 +195,7 @@ fn setup_remote_listeners(
 }
 
 fn start_transmit_queue_receiver(
-    up_client: Arc<Mutex<Box<dyn UpClientTransport>>>,
+    up_client: Box<dyn UpClientTransport>,
     transport_type: TransportType,
     transmit_request_queue_receiver: Receiver<UMessageWithRouting>,
     egress_queue_sender: Sender<UMessageWithRouting>,
@@ -316,7 +314,7 @@ async fn transmit_queue_request_consumer(
     receiver: Receiver<UMessageWithRouting>,
     egress_queue_sender: Sender<UMessageWithRouting>,
     transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>,
-    up_client: Arc<Mutex<Box<dyn UpClientTransport>>>,
+    up_client: Box<dyn UpClientTransport>,
 ) {
     let local_transmit_cache = transmit_cache.clone();
 
@@ -389,9 +387,8 @@ async fn transmit_queue_request_consumer(
             Ok(UMessageType::UmessageTypePublish) => {
                 trace!("UMessageTypePublish being routed internally");
 
-                let up_client_lock = up_client.lock().await;
                 let up_client_send =
-                    up_client_lock.send(source.clone(), payload.clone(), attributes.clone());
+                    up_client.send(source.clone(), payload.clone(), attributes.clone());
 
                 local_transmit_cache
                     .lock()
@@ -471,10 +468,9 @@ async fn transmit_queue_request_consumer(
                 let response_attributes_clone = response_attributes.clone();
                 trace!("before call invoke_method");
 
-                let up_client_lock = up_client.lock().await;
                 // Note that in order to be "seen" by the RpcServer::register_rpc_listener() on our device
                 // we need to use the sink we were given as the topic
-                let up_client_invoke_method = up_client_lock.invoke_method(
+                let up_client_invoke_method = up_client.invoke_method(
                     response_source.clone(),
                     payload_clone,
                     attributes_clone,
@@ -544,9 +540,8 @@ async fn transmit_queue_request_consumer(
                     );
                 }
 
-                let up_client_lock = up_client.lock().await;
                 let up_client_send =
-                    up_client_lock.send(source.clone(), payload.clone(), attributes.clone());
+                    up_client.send(source.clone(), payload.clone(), attributes.clone());
 
                 local_transmit_cache
                     .lock()
