@@ -25,6 +25,7 @@ use uprotocol_rust_transport_sommr::UTransportSommr;
 use uprotocol_sdk::transport::builder::UAttributesBuilder;
 use uprotocol_sdk::uprotocol::{Data, Remote, UAuthority, UMessage, UPriority, UStatus, Uuid};
 use uprotocol_sdk::uri::builder::resourcebuilder::UResourceBuilder;
+use uprotocol_sdk::uuid::builder::UUIDv8Builder;
 use uprotocol_sdk::{
     transport::datamodel::UTransport,
     uprotocol::{UEntity, UPayload, UUri},
@@ -54,6 +55,7 @@ async fn main() {
 
     let response_resource = UResourceBuilder::for_rpc_response();
     let hello_world_response_uuri = UUri {
+        // authority: None,
         authority: Some(UAuthority {
             remote: Some(Remote::Ip(mdevice_ip.clone())),
         }),
@@ -157,7 +159,7 @@ async fn main() {
                         }
                     };
 
-                    println!("{}", &hello_response.message);
+                    println!("The Response: {}", &hello_response.message);
                 }
             }
             Err(status) => {
@@ -177,8 +179,11 @@ async fn main() {
         .unwrap();
 
     let mut hello_attempt = 0;
+    let uuid_builder = UUIDv8Builder::new();
 
     loop {
+        attributes.id = Some(uuid_builder.build());
+
         task::sleep(Duration::from_secs(1)).await;
 
         let hello_request = HelloRequest {

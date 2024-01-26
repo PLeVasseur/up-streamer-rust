@@ -2912,7 +2912,7 @@ dependencies = [
 [[package]]
 name = "uprotocol-rust-transport-sommr"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/stand-in_for_uprotocol-rust-transport-sommr#d1997ae44d5e9836f4f5688fa630069f95f48843"
+source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/stand-in_for_uprotocol-rust-transport-sommr#d643ba73f8c8a9477ceb0f7f7f4301f42c7422a7"
 dependencies = [
  "anyhow",
  "async-std",

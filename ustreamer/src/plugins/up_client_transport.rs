@@ -28,6 +28,7 @@ use lru::LruCache;
 use std::convert::TryFrom;
 use uprotocol_sdk::rpc::{RpcClient, RpcServer};
 use uprotocol_sdk::transport::datamodel::UTransport;
+use uprotocol_sdk::uprotocol::UMessageType::UmessageTypeResponse;
 use uprotocol_sdk::uprotocol::UPriority::UpriorityCs4;
 use uprotocol_sdk::uprotocol::{
     Remote, UAttributes, UAuthority, UEntity, UMessage, UMessageType, UStatus, UUri,
@@ -326,14 +327,14 @@ async fn transmit_queue_request_consumer(
 
     trace!("Entered Transmit Request Queue Consumer");
 
-    while let Ok(message) = receiver.recv().await {
+    while let Ok(mut message) = receiver.recv().await {
         trace!(
             "Transmit Request Queue: {:?}: Received msg: {:?}",
             &transport_type,
             &message
         );
 
-        let msg = message.msg;
+        let msg = message.msg.clone();
 
         let source = match &msg.source {
             None => {
@@ -357,6 +358,14 @@ async fn transmit_queue_request_consumer(
                 continue;
             }
             Some(attributes) => attributes.clone(),
+        };
+
+        let sink = match &attributes.sink {
+            Some(sink) => sink,
+            None => {
+                info!("CE has attributes, but no authority. No need to be routed.");
+                return;
+            }
         };
 
         let id = match &attributes.id {
@@ -516,9 +525,29 @@ async fn transmit_queue_request_consumer(
             }
 
             Ok(UMessageType::UmessageTypeResponse) => {
-                trace!("UMessageTypeResponse being routed externally");
+                trace!(
+                    "UMessageTypeResponse being routed externally: {:?}",
+                    &message
+                );
 
-                debug!("source: {:?}\nattributes: {:?}", &source, &attributes);
+                // If the destination uTransport is this one, then we need to swap src and sink UUris s.t.
+                // when we send the other end waiting on a uP-L1 UTransport::register_listener(foo) can receive it
+                if message.dst == transport_type {
+                    info!("We're sending a Response over uP-L1, so we need to swap src and sink UUris");
+
+                    let sink_tmp = sink.clone();
+                    let src_tmp = source.clone();
+
+                    message.msg.source = Some(sink_tmp);
+                    if let Some(attributes) = &mut message.msg.attributes {
+                        attributes.sink = Some(src_tmp);
+                    }
+
+                    debug!(
+                        "Response message, post swapping src and sink UUris: {:?}",
+                        &message
+                    );
+                }
 
                 let up_client_lock = up_client.lock().await;
                 let up_client_send =
@@ -532,11 +561,11 @@ async fn transmit_queue_request_consumer(
                 let transmit_cache_within_send = local_transmit_cache.clone();
                 match up_client_send.await {
                     Ok(_) => {
-                        trace!("Forwarding message over {:?} successfully", &transport_type);
+                        trace!("Forwarded message successfully over {:?}", &transport_type);
                     }
                     Err(status) => {
                         error!(
-                            "Forwarding message over {:?} failed: {:?}",
+                            "Forwarding message failed over {:?}: {:?}",
                             &transport_type, status
                         );
 

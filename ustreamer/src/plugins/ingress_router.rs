@@ -126,13 +126,15 @@ async fn ingress_queue_consumer(
     _egress_queue_sender: Sender<UMessageWithRouting>,
     ingress_queue_receiver: Receiver<UMessageWithRouting>,
 ) {
-    debug!("host_transport: {:?}", host_transport);
+    debug!("host_transport: {:?}", &host_transport);
 
-    while let Ok(msg) = ingress_queue_receiver.recv().await {
-        trace!("Ingress Queue: Received msg: {:?}", msg);
+    while let Ok(mut msg) = ingress_queue_receiver.recv().await {
+        trace!("Ingress Queue: Received msg: {:?}", &msg);
 
-        let send_message = |msg: UMessageWithRouting| async {
+        let send_message = |mut msg: UMessageWithRouting| async {
             // TODO: Generally remove all the .unwrap() and handle errors properly
+
+            msg.dst = host_transport.clone();
 
             if let Some(sender) = transport_request_senders.lock().await.get(&host_transport) {
                 match sender.send(msg).await {

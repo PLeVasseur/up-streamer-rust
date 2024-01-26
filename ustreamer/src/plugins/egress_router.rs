@@ -23,6 +23,7 @@ use log::*;
 use lru::LruCache;
 use std::collections::HashMap;
 use uprotocol_sdk::uprotocol::UAuthority;
+use uprotocol_sdk::uprotocol::UMessageType::UmessageTypeResponse;
 use uprotocol_sdk::uuid::builder::UUIDv8Builder;
 use uuid::Uuid as UuidForHashing;
 // TODO: If we want to make this a stand-alone plugin that can compile to a dylib (.so), then we need to
@@ -121,13 +122,13 @@ async fn egress_queue_consumer(
     _transmit_cache: Arc<Mutex<LruCache<UuidForHashing, bool>>>, // TODO: Consider if we need transmit_cache in EgressRouter
 ) {
     let local_authority_transport_mapping = authority_transport_mapping.clone();
-    while let Ok(message) = receiver.recv().await {
+    while let Ok(mut message) = receiver.recv().await {
         trace!("Egress Queue: Received msg: {:?}", message);
 
-        let msg = &message.msg;
+        let msg = message.msg.clone();
 
         // TODO: Unclear if source needed in egress router
-        let _source = match &msg.source {
+        let source = match &msg.source {
             None => {
                 error!("CE pulled from Egress Queue has no source UUri");
                 continue;
@@ -192,6 +193,8 @@ async fn egress_queue_consumer(
                     continue;
                 }
                 Some(transport_request_sender) => {
+                    message.dst = transport.clone();
+
                     match transport_request_sender.send(message).await {
                         Ok(_) => {
                             info!(

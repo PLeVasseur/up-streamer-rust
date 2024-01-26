@@ -323,14 +323,14 @@ async fn transmit_queue_request_consumer(
 
     trace!("Entered Transmit Request Queue Consumer");
 
-    while let Ok(message) = receiver.recv().await {
+    while let Ok(mut message) = receiver.recv().await {
         trace!(
             "Transmit Request Queue: {:?}: Received msg: {:?}",
             &transport_type,
             &message
         );
 
-        let msg = message.msg;
+        let msg = message.msg.clone();
 
         let source = match &msg.source {
             None => {
@@ -354,6 +354,14 @@ async fn transmit_queue_request_consumer(
                 continue;
             }
             Some(attributes) => attributes.clone(),
+        };
+
+        let sink = match &attributes.sink {
+            None => {
+                error!("CE pulled from Egress Queue does not have a sink UUri");
+                continue;
+            }
+            Some(sink) => sink,
         };
 
         let id = match &attributes.id {
@@ -412,6 +420,25 @@ async fn transmit_queue_request_consumer(
             Ok(UMessageType::UmessageTypeRequest) => {
                 trace!("UMessageTypeRequest being routed internally");
 
+                // If the destination uTransport is this one, then we need to swap src and sink UUris s.t.
+                // when we send the other end waiting on a uP-L1 UTransport::register_rpc_listener(foo) can receive it
+                if message.dst == transport_type {
+                    info!("We're sending a Response over uP-L1, so we need to swap src and sink UUris");
+
+                    let sink_tmp = sink.clone();
+                    let src_tmp = source.clone();
+
+                    message.msg.source = Some(sink_tmp);
+                    if let Some(attributes) = &mut message.msg.attributes {
+                        attributes.sink = Some(src_tmp);
+                    }
+
+                    debug!(
+                        "Response message, post swapping src and sink UUris: {:?}",
+                        &message
+                    );
+                }
+
                 let response_source = match attributes.sink {
                     None => {
                         error!("CE with UmessageTypeRequest heard by our uDevice doesn't have sink. Should be caught in placement into Ingress Queue");
@@ -458,8 +485,8 @@ async fn transmit_queue_request_consumer(
                 let response_attributes = UAttributes {
                     id: Some(id),
                     r#type: i32::from(UMessageType::UmessageTypeResponse),
-                    sink: Some(response_source.clone()),
-                    // sink: Some(source.clone()),
+                    // sink: Some(response_source.clone()),
+                    sink: Some(source.clone()),
                     priority: i32::from(UpriorityCs4), // TODO: What should the priority be?
                     ttl: None,                         // TODO: What should the ttl be?
                     permission_level: None,
@@ -496,9 +523,18 @@ async fn transmit_queue_request_consumer(
                     Ok(payload) => {
                         trace!("Received result back from RpcServer");
 
+                        debug!(
+                            "response_source, prior to building response_msg: {:?}",
+                            response_source
+                        );
+                        debug!(
+                            "response_attributes_clone, prior to building response_msg: {:?}",
+                            response_attributes_clone
+                        );
+
                         let response_msg = UMessage {
-                            // source: Some(response_source.clone()), // TODO: Ask @Steven Hartley about this... just doesn't make sense
-                            source: Some(source.clone()), //  to me that we'd respond
+                            source: Some(response_source.clone()), // TODO: Ask @Steven Hartley about this... just doesn't make sense
+                            // source: Some(source.clone()), //  to me that we'd respond
                             attributes: Some(response_attributes_clone),
                             payload: Some(payload),
                         };

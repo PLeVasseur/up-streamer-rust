@@ -131,7 +131,6 @@ async fn main() {
                         }
                         Err(e) => {
                             println!("Failed to send response back: {:?}", e);
-                            return;
                         }
                     }
                     println!("After calling send()");
