@@ -2820,10 +2820,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed646292ffc8188ef8ea4d1e0e0150fb15a5c2e12ad9b8fc191ae7a8a7f3c4b9"
 
 [[package]]
-name = "udiscovery"
-version = "0.1.0"
-
-[[package]]
 name = "uhlc"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2928,7 +2924,7 @@ dependencies = [
 [[package]]
 name = "uprotocol-sdk"
 version = "0.1.5"
-source = "git+https://github.com/PLeVasseur/uprotocol-rust_fork.git?branch=feature/turn_send_sync_back_off#008103509de3adc5cc0a7d0f2c0ce055a735b33f"
+source = "git+https://github.com/PLeVasseur/uprotocol-rust_fork.git?branch=feature/turn_send_sync_back_off#c8445bacf9aacffc5daf4a1278968f9b6302c330"
 dependencies = [
  "async-trait",
  "byteorder",
@@ -3020,8 +3016,31 @@ dependencies = [
 ]
 
 [[package]]
-name = "usubscription"
-version = "0.1.0"
+name = "ustreamer-pluggable"
+version = "0.1.5-SNAPSHOT"
+dependencies = [
+ "async-std",
+ "async-trait",
+ "chrono",
+ "env_logger",
+ "example-proto",
+ "futures",
+ "log",
+ "lru",
+ "prost",
+ "serde_json",
+ "strum",
+ "uprotocol-rust-transport-mqtt",
+ "uprotocol-rust-transport-sommr",
+ "uprotocol-sdk",
+ "uprotocol_zenoh_rust",
+ "uuid",
+ "zenoh",
+ "zenoh-core",
+ "zenoh-plugin-trait",
+ "zenoh-result",
+ "zenoh-util",
+]
 
 [[package]]
 name = "utf-8"
@@ -3034,10 +3053,6 @@ name = "utf8parse"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "711b9620af191e0cdc7468a8d14e709c3dcdb115b36f838e601583af800a370a"
-
-[[package]]
-name = "utwin"
-version = "0.1.0"
 
 [[package]]
 name = "uuid"

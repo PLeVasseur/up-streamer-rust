@@ -14,9 +14,7 @@ resolver = "2"
 members = [
     "example-utils/example-proto",
     "ustreamer",
-    "udiscovery",
-    "usubscription",
-    "utwin",
+    "ustreamer-pluggable",
 ]
 
 [workspace.package]

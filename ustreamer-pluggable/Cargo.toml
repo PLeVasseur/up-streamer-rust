@@ -1,0 +1,38 @@
+[package]
+name = "ustreamer-pluggable"
+rust-version.workspace = true
+version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-std = { workspace = true }
+async-trait = { workspace = true }
+env_logger = { workspace = true }
+futures = { workspace = true }
+log = { workspace = true }
+lru = { workspace = true }
+prost = { workspace = true }
+strum = { workspace = true }
+uprotocol-sdk = { workspace = true }
+uprotocol-rust-transport-mqtt = { workspace = true }
+uprotocol-rust-transport-sommr = { workspace = true }
+uprotocol_zenoh_rust = { workspace = true }
+uuid = { workspace = true }
+zenoh = { workspace = true }
+zenoh-core = { workspace = true }
+zenoh-plugin-trait = { workspace = true }
+zenoh-result = { workspace = true }
+zenoh-util = { workspace = true }
+serde_json = "1.0.111"
+
+
+[dev-dependencies]
+example-proto = { path = "../example-utils/example-proto" }
+chrono = { version = "0.4.31", features = [] }
