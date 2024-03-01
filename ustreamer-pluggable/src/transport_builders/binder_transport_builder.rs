@@ -68,7 +68,7 @@ impl AndroidTransportBuilder {
 }
 
 impl UTransportBuilder for AndroidTransportBuilder {
-    fn create_up_client(&self) -> Box<dyn UTransport> {
+    fn build(&self) -> Box<dyn UTransport> {
         let ubus_clone = Arc::clone(&self.ubus);
         let mut ubus_lock = ubus_clone.lock().unwrap();
         if ubus_lock.is_none() {

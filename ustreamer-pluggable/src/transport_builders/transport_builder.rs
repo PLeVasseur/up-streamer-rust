@@ -22,15 +22,15 @@ fn streamer_uuri_from_uauthority(authority: &UAuthority) -> UUri {
 
 #[async_trait]
 pub trait UTransportBuilder: Send + Sync {
-    fn create_up_client(&self) -> Box<dyn UTransport>;
+    fn build(&self) -> Box<dyn UTransport>;
 
-    fn create_and_setup(
+    fn start(
         &self,
         authorities: Vec<UAuthority>,
     ) {
         trace!("entered create_and_setup");
 
-        let utransport = self.create_up_client();
+        let utransport = self.build();
 
         task::spawn_local(async move {
             for authority in &authorities {
