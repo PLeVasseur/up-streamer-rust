@@ -66,10 +66,8 @@ impl UStreamer {
                 channel::bounded::<bool>(UTRANSPORT_QUEUE_CAPACITY);
             utransport_senders.insert(transport_builder.0, utransport_sender);
             utransport_receivers.insert(transport_builder.0, utransport_receiver);
-            {
-                UTransportPlugin::start("todo", &transport_builder.1)
-                    .expect("Failed to start todo plugin");
-            }
+            let _result = UTransportPlugin::start("todo", &transport_builder.1)
+                .expect("Failed to start todo plugin");
         }
 
         Ok(Self {
