@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use up_rust::transport::datamodel::UTransport;
-use up_rust::uprotocol::{UAttributes, UEntity, UMessage, UPayload, UStatus, UUri};
+use up_rust::uprotocol::{UMessage, UStatus, UUri};
 use crate::transport_builders::transport_builder::UTransportBuilder;
 
 // From here to below is all just mocking what a potential UpClientAndroid could look like

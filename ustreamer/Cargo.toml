@@ -28,6 +28,7 @@ zenoh-result = { workspace = true }
 zenoh-util = { workspace = true }
 serde_json = { workspace = true }
 up-rust = { workspace = true }
+up-client-zenoh-rust = { workspace = true }
 
 # uprotocol-sdk = { workspace = true }
 # uprotocol-rust-transport-mqtt = { workspace = true }

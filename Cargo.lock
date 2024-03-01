@@ -2947,6 +2947,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "uprotocol_zenoh"
+version = "0.1.0"
+source = "git+https://github.com/eclipse-uprotocol/up-client-zenoh-rust?branch=main#cca6bdb761500b02717a480bb240b1f061cf3f29"
+dependencies = [
+ "anyhow",
+ "async-std",
+ "async-trait",
+ "chrono",
+ "env_logger",
+ "log",
+ "prost",
+ "prost-types",
+ "protobuf",
+ "up-rust",
+ "zenoh",
+]
+
+[[package]]
 name = "ureq"
 version = "2.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2990,6 +3008,7 @@ dependencies = [
  "serde_json",
  "strum",
  "up-rust",
+ "uprotocol_zenoh",
  "uuid",
  "zenoh",
  "zenoh-core",

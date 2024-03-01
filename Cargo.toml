@@ -48,6 +48,7 @@ zenoh-plugin-trait = { version = "0.10.1-rc" }
 zenoh-result = { version = "0.10.1-rc" }
 zenoh-util = { version = "0.10.1-rc" }
 up-rust = { git = "https://github.com/eclipse-uprotocol/up-rust", rev = "68c8a1d94f0006daf4ba135c9cbbfddcd793108d" }
+up-client-zenoh-rust = { package = "uprotocol_zenoh", git = "https://github.com/eclipse-uprotocol/up-client-zenoh-rust", branch = "main" }
 
 # upstream
 # uprotocol-sdk = { git = "https://github.com/eclipse-uprotocol/uprotocol-rust.git", branch = "main" }

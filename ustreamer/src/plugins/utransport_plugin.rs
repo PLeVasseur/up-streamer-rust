@@ -4,8 +4,7 @@ use std::io::ErrorKind;
 use std::sync::{
     Arc, Mutex,
 };
-use async_std::task;
-use up_rust::uprotocol::{UAuthority, UMessage, UStatus, UUri};
+use up_rust::uprotocol::{UAuthority};
 use zenoh::plugins::{Response, RunningPluginTrait, ValidationFunction};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
