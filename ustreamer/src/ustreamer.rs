@@ -1,7 +1,8 @@
 use async_std::channel::{self};
 use std::collections::HashMap;
 use up_rust::uprotocol::UAuthority;
-use crate::plugins::utransport_plugin::{UTransportPlugin, UTransportPluginStartArgs};
+use crate::routers::utransport_plugin::{UTransportPlugin, UTransportPluginStartArgs};
+use crate::routers::streamer_plugin::StreamerPlugin;
 
 #[derive(Debug)]
 enum UStreamerConstructionError {
@@ -66,11 +67,9 @@ impl UStreamer {
             utransport_senders.insert(transport_builder.0, utransport_sender);
             utransport_receivers.insert(transport_builder.0, utransport_receiver);
             {
-                use zenoh_plugin_trait::Plugin;
                 UTransportPlugin::start("todo", &transport_builder.1)
                     .expect("Failed to start todo plugin");
             }
-
         }
 
         Ok(Self {

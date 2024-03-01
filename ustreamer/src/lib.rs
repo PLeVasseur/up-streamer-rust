@@ -1,3 +1,3 @@
 mod ustreamer;
-mod plugins;
+mod routers;
 mod transport_builders;

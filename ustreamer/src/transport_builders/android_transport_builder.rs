@@ -4,6 +4,8 @@ use up_rust::transport::datamodel::UTransport;
 use up_rust::uprotocol::{UMessage, UStatus, UUri};
 use crate::transport_builders::transport_builder::UTransportBuilder;
 
+// TODO: Must get moved into another repo, too specific for up-streamer-rust
+
 // From here to below is all just mocking what a potential UpClientAndroid could look like
 // and testing the hypothesis on whether we should be able to bring a Box / Strong of dyn IUBus
 trait Interface: Send + Sync {}

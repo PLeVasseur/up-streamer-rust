@@ -22,10 +22,6 @@ prost = { workspace = true }
 strum = { workspace = true }
 uuid = { workspace = true }
 zenoh = { workspace = true }
-zenoh-core = { workspace = true }
-zenoh-plugin-trait = { workspace = true }
-zenoh-result = { workspace = true }
-zenoh-util = { workspace = true }
 serde_json = { workspace = true }
 up-rust = { workspace = true }
 up-client-zenoh-rust = { workspace = true }

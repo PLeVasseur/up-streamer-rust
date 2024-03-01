@@ -3011,10 +3011,6 @@ dependencies = [
  "uprotocol_zenoh",
  "uuid",
  "zenoh",
- "zenoh-core",
- "zenoh-plugin-trait",
- "zenoh-result",
- "zenoh-util",
 ]
 
 [[package]]
