@@ -20,17 +20,19 @@ log = { workspace = true }
 lru = { workspace = true }
 prost = { workspace = true }
 strum = { workspace = true }
-uprotocol-sdk = { workspace = true }
-uprotocol-rust-transport-mqtt = { workspace = true }
-uprotocol-rust-transport-sommr = { workspace = true }
-uprotocol_zenoh_rust = { workspace = true }
 uuid = { workspace = true }
 zenoh = { workspace = true }
 zenoh-core = { workspace = true }
 zenoh-plugin-trait = { workspace = true }
 zenoh-result = { workspace = true }
 zenoh-util = { workspace = true }
+serde_json = { workspace = true }
+up-rust = { workspace = true }
 
+# uprotocol-sdk = { workspace = true }
+# uprotocol-rust-transport-mqtt = { workspace = true }
+# uprotocol-rust-transport-sommr = { workspace = true }
+# uprotocol_zenoh_rust = { workspace = true }
 
 [dev-dependencies]
 example-proto = { path = "../example-utils/example-proto" }

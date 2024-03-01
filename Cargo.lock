@@ -344,12 +344,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atomic"
-version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c59bdb34bc650a32731b31bd8f0829cc15d24a708ee31559e0bb34f2bc320cba"
-
-[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1046,6 +1040,12 @@ dependencies = [
 
 [[package]]
 name = "hashbrown"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
+
+[[package]]
+name = "hashbrown"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "43a3c133739dddd0d2990f9a4bdf8eb4b21ef50e4851ca85ab661199821d510e"
@@ -1164,6 +1164,16 @@ checksum = "634d9b1461af396cad843f47fdba5597a4f9e6ddd4bfb6ff5d85028c25cb12f6"
 dependencies = [
  "unicode-bidi",
  "unicode-normalization",
+]
+
+[[package]]
+name = "indexmap"
+version = "1.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd070e393353796e801d209ad339e89596eb4c8d430d18ede6a1cced8fafbd99"
+dependencies = [
+ "autocfg",
+ "hashbrown 0.12.3",
 ]
 
 [[package]]
@@ -1379,35 +1389,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "mac_address"
-version = "1.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4863ee94f19ed315bf3bc00299338d857d4b5bc856af375cc97d237382ad3856"
-dependencies = [
- "nix 0.23.2",
- "winapi",
-]
-
-[[package]]
 name = "match_cfg"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ffbee8634e0d45d258acb448e7eaab3fce7a0a467395d4d9f228e3c1f01fb2e4"
 
 [[package]]
+name = "mediatype"
+version = "0.19.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8878cd8d1b3c8c8ae4b2ba0a36652b7cf192f618a599a7fbdfa25cffd4ea72dd"
+
+[[package]]
 name = "memchr"
 version = "2.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "523dc4f511e55ab87b694dc30d0f820d60906ef06413f93d4d7a1385599cc149"
-
-[[package]]
-name = "memoffset"
-version = "0.6.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
-dependencies = [
- "autocfg",
-]
 
 [[package]]
 name = "miniz_oxide"
@@ -1442,19 +1439,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a51313c5820b0b02bd422f4b44776fbf47961755c74ce64afc73bfad10226c3"
 dependencies = [
  "getrandom",
-]
-
-[[package]]
-name = "nix"
-version = "0.23.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f3790c00a0150112de0f4cd161e3d7fc4b2d8a5542ffc35f099a2562aecb35c"
-dependencies = [
- "bitflags 1.3.2",
- "cc",
- "cfg-if",
- "libc",
- "memoffset",
 ]
 
 [[package]]
@@ -1647,7 +1631,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1d3afd2628e69da2be385eb6f2fd57c8ac7977ceeff6dc166ff1657b0e386a9"
 dependencies = [
  "fixedbitset",
- "indexmap",
+ "indexmap 2.1.0",
 ]
 
 [[package]]
@@ -1892,6 +1876,57 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "193898f59edcf43c26227dcd4c8427f00d99d61e95dcde58dabd49fa291d470e"
 dependencies = [
  "prost",
+]
+
+[[package]]
+name = "protobuf"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "58678a64de2fced2bdec6bca052a6716a0efe692d6e3f53d1bda6a1def64cfc0"
+dependencies = [
+ "once_cell",
+ "protobuf-support",
+ "thiserror",
+]
+
+[[package]]
+name = "protobuf-codegen"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32777b0b3f6538d9d2e012b3fad85c7e4b9244b5958d04a6415f4333782b7a77"
+dependencies = [
+ "anyhow",
+ "once_cell",
+ "protobuf",
+ "protobuf-parse",
+ "regex",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
+name = "protobuf-parse"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "96cb37955261126624a25b5e6bda40ae34cf3989d52a783087ca6091b29b5642"
+dependencies = [
+ "anyhow",
+ "indexmap 1.9.3",
+ "log",
+ "protobuf",
+ "protobuf-support",
+ "tempfile",
+ "thiserror",
+ "which",
+]
+
+[[package]]
+name = "protobuf-support"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e1ed294a835b0f30810e13616b1cd34943c6d1e84a8f3b0dcfe466d256c3e7e7"
+dependencies = [
+ "thiserror",
 ]
 
 [[package]]
@@ -2418,7 +2453,7 @@ version = "0.9.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1bf28c79a99f70ee1f1d83d10c875d2e70618417fda01ad1785e027579d9d38"
 dependencies = [
- "indexmap",
+ "indexmap 2.1.0",
  "itoa",
  "ryu",
  "serde",
@@ -2890,51 +2925,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "uprotocol-rust-transport-mqtt"
-version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/stand-in_for_uprotocol-rust-transport-mqtt#338e14309138fcef17792988a3e8849dfe452317"
-dependencies = [
- "anyhow",
- "async-std",
- "async-trait",
- "chrono",
- "cloudevents-sdk",
- "prost",
- "prost-types",
- "uprotocol-sdk",
- "zenoh",
-]
-
-[[package]]
-name = "uprotocol-rust-transport-sommr"
-version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/stand-in_for_uprotocol-rust-transport-sommr#d643ba73f8c8a9477ceb0f7f7f4301f42c7422a7"
-dependencies = [
- "anyhow",
- "async-std",
- "async-trait",
- "chrono",
- "cloudevents-sdk",
- "prost",
- "prost-types",
- "uprotocol-sdk",
- "zenoh",
-]
-
-[[package]]
-name = "uprotocol-sdk"
+name = "up-rust"
 version = "0.1.5"
-source = "git+https://github.com/PLeVasseur/uprotocol-rust_fork.git?branch=feature/turn_send_sync_back_off#c8445bacf9aacffc5daf4a1278968f9b6302c330"
+source = "git+https://github.com/eclipse-uprotocol/up-rust?rev=68c8a1d94f0006daf4ba135c9cbbfddcd793108d#68c8a1d94f0006daf4ba135c9cbbfddcd793108d"
 dependencies = [
  "async-trait",
- "byteorder",
  "bytes",
  "chrono",
  "cloudevents-sdk",
- "mac_address",
- "prost",
- "prost-build",
- "prost-types",
+ "mediatype",
+ "protobuf",
+ "protobuf-codegen",
  "protoc-bin-vendored",
  "rand",
  "regex",
@@ -2943,22 +2944,6 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "uprotocol_zenoh_rust"
-version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git?branch=feature/update_timeout#3805491d9cb0d38e823255938f0460e971bb4dd3"
-dependencies = [
- "anyhow",
- "async-std",
- "async-trait",
- "chrono",
- "cloudevents-sdk",
- "prost",
- "prost-types",
- "uprotocol-sdk",
- "zenoh",
 ]
 
 [[package]]
@@ -3002,38 +2987,9 @@ dependencies = [
  "log",
  "lru",
  "prost",
- "strum",
- "uprotocol-rust-transport-mqtt",
- "uprotocol-rust-transport-sommr",
- "uprotocol-sdk",
- "uprotocol_zenoh_rust",
- "uuid",
- "zenoh",
- "zenoh-core",
- "zenoh-plugin-trait",
- "zenoh-result",
- "zenoh-util",
-]
-
-[[package]]
-name = "ustreamer-pluggable"
-version = "0.1.5-SNAPSHOT"
-dependencies = [
- "async-std",
- "async-trait",
- "chrono",
- "env_logger",
- "example-proto",
- "futures",
- "log",
- "lru",
- "prost",
  "serde_json",
  "strum",
- "uprotocol-rust-transport-mqtt",
- "uprotocol-rust-transport-sommr",
- "uprotocol-sdk",
- "uprotocol_zenoh_rust",
+ "up-rust",
  "uuid",
  "zenoh",
  "zenoh-core",
@@ -3060,7 +3016,6 @@ version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f00cc9702ca12d3c81455259621e676d0f7251cec66a21e98fe2e9a37db93b2a"
 dependencies = [
- "atomic",
  "getrandom",
 ]
 
@@ -3668,7 +3623,7 @@ dependencies = [
  "async-trait",
  "futures",
  "log",
- "nix 0.27.1",
+ "nix",
  "uuid",
  "zenoh-core",
  "zenoh-link-commons",

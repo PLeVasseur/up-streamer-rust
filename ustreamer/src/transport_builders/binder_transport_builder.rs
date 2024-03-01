@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
-use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::{UAttributes, UEntity, UMessage, UPayload, UStatus, UUri};
+use up_rust::transport::datamodel::UTransport;
+use up_rust::uprotocol::{UAttributes, UEntity, UMessage, UPayload, UStatus, UUri};
 use crate::transport_builders::transport_builder::UTransportBuilder;
 
 // From here to below is all just mocking what a potential UpClientAndroid could look like
@@ -25,18 +25,14 @@ impl UpClientAndroid {
 
 #[async_trait]
 impl UTransport for UpClientAndroid {
+
     #[allow(dead_code)]
-    async fn authenticate(&self, entity: UEntity) -> Result<(), UStatus> {
+    async fn send(&self, message: UMessage) -> Result<(), UStatus> {
         todo!()
     }
 
     #[allow(dead_code)]
-    async fn send(
-        &self,
-        topic: UUri,
-        payload: UPayload,
-        attributes: UAttributes,
-    ) -> Result<(), UStatus> {
+    async fn receive(&self, topic: UUri) -> Result<UMessage, UStatus> {
         todo!()
     }
 

@@ -1,5 +1,5 @@
 [package]
-name = "ustreamer-pluggable"
+name = "ustreamer"
 rust-version.workspace = true
 version.workspace = true
 repository.workspace = true
@@ -30,7 +30,6 @@ zenoh-core = { workspace = true }
 zenoh-plugin-trait = { workspace = true }
 zenoh-result = { workspace = true }
 zenoh-util = { workspace = true }
-serde_json = "1.0.111"
 
 
 [dev-dependencies]

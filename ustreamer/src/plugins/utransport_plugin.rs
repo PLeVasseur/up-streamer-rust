@@ -5,7 +5,7 @@ use std::sync::{
     Arc, Mutex,
 };
 use async_std::task;
-use uprotocol_sdk::uprotocol::{UAuthority, UMessage, UStatus, UUri};
+use up_rust::uprotocol::{UAuthority, UMessage, UStatus, UUri};
 use zenoh::plugins::{Response, RunningPluginTrait, ValidationFunction};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
@@ -25,7 +25,6 @@ impl Plugin for UTransportPlugin {
     type StartArgs = UTransportPluginStartArgs;
     type RunningPlugin = zenoh::plugins::RunningPlugin;
     const STATIC_NAME: &'static str = "utransport_plugin";
-
     fn start(name: &str, start_args: &Self::StartArgs) -> ZResult<Self::RunningPlugin> {
         if start_args.transport_builder.borrow_mut().is_none() {
             return Err("Transport is not available".into());
@@ -43,6 +42,8 @@ impl Plugin for UTransportPlugin {
             },
         )))))
     }
+
+    type Instance = ();
 }
 
 // An inner-state for the RunningPlugin

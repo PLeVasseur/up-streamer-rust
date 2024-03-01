@@ -6,8 +6,8 @@ use async_std::sync::Mutex;
 use async_std::task;
 use async_trait::async_trait;
 use log::trace;
-use uprotocol_sdk::transport::datamodel::UTransport;
-use uprotocol_sdk::uprotocol::{UAuthority, UMessage, UStatus, UUri};
+use up_rust::transport::datamodel::UTransport;
+use up_rust::uprotocol::{UAuthority, UMessage, UStatus, UUri};
 
 fn transport_listener(result: Result<UMessage, UStatus>) {
 
@@ -15,7 +15,7 @@ fn transport_listener(result: Result<UMessage, UStatus>) {
 
 fn streamer_uuri_from_uauthority(authority: &UAuthority) -> UUri {
     UUri {
-        authority: Some(authority.clone()),
+        authority: Some(authority.clone()).into(),
         ..Default::default()
     }
 }
@@ -37,7 +37,7 @@ pub trait UTransportBuilder: Send + Sync {
                 let register_success = utransport.register_listener(streamer_uuri_from_uauthority(authority), Box::new(transport_listener)).await;
             }
             // TODO: Add receiver queue in here
-            let send_success = utransport.send(Default::default(), Default::default(), Default::default()).await;
+            let send_success = utransport.send(Default::default()).await;
 
             async_std::future::pending::<()>().await;
         });

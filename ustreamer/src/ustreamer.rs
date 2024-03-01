@@ -1,6 +1,6 @@
 use async_std::channel::{self};
 use std::collections::HashMap;
-use uprotocol_sdk::uprotocol::UAuthority;
+use up_rust::uprotocol::UAuthority;
 use crate::plugins::utransport_plugin::{UTransportPlugin, UTransportPluginStartArgs};
 
 #[derive(Debug)]
