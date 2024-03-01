@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use uprotocol_sdk::transport::datamodel::UTransport;
 use uprotocol_sdk::uprotocol::{UAttributes, UEntity, UMessage, UPayload, UStatus, UUri};
-use crate::transport_builders::transport_builder::{UTransportBuilder, UTransportBuilderFunction};
+use crate::transport_builders::transport_builder::UTransportBuilder;
 
 // From here to below is all just mocking what a potential UpClientAndroid could look like
 // and testing the hypothesis on whether we should be able to bring a Box / Strong of dyn IUBus
@@ -68,19 +68,15 @@ impl AndroidTransportBuilder {
 }
 
 impl UTransportBuilder for AndroidTransportBuilder {
-    fn create_up_client(&self) -> UTransportBuilderFunction {
+    fn create_up_client(&self) -> Box<dyn UTransport> {
         let ubus_clone = Arc::clone(&self.ubus);
-        Box::new(move || {
-            Box::pin(async move {
-                let mut ubus_lock = ubus_clone.lock().unwrap();
-                if ubus_lock.is_none() {
-                    panic!("UBus was not set!");
-                }
+        let mut ubus_lock = ubus_clone.lock().unwrap();
+        if ubus_lock.is_none() {
+            panic!("UBus was not set!");
+        }
 
-                let ubus = ubus_lock.take().unwrap();
-                let up_client: Box<dyn UTransport> = Box::new(UpClientAndroid::new(ubus));
-                up_client
-            })
-        })
+        let ubus = ubus_lock.take().unwrap();
+        let up_client: Box<dyn UTransport> = Box::new(UpClientAndroid::new(ubus));
+        up_client
     }
 }

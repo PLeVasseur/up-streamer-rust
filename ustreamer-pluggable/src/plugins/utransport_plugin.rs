@@ -72,8 +72,6 @@ impl Drop for RunningPlugin {
 
 async fn run(runtime: Runtime, transport_builder: Box<dyn UTransportBuilder>, authorities: Vec<UAuthority>) {
     thread::spawn(move || {
-        task::block_on(async {
-            transport_builder.create_and_setup(authorities).await;
-        });
+        transport_builder.create_and_setup(authorities);
     });
 }
