@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::{io, thread};
 use std::error::Error;
 use std::io::ErrorKind;
+use up_rust::transport::datamodel::UTransport;
 use up_rust::uprotocol::{UAuthority};
 use crate::routers::streamer_plugin::StreamerPlugin;
 use crate::transport_builders::transport_builder::UTransportBuilder;
@@ -10,12 +11,15 @@ pub struct UTransportPlugin {}
 
 pub struct UTransportPluginStartArgs {
     transport_builder: RefCell<Option<Box<dyn UTransportBuilder>>>,
+    host_transport: bool,
     authorities: Vec<UAuthority>,
 }
 
+pub struct UTransportPluginHandle;
+
 impl StreamerPlugin for UTransportPlugin {
     type StartArgs = UTransportPluginStartArgs;
-    type Instance = ();
+    type Instance = UTransportPluginHandle;
 
     fn start(name: &str, start_args: &Self::StartArgs) -> Result<Self::Instance, Box<dyn Error>> {
         if start_args.transport_builder.borrow_mut().is_none() {
@@ -28,7 +32,7 @@ impl StreamerPlugin for UTransportPlugin {
         })?;
 
         async_std::task::spawn(run(transport_builder, start_args.authorities.clone()));
-        Ok(())
+        Ok(UTransportPluginHandle {})
     }
 }
 

@@ -1,7 +1,8 @@
 use async_std::channel::{self};
 use std::collections::HashMap;
+use std::error::Error;
 use up_rust::uprotocol::UAuthority;
-use crate::routers::utransport_plugin::{UTransportPlugin, UTransportPluginStartArgs};
+use crate::routers::utransport_plugin::{UTransportPlugin, UTransportPluginHandle, UTransportPluginStartArgs};
 use crate::routers::streamer_plugin::StreamerPlugin;
 
 #[derive(Debug)]
@@ -23,6 +24,7 @@ impl std::error::Error for UStreamerConstructionError {}
 // extensibility to use beyond the currently written `up-client-foo-rust` and support closed-source
 // or vendor-specific implementations
 type TransportTag = u8;
+type TransportId = String;
 
 struct Route {
     authority: UAuthority,
@@ -33,11 +35,14 @@ struct RoutingTable {
     routes: Vec<Route>
 }
 
-struct TaggedTransportPluginStartArgs(TransportTag, UTransportPluginStartArgs);
+struct TaggedTransportPluginStartArgs {
+    tag: TransportTag,
+    id: TransportId,
+    start_args: UTransportPluginStartArgs
+}
 
 struct UStreamerConfig {
-    host_transport: TaggedTransportPluginStartArgs,
-    external_transports: Vec<TaggedTransportPluginStartArgs>,
+    transport_start_args: Vec<TaggedTransportPluginStartArgs>,
     routing_table: RoutingTable
 }
 
@@ -47,6 +52,7 @@ struct UStreamer {
     transport_builders: Vec<TaggedTransportPluginStartArgs>,
     utransport_senders: HashMap<TransportTag, channel::Sender<bool>>,
     utransport_receivers: HashMap<TransportTag, channel::Receiver<bool>>,
+    utransport_plugin_handles: Vec<UTransportPluginHandle>,
 }
 
 impl UStreamer {
@@ -56,18 +62,21 @@ impl UStreamer {
 
         // TODO: Build authority_routes
 
-        let transport_builders = &config.external_transports;
+        let transport_builders = &config.transport_start_args;
         let mut utransport_senders = HashMap::new();
         let mut utransport_receivers = HashMap::new();
+
+        let mut utransport_plugin_handles = Vec::new();
 
         for transport_builder in transport_builders {
             const UTRANSPORT_QUEUE_CAPACITY: usize = 100;
             let (utransport_sender, utransport_receiver) =
                 channel::bounded::<bool>(UTRANSPORT_QUEUE_CAPACITY);
-            utransport_senders.insert(transport_builder.0, utransport_sender);
-            utransport_receivers.insert(transport_builder.0, utransport_receiver);
-            let _result = UTransportPlugin::start("todo", &transport_builder.1)
-                .expect("Failed to start todo plugin");
+            utransport_senders.insert(transport_builder.tag, utransport_sender);
+            utransport_receivers.insert(transport_builder.tag, utransport_receiver);
+            let result = UTransportPlugin::start(&transport_builder.id, &transport_builder.start_args)
+                .expect(&*format!("Failed to start {} plugin", &transport_builder.id));
+            utransport_plugin_handles.push(result);
         }
 
         Ok(Self {
@@ -75,7 +84,12 @@ impl UStreamer {
             transport_builders: Default::default(),
             utransport_senders,
             utransport_receivers,
+            utransport_plugin_handles,
         })
+    }
+
+    pub fn stop(&self) -> Result<(), Box<dyn Error>> {
+        Ok(())
     }
 
     fn assemble_authority_routes(&self, config: &UStreamerConfig) -> Result<(), UStreamerConstructionError> {
