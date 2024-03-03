@@ -2,8 +2,8 @@ use async_std::channel::{self};
 use std::collections::HashMap;
 use std::error::Error;
 use up_rust::uprotocol::UAuthority;
-use crate::routers::utransport_plugin::{UTransportPlugin, UTransportPluginHandle, UTransportPluginStartArgs};
-use crate::routers::streamer_plugin::StreamerPlugin;
+use crate::plugins::utransport_plugin::{UTransportPlugin, UTransportPluginHandle, UTransportPluginStartArgs};
+use crate::plugins::streamer_plugin::StreamerPlugin;
 
 #[derive(Debug)]
 enum UStreamerConstructionError {
@@ -49,24 +49,21 @@ struct UStreamerConfig {
 #[derive(Default)]
 struct UStreamer {
     authority_routes: HashMap<UAuthority, TransportTag>,
-    transport_builders: Vec<TaggedTransportPluginStartArgs>,
+    utransport_plugin_handles: HashMap<TransportTag, UTransportPluginHandle>,
     utransport_senders: HashMap<TransportTag, channel::Sender<bool>>,
     utransport_receivers: HashMap<TransportTag, channel::Receiver<bool>>,
-    utransport_plugin_handles: Vec<UTransportPluginHandle>,
 }
 
 impl UStreamer {
     pub fn start(config: &UStreamerConfig) -> Result<UStreamer, UStreamerConstructionError> {
-        // TODO: Perform validation here that we have a unique pairing between all `TaggedTransport`s
-        //  and fail if we do not
-
-        // TODO: Build authority_routes
 
         let transport_builders = &config.transport_start_args;
         let mut utransport_senders = HashMap::new();
         let mut utransport_receivers = HashMap::new();
 
-        let mut utransport_plugin_handles = Vec::new();
+        let mut utransport_plugin_handles = HashMap::new();
+
+        let authority_routes = Self::assemble_authority_routes(config)?;
 
         for transport_builder in transport_builders {
             const UTRANSPORT_QUEUE_CAPACITY: usize = 100;
@@ -76,15 +73,14 @@ impl UStreamer {
             utransport_receivers.insert(transport_builder.tag, utransport_receiver);
             let result = UTransportPlugin::start(&transport_builder.id, &transport_builder.start_args)
                 .expect(&*format!("Failed to start {} plugin", &transport_builder.id));
-            utransport_plugin_handles.push(result);
+            utransport_plugin_handles.insert(transport_builder.tag, result);
         }
 
         Ok(Self {
-            authority_routes: Default::default(),
-            transport_builders: Default::default(),
+            authority_routes,
+            utransport_plugin_handles,
             utransport_senders,
             utransport_receivers,
-            utransport_plugin_handles,
         })
     }
 
@@ -92,7 +88,12 @@ impl UStreamer {
         Ok(())
     }
 
-    fn assemble_authority_routes(&self, config: &UStreamerConfig) -> Result<(), UStreamerConstructionError> {
-        Ok(())
+    fn assemble_authority_routes(config: &UStreamerConfig) -> Result<HashMap<UAuthority, TransportTag>, UStreamerConstructionError> {
+        // TODO: Implement
+
+        // TODO: Perform validation here that we have a unique pairing between all `TaggedTransport`s
+        //  and fail if we do not
+
+        todo!()
     }
 }

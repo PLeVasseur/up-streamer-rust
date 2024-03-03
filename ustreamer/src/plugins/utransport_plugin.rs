@@ -4,8 +4,8 @@ use std::error::Error;
 use std::io::ErrorKind;
 use up_rust::transport::datamodel::UTransport;
 use up_rust::uprotocol::{UAuthority};
-use crate::routers::streamer_plugin::StreamerPlugin;
-use crate::transport_builders::transport_builder::UTransportBuilder;
+use crate::plugins::streamer_plugin::StreamerPlugin;
+use crate::transport_builder::UTransportBuilder;
 
 pub struct UTransportPlugin {}
 

@@ -2,7 +2,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use up_rust::transport::datamodel::UTransport;
 use up_rust::uprotocol::{UMessage, UStatus, UUri};
-use crate::transport_builders::transport_builder::UTransportBuilder;
+use ustreamer::transport_builder::UTransportBuilder;
 
 // TODO: Must get moved into another repo, too specific for up-streamer-rust
 

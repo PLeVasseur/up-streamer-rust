@@ -2,7 +2,7 @@ use async_std::task;
 use up_rust::transport::datamodel::UTransport;
 use up_client_zenoh_rust::UPClientZenoh;
 use zenoh::prelude::Config;
-use crate::transport_builders::transport_builder::UTransportBuilder;
+use ustreamer::transport_builder::UTransportBuilder;
 
 // TODO: Must get moved into another repo, too specific for up-streamer-rust
 
