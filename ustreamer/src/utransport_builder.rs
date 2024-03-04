@@ -68,14 +68,20 @@ async fn transport_listener(
     }
 }
 
-async fn transmit_loop(transmit_request_receiver: Receiver<UMessage>, utransport: Box<dyn UTransport>) {
+async fn transmit_loop(
+    transmit_request_receiver: Receiver<UMessage>,
+    utransport: Box<dyn UTransport>,
+) {
     // Loop over and consume from transmit_queue
     while let Ok(mut message) = transmit_request_receiver.recv().await {
         // Send out over transport
         match utransport.send(message).await {
             Ok(_) => {}
             Err(e) => {
-                error!("{TAG}: Unable to transmit message over utransport, error: {:?}",  e)
+                error!(
+                    "{TAG}: Unable to transmit message over utransport, error: {:?}",
+                    e
+                )
             }
         }
     }
@@ -129,7 +135,10 @@ pub trait UTransportBuilder: Send + Sync {
                 match register_success {
                     Ok(_) => {}
                     Err(e) => {
-                        error!("{TAG}: Unable to register authority: {:?}, error: {:?}", &authority, e);
+                        error!(
+                            "{TAG}: Unable to register authority: {:?}, error: {:?}",
+                            &authority, e
+                        );
                         // TODO: Consider on whether to fail out immediately here
                     }
                 }
