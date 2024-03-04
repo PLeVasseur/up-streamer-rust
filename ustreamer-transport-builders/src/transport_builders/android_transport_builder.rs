@@ -1,5 +1,5 @@
-use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
+use std::sync::{Arc, Mutex};
 use up_rust::transport::datamodel::UTransport;
 use up_rust::uprotocol::{UMessage, UStatus, UUri};
 use ustreamer::transport_builder::UTransportBuilder;
@@ -14,20 +14,17 @@ trait IUBus: Interface + Send {}
 
 struct UpClientAndroid {
     #[allow(dead_code)]
-    ubus: Box<dyn IUBus>
+    ubus: Box<dyn IUBus>,
 }
 
 impl UpClientAndroid {
     fn new(ubus: Box<dyn IUBus>) -> Self {
-        Self {
-            ubus
-        }
+        Self { ubus }
     }
 }
 
 #[async_trait]
 impl UTransport for UpClientAndroid {
-
     #[allow(dead_code)]
     async fn send(&self, _message: UMessage) -> Result<(), UStatus> {
         todo!()

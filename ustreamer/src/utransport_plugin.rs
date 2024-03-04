@@ -1,10 +1,10 @@
-use std::cell::RefCell;
-use std::{io, thread};
-use std::error::Error;
-use std::io::ErrorKind;
-use up_rust::uprotocol::{UAuthority};
 use crate::streamer_plugin::StreamerPlugin;
 use crate::transport_builder::UTransportBuilder;
+use std::cell::RefCell;
+use std::error::Error;
+use std::io::ErrorKind;
+use std::{io, thread};
+use up_rust::uprotocol::UAuthority;
 
 pub struct UTransportPlugin {}
 
@@ -25,10 +25,14 @@ impl StreamerPlugin for UTransportPlugin {
             return Err("Transport is not available".into());
         }
 
-        let transport_builder = start_args.transport_builder.borrow_mut().take().ok_or_else(|| {
-            // TODO: Can replace with own custom error
-            io::Error::new(ErrorKind::NotFound, "Transport is not available")
-        })?;
+        let transport_builder = start_args
+            .transport_builder
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| {
+                // TODO: Can replace with own custom error
+                io::Error::new(ErrorKind::NotFound, "Transport is not available")
+            })?;
 
         async_std::task::spawn(run(transport_builder, start_args.authorities.clone()));
         Ok(UTransportPluginHandle {})
