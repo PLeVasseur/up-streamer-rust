@@ -5,24 +5,65 @@ use crate::utransport_plugin::{
 use async_std::channel::{self, Receiver, Sender};
 use std::collections::HashMap;
 use std::error::Error;
+use std::hash::{Hash, Hasher};
+use prost::bytes::BufMut;
 use up_rust::uprotocol::UAuthority;
 
 #[derive(Debug)]
 enum UStreamerConstructionError {
-    DuplicateTransportTag,
+    DuplicateTransportTag(TransportTag),
+    UAuthorityNotHashable(UAuthority)
 }
 
 impl std::fmt::Display for UStreamerConstructionError {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        match *self {
-            UStreamerConstructionError::DuplicateTransportTag => {
-                write!(f, "Duplicate transport tags found")
+        match self {
+            UStreamerConstructionError::DuplicateTransportTag(transport_tag) => {
+                write!(f, "Duplicate transport tag found: {}", transport_tag)
+            },
+            UStreamerConstructionError::UAuthorityNotHashable(uauthority) => {
+                write!(f, "Unable to has UAuthority: {:?}", uauthority)
             }
         }
     }
 }
 
 impl std::error::Error for UStreamerConstructionError {}
+
+struct HashableUAuthority(UAuthority);
+
+impl PartialEq for HashableUAuthority {
+    fn eq(&self, other: &HashableUAuthority) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for HashableUAuthority {}
+
+impl Hash for HashableUAuthority {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut bytes = Vec::new();
+        if self.0.has_id() {
+            bytes.put_u8(self.0.id().len() as u8);
+            bytes.put(self.0.id());
+        } else if self.0.has_ip() {
+            bytes.put(self.0.ip());
+        } else {
+            // Should never happen, call hashable first!
+            bytes.put_u8(42);
+        }
+
+        bytes.hash(state)
+    }
+}
+impl HashableUAuthority {
+    fn hashable(&self) -> bool {
+        if self.0.has_id() || self.0.has_ip() {
+            return true;
+        }
+        return false;
+    }
+}
 
 // We use the concept of a TransportTag and not a concrete enum because we want to allow
 // extensibility to use beyond the currently written `up-client-foo-rust` and support closed-source
@@ -35,10 +76,6 @@ struct Route {
     transport: TransportTag,
 }
 
-struct RoutingTable {
-    routes: Vec<Route>,
-}
-
 struct TaggedTransportPluginStartArgs {
     tag: TransportTag,
     id: TransportId,
@@ -47,12 +84,12 @@ struct TaggedTransportPluginStartArgs {
 
 struct UStreamerConfig {
     transport_start_args: Vec<TaggedTransportPluginStartArgs>,
-    routing_table: RoutingTable,
+    routes: Vec<Route>,
 }
 
 #[derive(Default)]
 struct UStreamer {
-    authority_routes: HashMap<UAuthority, TransportTag>,
+    authority_routes: HashMap<HashableUAuthority, TransportTag>,
     utransport_plugin_handles: HashMap<TransportTag, UTransportPluginHandle>,
     utransport_senders: HashMap<TransportTag, channel::Sender<bool>>,
     utransport_receivers: HashMap<TransportTag, channel::Receiver<bool>>,
@@ -117,12 +154,22 @@ impl UStreamer {
 
     fn assemble_authority_routes(
         config: &UStreamerConfig,
-    ) -> Result<HashMap<UAuthority, TransportTag>, UStreamerConstructionError> {
-        // TODO: Implement
+    ) -> Result<HashMap<HashableUAuthority, TransportTag>, UStreamerConstructionError> {
 
-        // TODO: Perform validation here that we have a unique pairing between all `TaggedTransport`s
-        //  and fail if we do not
+        let mut authority_routes = HashMap::new();
 
-        todo!()
+        for route in &config.routes {
+            let hashable_uauthority = HashableUAuthority(route.authority.clone());
+            if !hashable_uauthority.hashable() {
+                return Err(UStreamerConstructionError::UAuthorityNotHashable(route.authority.clone()));
+            }
+
+            let previously_inserted = authority_routes.insert(hashable_uauthority, route.transport.clone());
+            if previously_inserted.is_some() {
+                return Err(UStreamerConstructionError::DuplicateTransportTag(previously_inserted.unwrap()));
+            }
+        }
+
+        Ok(authority_routes)
     }
 }

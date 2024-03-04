@@ -4,8 +4,6 @@ use up_rust::transport::datamodel::UTransport;
 use ustreamer::transport_builder::UTransportBuilder;
 use zenoh::prelude::Config;
 
-// TODO: Must get moved into another repo, too specific for up-streamer-rust
-
 struct ZenohTransportBuilder {
     config: Option<Config>,
 }
