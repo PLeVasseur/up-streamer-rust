@@ -4,6 +4,7 @@ use up_rust::uprotocol::UAuthority;
 pub enum UStreamerError {
     DuplicateTransportTag(crate::ustreamer::TransportTag),
     UAuthorityNotHashable(UAuthority),
+    GeneralError(String),
 }
 
 impl std::fmt::Display for UStreamerError {
@@ -14,6 +15,9 @@ impl std::fmt::Display for UStreamerError {
             }
             UStreamerError::UAuthorityNotHashable(uauthority) => {
                 write!(f, "Unable to has UAuthority: {:?}", uauthority)
+            }
+            UStreamerError::GeneralError(str) => {
+                write!(f, "{}", str)
             }
         }
     }

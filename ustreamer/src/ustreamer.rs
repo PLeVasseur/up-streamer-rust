@@ -3,7 +3,7 @@ use crate::ingress_router::{IngressRouter, IngressRouterHandle, IngressRouterSta
 use crate::streamer_router::StreamerRouter;
 use crate::ustreamer_error::UStreamerError;
 use crate::utransport_router::{
-    UTransportRouter, UTransportRouterHandle, UTransportRouterStartArgs,
+    UTransportRouter, UTransportRouterConfig, UTransportRouterHandle, UTransportRouterStartArgs,
 };
 use async_std::channel::{self, Receiver, Sender};
 use prost::bytes::BufMut;
@@ -58,11 +58,11 @@ struct Route {
     transport: TransportTag,
 }
 
-struct TaggedTransportRouterStartArgs {
+struct TaggedTransportRouterConfig {
     tag: TransportTag,
     id: TransportId,
     queue_length: usize,
-    start_args: UTransportRouterStartArgs,
+    config: UTransportRouterConfig,
 }
 
 struct IngressEgressQueueConfig {
@@ -71,7 +71,7 @@ struct IngressEgressQueueConfig {
 }
 
 struct UStreamerConfig {
-    transport_start_args: Vec<TaggedTransportRouterStartArgs>,
+    transport_router_configs: Vec<TaggedTransportRouterConfig>,
     ingress_egress_queue_config: IngressEgressQueueConfig,
     routes: Vec<Route>,
 }
@@ -90,19 +90,20 @@ struct UStreamer {
 }
 
 impl UStreamer {
-    pub fn start(config: &UStreamerConfig) -> Result<UStreamer, UStreamerError> {
+    pub fn start(config: UStreamerConfig) -> Result<UStreamer, UStreamerError> {
         let (utransport_senders, utransport_receivers) =
-            Self::assemble_utransport_senders_receivers(config)?;
+            Self::assemble_utransport_senders_receivers(&config)?;
         let (ingress_sender, ingress_receiver, egress_sender, egress_receiver) =
-            Self::assemble_ingress_egress(config)?;
-        let authority_routes = Self::assemble_authority_routes(config)?;
+            Self::assemble_ingress_egress(&config)?;
+        let authority_routes = Self::assemble_authority_routes(&config)?;
 
-        let utransport_router_handles = Self::start_utransport_routers(config)?;
         let (ingress_handle, egress_handle) = Self::start_ingress_egress_routers(
-            config,
+            &config,
             ingress_receiver.clone(),
             egress_receiver.clone(),
         )?;
+        let utransport_router_handles =
+            Self::start_utransport_routers(config, &utransport_receivers)?;
 
         Ok(Self {
             authority_routes,
@@ -137,11 +138,11 @@ impl UStreamer {
         let mut utransport_senders = HashMap::new();
         let mut utransport_receivers = HashMap::new();
 
-        for transport_start_args in &config.transport_start_args {
+        for transport_router_config in &config.transport_router_configs {
             let (utransport_sender, utransport_receiver) =
-                channel::bounded::<UMessage>(transport_start_args.queue_length);
-            utransport_senders.insert(transport_start_args.tag, utransport_sender);
-            utransport_receivers.insert(transport_start_args.tag, utransport_receiver);
+                channel::bounded::<UMessage>(transport_router_config.queue_length);
+            utransport_senders.insert(transport_router_config.tag, utransport_sender);
+            utransport_receivers.insert(transport_router_config.tag, utransport_receiver);
         }
 
         Ok((utransport_senders, utransport_receivers))
@@ -196,18 +197,30 @@ impl UStreamer {
     }
 
     fn start_utransport_routers(
-        config: &UStreamerConfig,
+        config: UStreamerConfig,
+        utransport_receivers: &HashMap<TransportTag, Receiver<UMessage>>,
     ) -> Result<HashMap<TransportTag, UTransportRouterHandle>, UStreamerError> {
         let mut utransport_router_handles = HashMap::new();
 
-        for transport_start_args in &config.transport_start_args {
+        for transport_router_config in config.transport_router_configs {
+            let utransport_receiver = utransport_receivers
+                .get(&transport_router_config.tag)
+                .ok_or(UStreamerError::GeneralError(format!(
+                    "Unable to find utransport_receiver for tag: {:?}",
+                    &transport_router_config.tag
+                )))?;
+            let transport_router_start_args = UTransportRouterStartArgs {
+                config: transport_router_config.config,
+                transmit_request_receiver: utransport_receiver.clone(),
+            };
+
             let handle =
-                UTransportRouter::start(&transport_start_args.id, &transport_start_args.start_args)
+                UTransportRouter::start(&transport_router_config.id, &transport_router_start_args)
                     .expect(&*format!(
                         "Failed to start {} router",
-                        &transport_start_args.id
+                        &transport_router_config.id
                     ));
-            utransport_router_handles.insert(transport_start_args.tag, handle);
+            utransport_router_handles.insert(transport_router_config.tag, handle);
         }
 
         return Ok(utransport_router_handles);
