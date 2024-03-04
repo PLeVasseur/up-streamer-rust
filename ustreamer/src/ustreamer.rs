@@ -2,8 +2,8 @@ use async_std::channel::{self};
 use std::collections::HashMap;
 use std::error::Error;
 use up_rust::uprotocol::UAuthority;
-use crate::plugins::utransport_plugin::{UTransportPlugin, UTransportPluginHandle, UTransportPluginStartArgs};
-use crate::plugins::streamer_plugin::StreamerPlugin;
+use crate::utransport_plugin::{UTransportPlugin, UTransportPluginHandle, UTransportPluginStartArgs};
+use crate::streamer_plugin::StreamerPlugin;
 
 #[derive(Debug)]
 enum UStreamerConstructionError {

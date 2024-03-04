@@ -15,6 +15,7 @@ members = [
     "example-utils/example-proto",
     "ustreamer",
     "ustreamer-transport-builders",
+    "ustreamer-example",
     # "ustreamer-previous",
 ]
 

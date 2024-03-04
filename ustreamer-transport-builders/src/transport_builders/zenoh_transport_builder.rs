@@ -11,12 +11,14 @@ struct ZenohTransportBuilder {
 }
 
 impl ZenohTransportBuilder {
+    #[allow(dead_code)]
     fn new_with_config(config: Config) -> Self {
         Self {
             config: Some(config)
         }
     }
 
+    #[allow(dead_code)]
     fn new() -> Self {
         Self {
             config: None

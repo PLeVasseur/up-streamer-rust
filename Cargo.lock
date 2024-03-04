@@ -3013,6 +3013,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ustreamer-example"
+version = "0.1.5-SNAPSHOT"
+dependencies = [
+ "async-std",
+ "async-trait",
+ "chrono",
+ "env_logger",
+ "example-proto",
+ "futures",
+ "log",
+ "lru",
+ "prost",
+ "serde_json",
+ "strum",
+ "up-rust",
+ "uuid",
+ "zenoh",
+]
+
+[[package]]
 name = "ustreamer-transport-builders"
 version = "0.1.5-SNAPSHOT"
 dependencies = [

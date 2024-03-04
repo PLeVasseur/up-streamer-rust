@@ -29,26 +29,26 @@ impl UpClientAndroid {
 impl UTransport for UpClientAndroid {
 
     #[allow(dead_code)]
-    async fn send(&self, message: UMessage) -> Result<(), UStatus> {
+    async fn send(&self, _message: UMessage) -> Result<(), UStatus> {
         todo!()
     }
 
     #[allow(dead_code)]
-    async fn receive(&self, topic: UUri) -> Result<UMessage, UStatus> {
+    async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
         todo!()
     }
 
     #[allow(dead_code)]
     async fn register_listener(
         &self,
-        topic: UUri,
-        listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
+        _topic: UUri,
+        _listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
     ) -> Result<String, UStatus> {
         todo!()
     }
 
     #[allow(dead_code)]
-    async fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
+    async fn unregister_listener(&self, _topic: UUri, _listener: &str) -> Result<(), UStatus> {
         todo!()
     }
 }
@@ -58,6 +58,7 @@ struct AndroidTransportBuilder {
 }
 
 impl AndroidTransportBuilder {
+    #[allow(dead_code)]
     fn obtain_binder_reference(ubus: Box<dyn IUBus>) -> Self {
         Self {
             ubus: Arc::new(Mutex::new(Some(ubus))),

@@ -2,9 +2,8 @@ use std::cell::RefCell;
 use std::{io, thread};
 use std::error::Error;
 use std::io::ErrorKind;
-use up_rust::transport::datamodel::UTransport;
 use up_rust::uprotocol::{UAuthority};
-use crate::plugins::streamer_plugin::StreamerPlugin;
+use crate::streamer_plugin::StreamerPlugin;
 use crate::transport_builder::UTransportBuilder;
 
 pub struct UTransportPlugin {}
