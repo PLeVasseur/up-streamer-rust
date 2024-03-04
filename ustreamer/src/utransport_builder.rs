@@ -18,6 +18,8 @@ async fn transport_listener(
     egress_sender: Sender<UMessage>,
     transmit_cache: Arc<Mutex<LruCache<HashableUUID, bool>>>,
 ) {
+    // TODO: Consider how to gracefully shut this down
+
     // Check if we have seen this message already based on UMessage.attributes.id
     //  => If we have, we have already transmitted this message once, we can drop it
     let Ok(message) = result else {
@@ -74,6 +76,8 @@ async fn transmit_loop(
 ) {
     // Loop over and consume from transmit_queue
     while let Ok(mut message) = transmit_request_receiver.recv().await {
+        // TODO: Consider how to gracefully shut this down
+
         // Send out over transport
         match utransport.send(message).await {
             Ok(_) => {}
