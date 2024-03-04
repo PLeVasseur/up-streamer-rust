@@ -1,7 +1,7 @@
-use std::error::Error;
-use async_std::channel::Receiver;
-use up_rust::uprotocol::UMessage;
 use crate::streamer_router::StreamerRouter;
+use async_std::channel::Receiver;
+use std::error::Error;
+use up_rust::uprotocol::UMessage;
 
 pub struct EgressRouter {}
 

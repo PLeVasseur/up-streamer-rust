@@ -1,17 +1,16 @@
+use crate::egress_router::{EgressRouter, EgressRouterHandle, EgressRouterStartArgs};
+use crate::ingress_router::{IngressRouter, IngressRouterHandle, IngressRouterStartArgs};
 use crate::streamer_router::StreamerRouter;
+use crate::ustreamer_error::UStreamerError;
 use crate::utransport_router::{
     UTransportRouter, UTransportRouterHandle, UTransportRouterStartArgs,
 };
-use crate::ustreamer_error::UStreamerError;
 use async_std::channel::{self, Receiver, Sender};
+use prost::bytes::BufMut;
 use std::collections::HashMap;
 use std::error::Error;
 use std::hash::{Hash, Hasher};
-use prost::bytes::BufMut;
 use up_rust::uprotocol::{UAuthority, UMessage};
-use crate::egress_router::{EgressRouter, EgressRouterHandle, EgressRouterStartArgs};
-use crate::ingress_router::{IngressRouter, IngressRouterHandle, IngressRouterStartArgs};
-
 
 struct HashableUAuthority(UAuthority);
 
@@ -94,11 +93,16 @@ impl UStreamer {
     pub fn start(config: &UStreamerConfig) -> Result<UStreamer, UStreamerError> {
         let (utransport_senders, utransport_receivers) =
             Self::assemble_utransport_senders_receivers(config)?;
-        let (ingress_sender, ingress_receiver, egress_sender, egress_receiver) = Self::assemble_ingress_egress(config)?;
+        let (ingress_sender, ingress_receiver, egress_sender, egress_receiver) =
+            Self::assemble_ingress_egress(config)?;
         let authority_routes = Self::assemble_authority_routes(config)?;
 
         let utransport_router_handles = Self::start_utransport_routers(config)?;
-        let (ingress_handle, egress_handle) =  Self::start_ingress_egress_routers(config, ingress_receiver.clone(), egress_receiver.clone())?;
+        let (ingress_handle, egress_handle) = Self::start_ingress_egress_routers(
+            config,
+            ingress_receiver.clone(),
+            egress_receiver.clone(),
+        )?;
 
         Ok(Self {
             authority_routes,
@@ -110,7 +114,7 @@ impl UStreamer {
             ingress_handle,
             egress_sender,
             egress_receiver,
-            egress_handle
+            egress_handle,
         })
     }
 
@@ -140,27 +144,28 @@ impl UStreamer {
             utransport_receivers.insert(transport_start_args.tag, utransport_receiver);
         }
 
-        Ok((
-            utransport_senders,
-            utransport_receivers,
-        ))
+        Ok((utransport_senders, utransport_receivers))
     }
 
     fn assemble_authority_routes(
         config: &UStreamerConfig,
     ) -> Result<HashMap<HashableUAuthority, TransportTag>, UStreamerError> {
-
         let mut authority_routes = HashMap::new();
 
         for route in &config.routes {
             let hashable_uauthority = HashableUAuthority(route.authority.clone());
             if !hashable_uauthority.hashable() {
-                return Err(UStreamerError::UAuthorityNotHashable(route.authority.clone()));
+                return Err(UStreamerError::UAuthorityNotHashable(
+                    route.authority.clone(),
+                ));
             }
 
-            let previously_inserted = authority_routes.insert(hashable_uauthority, route.transport.clone());
+            let previously_inserted =
+                authority_routes.insert(hashable_uauthority, route.transport.clone());
             if previously_inserted.is_some() {
-                return Err(UStreamerError::DuplicateTransportTag(previously_inserted.unwrap()));
+                return Err(UStreamerError::DuplicateTransportTag(
+                    previously_inserted.unwrap(),
+                ));
             }
         }
 
@@ -168,17 +173,30 @@ impl UStreamer {
     }
 
     fn assemble_ingress_egress(
-        config: &UStreamerConfig
-    ) -> Result<(Sender<UMessage>, Receiver<UMessage>, Sender<UMessage>, Receiver<UMessage>), UStreamerError> {
+        config: &UStreamerConfig,
+    ) -> Result<
+        (
+            Sender<UMessage>,
+            Receiver<UMessage>,
+            Sender<UMessage>,
+            Receiver<UMessage>,
+        ),
+        UStreamerError,
+    > {
         let (ingress_sender, ingress_receiver) =
             channel::bounded::<UMessage>(config.ingress_egress_queue_config.ingress_queue_length);
         let (egress_sender, egress_receiver) =
             channel::bounded::<UMessage>(config.ingress_egress_queue_config.egress_queue_length);
-        Ok((ingress_sender, ingress_receiver, egress_sender, egress_receiver))
+        Ok((
+            ingress_sender,
+            ingress_receiver,
+            egress_sender,
+            egress_receiver,
+        ))
     }
 
     fn start_utransport_routers(
-        config: &UStreamerConfig
+        config: &UStreamerConfig,
     ) -> Result<HashMap<TransportTag, UTransportRouterHandle>, UStreamerError> {
         let mut utransport_router_handles = HashMap::new();
 
@@ -192,7 +210,7 @@ impl UStreamer {
             utransport_router_handles.insert(transport_start_args.tag, handle);
         }
 
-        return Ok(utransport_router_handles)
+        return Ok(utransport_router_handles);
     }
 
     fn start_ingress_egress_routers(
@@ -200,15 +218,11 @@ impl UStreamer {
         ingress_receiver: Receiver<UMessage>,
         egress_receiver: Receiver<UMessage>,
     ) -> Result<(IngressRouterHandle, EgressRouterHandle), UStreamerError> {
-        let ingress_router_start_args = IngressRouterStartArgs {
-            ingress_receiver,
-        };
+        let ingress_router_start_args = IngressRouterStartArgs { ingress_receiver };
         let ingress_handle = IngressRouter::start("ingress_router", &ingress_router_start_args)
             .expect(&*"Failed to start ingress router".to_string());
 
-        let egress_router_start_args = EgressRouterStartArgs {
-            egress_receiver,
-        };
+        let egress_router_start_args = EgressRouterStartArgs { egress_receiver };
         let egress_handle = EgressRouter::start("egress_router", &egress_router_start_args)
             .expect(&*"Failed to start ingress router".to_string());
 
