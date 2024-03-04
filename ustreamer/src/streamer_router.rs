@@ -1,8 +1,8 @@
 use std::error::Error;
 
-pub trait StreamerPlugin: Sized + 'static {
+pub trait StreamerRouter: Sized + 'static {
     type StartArgs;
     type Instance;
-    /// Starts your plugin. Use `Ok` to return your plugin's control structure
+    /// Starts your router. Use `Ok` to return your router's control structure
     fn start(name: &str, args: &Self::StartArgs) -> Result<Self::Instance, Box<dyn Error>>;
 }
