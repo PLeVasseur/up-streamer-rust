@@ -234,10 +234,10 @@ impl UStreamer {
                 )))?;
             let transport_router_start_args = UTransportRouterStartArgs {
                 config: transport_router_config.config,
-                transmit_request_receiver: utransport_receiver.clone(),
                 authorities: authorities_to_listen_on,
                 ingress_sender: ingress_sender.clone(),
                 egress_sender: egress_sender.clone(),
+                transmit_request_receiver: utransport_receiver.clone(),
                 transmit_cache: transmit_cache.clone(),
             };
 

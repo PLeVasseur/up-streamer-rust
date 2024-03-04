@@ -20,10 +20,10 @@ pub struct UTransportRouterConfig {
 
 pub struct UTransportRouterStartArgs {
     pub(crate) config: UTransportRouterConfig,
-    pub(crate) transmit_request_receiver: Receiver<UMessage>,
     pub(crate) authorities: Vec<UAuthority>,
     pub(crate) ingress_sender: Sender<UMessage>,
     pub(crate) egress_sender: Sender<UMessage>,
+    pub(crate) transmit_request_receiver: Receiver<UMessage>,
     pub(crate) transmit_cache: Arc<Mutex<LruCache<HashableUUID, bool>>>,
 }
 
@@ -54,6 +54,7 @@ impl StreamerRouter for UTransportRouter {
             start_args.config.host_transport.clone(),
             start_args.ingress_sender.clone(),
             start_args.egress_sender.clone(),
+            start_args.transmit_request_receiver.clone(),
             start_args.transmit_cache.clone(),
         ));
         Ok(UTransportRouterHandle {})
@@ -66,6 +67,7 @@ async fn run(
     host_transport: bool,
     ingress_sender: Sender<UMessage>,
     egress_sender: Sender<UMessage>,
+    transmit_request_receiver: Receiver<UMessage>,
     transmit_cache: Arc<Mutex<LruCache<HashableUUID, bool>>>,
 ) {
     thread::spawn(move || {
@@ -74,6 +76,7 @@ async fn run(
             host_transport,
             ingress_sender,
             egress_sender,
+            transmit_request_receiver,
             transmit_cache,
         );
     });

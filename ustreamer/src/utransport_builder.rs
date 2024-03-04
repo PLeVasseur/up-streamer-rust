@@ -18,8 +18,8 @@ async fn transport_listener(
     egress_sender: Sender<UMessage>,
     transmit_cache: Arc<Mutex<LruCache<HashableUUID, bool>>>,
 ) {
-    //   1. Check if we have seen this message already based on UMessage.attributes.id
-    //    => If we have, we have already transmitted this message once, we can drop it
+    // Check if we have seen this message already based on UMessage.attributes.id
+    //  => If we have, we have already transmitted this message once, we can drop it
     let Ok(message) = result else {
         error!(
             "{TAG}: Received an erroneous UStatus: {:?}",
@@ -49,8 +49,8 @@ async fn transport_listener(
         return;
     }
 
-    //   2. If this message is intended for our device, then place it into the ingress queue
-    //      otherwise place it into the egress queue
+    // If this message is intended for our device, then place it into the ingress queue
+    // otherwise place it into the egress queue
     if host_transport {
         match ingress_sender.send(message).await {
             Ok(_) => {}
@@ -68,14 +68,17 @@ async fn transport_listener(
     }
 }
 
-async fn transmit_loop() {
-    // TODO: Implement
-
-    // TODO:
-    //   1. Loop over and consume from transmit_queue
-    //     => Must pass in reference to utransport_receiver
-    //   2. Send out over transport
-    //     => Must pass in ownership of Box<dyn UTransport>
+async fn transmit_loop(transmit_request_receiver: Receiver<UMessage>, utransport: Box<dyn UTransport>) {
+    // Loop over and consume from transmit_queue
+    while let Ok(mut message) = transmit_request_receiver.recv().await {
+        // Send out over transport
+        match utransport.send(message).await {
+            Ok(_) => {}
+            Err(e) => {
+                error!("{TAG}: Unable to transmit message over utransport, error: {:?}",  e)
+            }
+        }
+    }
 }
 
 fn streamer_uuri_from_uauthority(authority: &UAuthority) -> UUri {
@@ -94,6 +97,7 @@ pub trait UTransportBuilder: Send + Sync {
         host_transport: bool,
         ingress_sender: Sender<UMessage>,
         egress_sender: Sender<UMessage>,
+        transmit_request_receiver: Receiver<UMessage>,
         transmit_cache: Arc<Mutex<LruCache<HashableUUID, bool>>>,
     ) {
         trace!("entered create_and_setup");
@@ -122,11 +126,16 @@ pub trait UTransportBuilder: Send + Sync {
                         Box::new(closure_listener),
                     )
                     .await;
+                match register_success {
+                    Ok(_) => {}
+                    Err(e) => {
+                        error!("{TAG}: Unable to register authority: {:?}, error: {:?}", &authority, e);
+                        // TODO: Consider on whether to fail out immediately here
+                    }
+                }
             }
-            // TODO: Add receiver queue in here
-            let send_success = utransport.send(Default::default()).await;
 
-            async_std::future::pending::<()>().await;
+            transmit_loop(transmit_request_receiver.clone(), utransport).await;
         });
     }
 }
