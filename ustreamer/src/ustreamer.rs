@@ -2,7 +2,7 @@ use crate::streamer_plugin::StreamerPlugin;
 use crate::utransport_plugin::{
     UTransportPlugin, UTransportPluginHandle, UTransportPluginStartArgs,
 };
-use async_std::channel::{self};
+use async_std::channel::{self, Receiver, Sender};
 use std::collections::HashMap;
 use std::error::Error;
 use up_rust::uprotocol::UAuthority;
@@ -60,15 +60,40 @@ struct UStreamer {
 
 impl UStreamer {
     pub fn start(config: &UStreamerConfig) -> Result<UStreamer, UStreamerConstructionError> {
-        let transport_builders = &config.transport_start_args;
-        let mut utransport_senders = HashMap::new();
-        let mut utransport_receivers = HashMap::new();
-
-        let mut utransport_plugin_handles = HashMap::new();
-
+        let (utransport_senders, utransport_receivers, utransport_plugin_handles) =
+            Self::assemble_senders_receivers_handles(config)?;
         let authority_routes = Self::assemble_authority_routes(config)?;
 
-        for transport_builder in transport_builders {
+        Ok(Self {
+            authority_routes,
+            utransport_plugin_handles,
+            utransport_senders,
+            utransport_receivers,
+        })
+    }
+
+    pub fn stop(&self) -> Result<(), Box<dyn Error>> {
+        // TODO: Implement functionality so that we're able to gracefully wind down the transports
+        //  and ingress, egress
+
+        todo!()
+    }
+
+    fn assemble_senders_receivers_handles(
+        config: &UStreamerConfig,
+    ) -> Result<
+        (
+            HashMap<TransportTag, Sender<bool>>,
+            HashMap<TransportTag, Receiver<bool>>,
+            HashMap<TransportTag, UTransportPluginHandle>,
+        ),
+        UStreamerConstructionError,
+    > {
+        let mut utransport_senders = HashMap::new();
+        let mut utransport_receivers = HashMap::new();
+        let mut utransport_plugin_handles = HashMap::new();
+
+        for transport_builder in &config.transport_start_args {
             const UTRANSPORT_QUEUE_CAPACITY: usize = 100;
             let (utransport_sender, utransport_receiver) =
                 channel::bounded::<bool>(UTRANSPORT_QUEUE_CAPACITY);
@@ -83,16 +108,11 @@ impl UStreamer {
             utransport_plugin_handles.insert(transport_builder.tag, result);
         }
 
-        Ok(Self {
-            authority_routes,
-            utransport_plugin_handles,
+        Ok((
             utransport_senders,
             utransport_receivers,
-        })
-    }
-
-    pub fn stop(&self) -> Result<(), Box<dyn Error>> {
-        Ok(())
+            utransport_plugin_handles,
+        ))
     }
 
     fn assemble_authority_routes(
