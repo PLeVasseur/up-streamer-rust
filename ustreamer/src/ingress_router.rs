@@ -21,9 +21,7 @@ impl StreamerRouter for IngressRouter {
     }
 }
 async fn run(/* necessary params */) {
-    thread::spawn(move || {
-        IngressRouterInner::start()
-    });
+    thread::spawn(move || IngressRouterInner::start());
 }
 
 struct IngressRouterInner;

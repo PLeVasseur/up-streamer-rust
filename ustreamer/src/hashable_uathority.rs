@@ -1,5 +1,5 @@
-use std::hash::{Hash, Hasher};
 use prost::bytes::BufMut;
+use std::hash::{Hash, Hasher};
 use up_rust::uprotocol::UAuthority;
 
 pub struct HashableUAuthority(pub UAuthority);

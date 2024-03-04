@@ -1,4 +1,5 @@
 use crate::egress_router::{EgressRouter, EgressRouterHandle, EgressRouterStartArgs};
+use crate::hashable_uathority::HashableUAuthority;
 use crate::ingress_router::{IngressRouter, IngressRouterHandle, IngressRouterStartArgs};
 use crate::streamer_router::StreamerRouter;
 use crate::ustreamer_error::UStreamerError;
@@ -10,7 +11,6 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::hash::Hash;
 use up_rust::uprotocol::{UAuthority, UMessage};
-use crate::hashable_uathority::HashableUAuthority;
 
 // We use the concept of a TransportTag and not a concrete enum because we want to allow
 // extensibility to use beyond the currently written `up-client-foo-rust` and support closed-source
@@ -96,15 +96,16 @@ impl UStreamer {
     }
 
     fn find_host_transport(
-        config: &UStreamerConfig
-    ) -> Result<Option<TransportTag>, UStreamerError>
-    {
+        config: &UStreamerConfig,
+    ) -> Result<Option<TransportTag>, UStreamerError> {
         let mut host_transport = None;
         for transport_router_config in &config.transport_router_configs {
             let is_host_transport = transport_router_config.config.host_transport;
 
             if host_transport.is_some() && is_host_transport {
-                return Err(UStreamerError::GeneralError("host_transport set true twice".to_string()));
+                return Err(UStreamerError::GeneralError(
+                    "host_transport set true twice".to_string(),
+                ));
             }
 
             if host_transport.is_none() {
@@ -112,7 +113,7 @@ impl UStreamer {
             }
         }
 
-        return Ok(host_transport)
+        return Ok(host_transport);
     }
 
     fn assemble_utransport_senders_receivers(

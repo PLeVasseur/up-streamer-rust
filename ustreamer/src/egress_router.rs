@@ -22,9 +22,7 @@ impl StreamerRouter for EgressRouter {
 }
 
 async fn run(/* necessary params */) {
-    thread::spawn(move || {
-        EgressRouterInner::start()
-    });
+    thread::spawn(move || EgressRouterInner::start());
 }
 
 struct EgressRouterInner;
