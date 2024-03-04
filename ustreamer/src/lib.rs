@@ -5,3 +5,4 @@ pub mod transport_builder;
 pub mod ustreamer;
 pub mod ustreamer_error;
 mod utransport_router;
+mod hashable_uathority;

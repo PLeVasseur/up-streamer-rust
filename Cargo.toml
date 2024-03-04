@@ -21,7 +21,7 @@ members = [
 
 [workspace.package]
 rust-version = "1.66.1"
-version = "0.1.5-SNAPSHOT" # uProtocol version
+version = "0.1.5-dev" # uProtocol version
 repository = "https://github.com/eclipse-uprotocol/uprotocol-platform-linux-zenoh"
 homepage = "https://github.com/eclipse-uprotocol"
 authors = [

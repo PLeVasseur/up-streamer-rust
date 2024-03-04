@@ -13,7 +13,6 @@ fn streamer_uuri_from_uauthority(authority: &UAuthority) -> UUri {
     }
 }
 
-#[async_trait]
 pub trait UTransportBuilder: Send + Sync {
     fn build(&self) -> Box<dyn UTransport>;
 

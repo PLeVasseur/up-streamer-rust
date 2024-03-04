@@ -6,46 +6,11 @@ use crate::utransport_router::{
     UTransportRouter, UTransportRouterConfig, UTransportRouterHandle, UTransportRouterStartArgs,
 };
 use async_std::channel::{self, Receiver, Sender};
-use prost::bytes::BufMut;
 use std::collections::HashMap;
 use std::error::Error;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use up_rust::uprotocol::{UAuthority, UMessage};
-
-struct HashableUAuthority(UAuthority);
-
-impl PartialEq for HashableUAuthority {
-    fn eq(&self, other: &HashableUAuthority) -> bool {
-        self.0 == other.0
-    }
-}
-
-impl Eq for HashableUAuthority {}
-
-impl Hash for HashableUAuthority {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let mut bytes = Vec::new();
-        if self.0.has_id() {
-            bytes.put_u8(self.0.id().len() as u8);
-            bytes.put(self.0.id());
-        } else if self.0.has_ip() {
-            bytes.put(self.0.ip());
-        } else {
-            // Should never happen, call hashable first!
-            bytes.put_u8(42);
-        }
-
-        bytes.hash(state)
-    }
-}
-impl HashableUAuthority {
-    fn hashable(&self) -> bool {
-        if self.0.has_id() || self.0.has_ip() {
-            return true;
-        }
-        return false;
-    }
-}
+use crate::hashable_uathority::HashableUAuthority;
 
 // We use the concept of a TransportTag and not a concrete enum because we want to allow
 // extensibility to use beyond the currently written `up-client-foo-rust` and support closed-source
@@ -227,7 +192,7 @@ impl UStreamer {
     }
 
     fn start_ingress_egress_routers(
-        config: &UStreamerConfig,
+        _config: &UStreamerConfig,
         ingress_receiver: Receiver<UMessage>,
         egress_receiver: Receiver<UMessage>,
     ) -> Result<(IngressRouterHandle, EgressRouterHandle), UStreamerError> {

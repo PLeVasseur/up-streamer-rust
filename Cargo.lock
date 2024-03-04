@@ -2994,7 +2994,7 @@ dependencies = [
 
 [[package]]
 name = "ustreamer"
-version = "0.1.5-SNAPSHOT"
+version = "0.1.5-dev"
 dependencies = [
  "async-std",
  "async-trait",
@@ -3014,7 +3014,7 @@ dependencies = [
 
 [[package]]
 name = "ustreamer-example"
-version = "0.1.5-SNAPSHOT"
+version = "0.1.5-dev"
 dependencies = [
  "async-std",
  "async-trait",
@@ -3034,7 +3034,7 @@ dependencies = [
 
 [[package]]
 name = "ustreamer-transport-builders"
-version = "0.1.5-SNAPSHOT"
+version = "0.1.5-dev"
 dependencies = [
  "async-std",
  "async-trait",
