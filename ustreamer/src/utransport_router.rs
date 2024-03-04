@@ -1,5 +1,5 @@
 use crate::streamer_router::StreamerRouter;
-use crate::transport_builder::UTransportBuilder;
+use crate::utransport_builder::UTransportBuilder;
 use async_std::channel::Receiver;
 use std::cell::RefCell;
 use std::error::Error;
@@ -11,7 +11,7 @@ pub struct UTransportRouter {}
 
 pub struct UTransportRouterConfig {
     transport_builder: RefCell<Option<Box<dyn UTransportBuilder>>>,
-    host_transport: bool,
+    pub(crate) host_transport: bool,
     authorities: Vec<UAuthority>,
 }
 

@@ -42,6 +42,7 @@ struct UStreamerConfig {
 }
 
 struct UStreamer {
+    host_transport: Option<TransportTag>,
     authority_routes: HashMap<HashableUAuthority, TransportTag>,
     utransport_router_handles: HashMap<TransportTag, UTransportRouterHandle>,
     utransport_senders: HashMap<TransportTag, Sender<UMessage>>,
@@ -62,6 +63,8 @@ impl UStreamer {
             Self::assemble_ingress_egress(&config)?;
         let authority_routes = Self::assemble_authority_routes(&config)?;
 
+        let host_transport = Self::find_host_transport(&config)?;
+
         let (ingress_handle, egress_handle) = Self::start_ingress_egress_routers(
             &config,
             ingress_receiver.clone(),
@@ -71,6 +74,7 @@ impl UStreamer {
             Self::start_utransport_routers(config, &utransport_receivers)?;
 
         Ok(Self {
+            host_transport,
             authority_routes,
             utransport_router_handles,
             utransport_senders,
@@ -89,6 +93,26 @@ impl UStreamer {
         //  and ingress, egress
 
         todo!()
+    }
+
+    fn find_host_transport(
+        config: &UStreamerConfig
+    ) -> Result<Option<TransportTag>, UStreamerError>
+    {
+        let mut host_transport = None;
+        for transport_router_config in &config.transport_router_configs {
+            let is_host_transport = transport_router_config.config.host_transport;
+
+            if host_transport.is_some() && is_host_transport {
+                return Err(UStreamerError::GeneralError("host_transport set true twice".to_string()));
+            }
+
+            if host_transport.is_none() {
+                host_transport = Some(transport_router_config.tag);
+            }
+        }
+
+        return Ok(host_transport)
     }
 
     fn assemble_utransport_senders_receivers(

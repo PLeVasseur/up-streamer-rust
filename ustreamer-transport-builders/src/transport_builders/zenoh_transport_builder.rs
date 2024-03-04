@@ -1,7 +1,7 @@
 use async_std::task;
 use up_client_zenoh_rust::UPClientZenoh;
 use up_rust::transport::datamodel::UTransport;
-use ustreamer::transport_builder::UTransportBuilder;
+use ustreamer::utransport_builder::UTransportBuilder;
 use zenoh::prelude::Config;
 
 struct ZenohTransportBuilder {

@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 use up_rust::transport::datamodel::UTransport;
 use up_rust::uprotocol::{UMessage, UStatus, UUri};
-use ustreamer::transport_builder::UTransportBuilder;
+use ustreamer::utransport_builder::UTransportBuilder;
 
 // From here to below is all just mocking what a potential UpClientAndroid could look like
 // and testing the hypothesis on whether we should be able to bring a Box / Strong of dyn IUBus
