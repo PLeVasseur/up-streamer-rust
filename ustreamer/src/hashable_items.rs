@@ -1,6 +1,6 @@
 use prost::bytes::BufMut;
 use std::hash::{Hash, Hasher};
-use up_rust::uprotocol::UAuthority;
+use up_rust::uprotocol::{UAuthority, UUID};
 
 pub struct HashableUAuthority(pub UAuthority);
 
@@ -34,5 +34,21 @@ impl HashableUAuthority {
             return true;
         }
         return false;
+    }
+}
+
+pub struct HashableUUID(pub UUID);
+
+impl PartialEq for HashableUUID {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for HashableUUID {}
+
+impl Hash for HashableUUID {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.hash(state)
     }
 }

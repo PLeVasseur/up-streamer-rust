@@ -1,9 +1,13 @@
+use crate::hashable_items::HashableUUID;
 use crate::streamer_router::StreamerRouter;
 use crate::utransport_builder::UTransportBuilder;
-use async_std::channel::Receiver;
+use async_std::channel::{Receiver, Sender};
+use async_std::sync::Mutex;
+use lru::LruCache;
 use std::cell::RefCell;
 use std::error::Error;
 use std::io::ErrorKind;
+use std::sync::Arc;
 use std::{io, thread};
 use up_rust::uprotocol::{UAuthority, UMessage};
 
@@ -12,12 +16,15 @@ pub struct UTransportRouter {}
 pub struct UTransportRouterConfig {
     transport_builder: RefCell<Option<Box<dyn UTransportBuilder>>>,
     pub(crate) host_transport: bool,
-    authorities: Vec<UAuthority>,
 }
 
 pub struct UTransportRouterStartArgs {
     pub(crate) config: UTransportRouterConfig,
     pub(crate) transmit_request_receiver: Receiver<UMessage>,
+    pub(crate) authorities: Vec<UAuthority>,
+    pub(crate) ingress_sender: Sender<UMessage>,
+    pub(crate) egress_sender: Sender<UMessage>,
+    pub(crate) transmit_cache: Arc<Mutex<LruCache<HashableUUID, bool>>>,
 }
 
 pub struct UTransportRouterHandle;
@@ -43,14 +50,31 @@ impl StreamerRouter for UTransportRouter {
 
         async_std::task::spawn(run(
             transport_builder,
-            start_args.config.authorities.clone(),
+            start_args.authorities.clone(),
+            start_args.config.host_transport.clone(),
+            start_args.ingress_sender.clone(),
+            start_args.egress_sender.clone(),
+            start_args.transmit_cache.clone(),
         ));
         Ok(UTransportRouterHandle {})
     }
 }
 
-async fn run(transport_builder: Box<dyn UTransportBuilder>, authorities: Vec<UAuthority>) {
+async fn run(
+    transport_builder: Box<dyn UTransportBuilder>,
+    authorities: Vec<UAuthority>,
+    host_transport: bool,
+    ingress_sender: Sender<UMessage>,
+    egress_sender: Sender<UMessage>,
+    transmit_cache: Arc<Mutex<LruCache<HashableUUID, bool>>>,
+) {
     thread::spawn(move || {
-        transport_builder.start(authorities);
+        transport_builder.start(
+            authorities,
+            host_transport,
+            ingress_sender,
+            egress_sender,
+            transmit_cache,
+        );
     });
 }

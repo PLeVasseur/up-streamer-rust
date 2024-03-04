@@ -1,5 +1,5 @@
 use crate::egress_router::{EgressRouter, EgressRouterHandle, EgressRouterStartArgs};
-use crate::hashable_uathority::HashableUAuthority;
+use crate::hashable_items::{HashableUAuthority, HashableUUID};
 use crate::ingress_router::{IngressRouter, IngressRouterHandle, IngressRouterStartArgs};
 use crate::streamer_router::StreamerRouter;
 use crate::ustreamer_error::UStreamerError;
@@ -7,43 +7,53 @@ use crate::utransport_router::{
     UTransportRouter, UTransportRouterConfig, UTransportRouterHandle, UTransportRouterStartArgs,
 };
 use async_std::channel::{self, Receiver, Sender};
+use async_std::sync::Mutex;
+use lru::LruCache;
 use std::collections::HashMap;
 use std::error::Error;
 use std::hash::Hash;
-use up_rust::uprotocol::{UAuthority, UMessage};
+use std::num::NonZeroUsize;
+use std::sync::Arc;
+use up_rust::uprotocol::{UAuthority, UMessage, UUID};
 
 // We use the concept of a TransportTag and not a concrete enum because we want to allow
 // extensibility to use beyond the currently written `up-client-foo-rust` and support closed-source
 // or vendor-specific implementations
 pub type TransportTag = u8;
-type TransportId = String;
+pub type TransportId = String;
 
-struct Route {
+pub struct Route {
     authority: UAuthority,
     transport: TransportTag,
 }
 
-struct TaggedTransportRouterConfig {
+pub struct TaggedTransportRouterConfig {
     tag: TransportTag,
     id: TransportId,
     queue_length: usize,
     config: UTransportRouterConfig,
 }
 
-struct IngressEgressQueueConfig {
+pub struct IngressEgressQueueConfig {
     ingress_queue_length: usize,
     egress_queue_length: usize,
 }
 
-struct UStreamerConfig {
+pub struct BookkeepingConfig {
+    transmit_cache_size: usize,
+}
+
+pub struct UStreamerConfig {
     transport_router_configs: Vec<TaggedTransportRouterConfig>,
     ingress_egress_queue_config: IngressEgressQueueConfig,
+    bookkeeping_config: BookkeepingConfig,
     routes: Vec<Route>,
 }
 
-struct UStreamer {
+pub struct UStreamer {
     host_transport: Option<TransportTag>,
     authority_routes: HashMap<HashableUAuthority, TransportTag>,
+    transmit_cache: Arc<Mutex<LruCache<HashableUUID, bool>>>,
     utransport_router_handles: HashMap<TransportTag, UTransportRouterHandle>,
     utransport_senders: HashMap<TransportTag, Sender<UMessage>>,
     utransport_receivers: HashMap<TransportTag, Receiver<UMessage>>,
@@ -65,17 +75,27 @@ impl UStreamer {
 
         let host_transport = Self::find_host_transport(&config)?;
 
+        let transmit_cache = Arc::new(Mutex::new(LruCache::new(
+            NonZeroUsize::new(config.bookkeeping_config.transmit_cache_size).unwrap(),
+        )));
+
         let (ingress_handle, egress_handle) = Self::start_ingress_egress_routers(
             &config,
             ingress_receiver.clone(),
             egress_receiver.clone(),
         )?;
-        let utransport_router_handles =
-            Self::start_utransport_routers(config, &utransport_receivers)?;
+        let utransport_router_handles = Self::start_utransport_routers(
+            config,
+            &utransport_receivers,
+            ingress_sender.clone(),
+            egress_sender.clone(),
+            transmit_cache.clone(),
+        )?;
 
         Ok(Self {
             host_transport,
             authority_routes,
+            transmit_cache,
             utransport_router_handles,
             utransport_senders,
             utransport_receivers,
@@ -189,10 +209,23 @@ impl UStreamer {
     fn start_utransport_routers(
         config: UStreamerConfig,
         utransport_receivers: &HashMap<TransportTag, Receiver<UMessage>>,
+        ingress_sender: Sender<UMessage>,
+        egress_sender: Sender<UMessage>,
+        transmit_cache: Arc<Mutex<LruCache<HashableUUID, bool>>>,
     ) -> Result<HashMap<TransportTag, UTransportRouterHandle>, UStreamerError> {
         let mut utransport_router_handles = HashMap::new();
 
         for transport_router_config in config.transport_router_configs {
+            let authorities_to_listen_on = {
+                let mut authorities = Vec::new();
+                for route in &config.routes {
+                    if route.transport == transport_router_config.tag {
+                        authorities.push(route.authority.clone());
+                    }
+                }
+                authorities
+            };
+
             let utransport_receiver = utransport_receivers
                 .get(&transport_router_config.tag)
                 .ok_or(UStreamerError::GeneralError(format!(
@@ -202,6 +235,10 @@ impl UStreamer {
             let transport_router_start_args = UTransportRouterStartArgs {
                 config: transport_router_config.config,
                 transmit_request_receiver: utransport_receiver.clone(),
+                authorities: authorities_to_listen_on,
+                ingress_sender: ingress_sender.clone(),
+                egress_sender: egress_sender.clone(),
+                transmit_cache: transmit_cache.clone(),
             };
 
             let handle =
