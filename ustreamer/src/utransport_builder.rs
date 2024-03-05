@@ -49,14 +49,12 @@ async fn transport_listener(
         .contains(&HashableUUID(id.clone()))
     {
         trace!(
-            "{TAG}: Received a UMessage we have already forwarded: {}",
+            "{TAG}: Attempted to transmit a UMessage we have already forwarded: {}",
             String::from(id)
         );
         return;
     }
 
-    // If this message is intended for our device, then place it into the ingress queue
-    // otherwise place it into the egress queue
     let Ok(message_type) = attr.type_.enum_value() else {
         error!("{TAG}: No message type supplied");
         return;

@@ -77,7 +77,7 @@ async fn handle_ingress(
     host_transport_sender: Option<Sender<UMessage>>,
     authority_routes: HashMap<HashableUAuthority, TransportTag>,
 ) {
-    // Loop over and consume from transmit_queue
+    // Loop over and consume from ingress queue
     while let Ok(mut message) = ingress_receiver.recv().await {
         if host_transport_tag.is_none() || host_transport_sender.is_none() {
             warn!("{TAG}: UMessage cannot be directed to host, as host is not defined");
@@ -85,8 +85,6 @@ async fn handle_ingress(
         }
 
         // Confirm that the message is intended for host device
-        //  => Lookup in authority_routes and cross-reference against host_transport
-        //  => Must have reference to authority_routes and host_transport
         let UMessage { attributes, .. } = &message;
         let attr = attributes.as_ref();
         let Some(attr) = attr else {
