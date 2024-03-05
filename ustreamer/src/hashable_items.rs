@@ -2,6 +2,7 @@ use prost::bytes::BufMut;
 use std::hash::{Hash, Hasher};
 use up_rust::uprotocol::{UAuthority, UUID};
 
+#[derive(Clone)]
 pub struct HashableUAuthority(pub UAuthority);
 
 impl PartialEq for HashableUAuthority {

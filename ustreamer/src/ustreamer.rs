@@ -73,7 +73,16 @@ impl UStreamer {
             Self::assemble_ingress_egress(&config)?;
         let authority_routes = Self::assemble_authority_routes(&config)?;
 
-        let host_transport = Self::find_host_transport(&config)?;
+        let host_transport_tag = Self::find_host_transport(&config)?;
+        let host_transport_sender: Option<Sender<UMessage>> = {
+            if host_transport_tag.is_some() {
+                let sender = utransport_senders.get(&host_transport_tag.unwrap());
+                if sender.is_some() {
+                    sender.clone().unwrap();
+                }
+            };
+            None
+        };
 
         let transmit_cache = Arc::new(Mutex::new(LruCache::new(
             NonZeroUsize::new(config.bookkeeping_config.transmit_cache_size).unwrap(),
@@ -83,17 +92,22 @@ impl UStreamer {
             &config,
             ingress_receiver.clone(),
             egress_receiver.clone(),
+            host_transport_tag,
+            host_transport_sender,
+            authority_routes.clone(),
         )?;
         let utransport_router_handles = Self::start_utransport_routers(
             config,
             &utransport_receivers,
+            host_transport_tag,
+            authority_routes.clone(),
             ingress_sender.clone(),
             egress_sender.clone(),
             transmit_cache.clone(),
         )?;
 
         Ok(Self {
-            host_transport,
+            host_transport: host_transport_tag,
             authority_routes,
             transmit_cache,
             utransport_router_handles,
@@ -209,6 +223,8 @@ impl UStreamer {
     fn start_utransport_routers(
         config: UStreamerConfig,
         utransport_receivers: &HashMap<TransportTag, Receiver<UMessage>>,
+        host_transport_tag: Option<TransportTag>,
+        authority_routes: HashMap<HashableUAuthority, TransportTag>,
         ingress_sender: Sender<UMessage>,
         egress_sender: Sender<UMessage>,
         transmit_cache: Arc<Mutex<LruCache<HashableUUID, bool>>>,
@@ -226,6 +242,7 @@ impl UStreamer {
                 authorities
             };
 
+            let authority_routes = authority_routes.clone();
             let utransport_receiver = utransport_receivers
                 .get(&transport_router_config.tag)
                 .ok_or(UStreamerError::GeneralError(format!(
@@ -233,8 +250,10 @@ impl UStreamer {
                     &transport_router_config.tag
                 )))?;
             let transport_router_start_args = UTransportRouterStartArgs {
+                host_transport_tag,
                 config: transport_router_config.config,
                 authorities: authorities_to_listen_on,
+                authority_routes,
                 ingress_sender: ingress_sender.clone(),
                 egress_sender: egress_sender.clone(),
                 transmit_request_receiver: utransport_receiver.clone(),
@@ -257,8 +276,16 @@ impl UStreamer {
         _config: &UStreamerConfig,
         ingress_receiver: Receiver<UMessage>,
         egress_receiver: Receiver<UMessage>,
+        host_transport_tag: Option<TransportTag>,
+        host_transport_sender: Option<Sender<UMessage>>,
+        authority_routes: HashMap<HashableUAuthority, TransportTag>,
     ) -> Result<(IngressRouterHandle, EgressRouterHandle), UStreamerError> {
-        let ingress_router_start_args = IngressRouterStartArgs { ingress_receiver };
+        let ingress_router_start_args = IngressRouterStartArgs {
+            ingress_receiver,
+            host_transport_tag,
+            host_transport_sender,
+            authority_routes,
+        };
         let ingress_handle = IngressRouter::start("ingress_router", &ingress_router_start_args)
             .expect(&*"Failed to start ingress router".to_string());
 

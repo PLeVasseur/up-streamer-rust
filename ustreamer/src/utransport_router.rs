@@ -1,4 +1,4 @@
-use crate::hashable_items::HashableUUID;
+use crate::hashable_items::{HashableUAuthority, HashableUUID};
 use crate::streamer_router::StreamerRouter;
 use crate::utransport_builder::UTransportBuilder;
 use async_std::channel::{Receiver, Sender};
@@ -9,7 +9,9 @@ use std::error::Error;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use std::{io, thread};
+use std::collections::HashMap;
 use up_rust::uprotocol::{UAuthority, UMessage};
+use crate::ustreamer::TransportTag;
 
 pub struct UTransportRouter {}
 
@@ -19,8 +21,10 @@ pub struct UTransportRouterConfig {
 }
 
 pub struct UTransportRouterStartArgs {
+    pub(crate) host_transport_tag: Option<TransportTag>,
     pub(crate) config: UTransportRouterConfig,
     pub(crate) authorities: Vec<UAuthority>,
+    pub(crate) authority_routes: HashMap<HashableUAuthority, TransportTag>,
     pub(crate) ingress_sender: Sender<UMessage>,
     pub(crate) egress_sender: Sender<UMessage>,
     pub(crate) transmit_request_receiver: Receiver<UMessage>,
@@ -52,6 +56,8 @@ impl StreamerRouter for UTransportRouter {
             transport_builder,
             start_args.authorities.clone(),
             start_args.config.host_transport.clone(),
+            start_args.host_transport_tag.clone(),
+            start_args.authority_routes.clone(),
             start_args.ingress_sender.clone(),
             start_args.egress_sender.clone(),
             start_args.transmit_request_receiver.clone(),
@@ -65,6 +71,8 @@ async fn run(
     transport_builder: Box<dyn UTransportBuilder>,
     authorities: Vec<UAuthority>,
     host_transport: bool,
+    host_transport_tag: Option<TransportTag>,
+    authority_routes: HashMap<HashableUAuthority, TransportTag>,
     ingress_sender: Sender<UMessage>,
     egress_sender: Sender<UMessage>,
     transmit_request_receiver: Receiver<UMessage>,
@@ -74,6 +82,8 @@ async fn run(
         transport_builder.start(
             authorities,
             host_transport,
+            host_transport_tag,
+            authority_routes,
             ingress_sender,
             egress_sender,
             transmit_request_receiver,
