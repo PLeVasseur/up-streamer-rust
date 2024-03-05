@@ -1,12 +1,12 @@
-use std::collections::HashMap;
+use crate::hashable_items::HashableUAuthority;
 use crate::streamer_router::StreamerRouter;
-use async_std::channel::{Receiver, Sender, SendError};
+use crate::ustreamer::TransportTag;
+use async_std::channel::{Receiver, SendError, Sender};
+use log::{error, info, warn};
+use std::collections::HashMap;
 use std::error::Error;
 use std::thread;
-use log::{error, info, warn};
 use up_rust::uprotocol::{UMessage, UUri};
-use crate::hashable_items::HashableUAuthority;
-use crate::ustreamer::TransportTag;
 
 const TAG: &str = "IngressRouter";
 
@@ -84,14 +84,17 @@ async fn handle_ingress(
 
                 if let Some(sender) = host_transport_sender.as_ref() {
                     if let Err(e) = sender.send(message.clone()).await {
-                        error!("{TAG}: Unable to send to host transport transmit queue: {:?}", e);
+                        error!(
+                            "{TAG}: Unable to send to host transport transmit queue: {:?}",
+                            e
+                        );
                     }
                 }
             }
         }
     }
 
-
+    // TODO:
     //   2. We know it's for the host, so we forward it onto the host transport
     //      => Must have reference to the utransport_sender for host transport
 }

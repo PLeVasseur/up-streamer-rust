@@ -1,17 +1,17 @@
 use crate::hashable_items::{HashableUAuthority, HashableUUID};
 use crate::streamer_router::StreamerRouter;
+use crate::ustreamer::TransportTag;
 use crate::utransport_builder::UTransportBuilder;
 use async_std::channel::{Receiver, Sender};
 use async_std::sync::Mutex;
 use lru::LruCache;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::error::Error;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use std::{io, thread};
-use std::collections::HashMap;
 use up_rust::uprotocol::{UAuthority, UMessage};
-use crate::ustreamer::TransportTag;
 
 pub struct UTransportRouter {}
 

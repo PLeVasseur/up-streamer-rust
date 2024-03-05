@@ -1,15 +1,15 @@
-use std::collections::HashMap;
 use crate::hashable_items::{HashableUAuthority, HashableUUID};
+use crate::ustreamer::TransportTag;
 use async_std::channel::{Receiver, SendError, Sender};
 use async_std::sync::Mutex;
 use async_std::task;
 use async_trait::async_trait;
 use log::{error, trace};
 use lru::LruCache;
+use std::collections::HashMap;
 use std::sync::Arc;
 use up_rust::transport::datamodel::UTransport;
 use up_rust::uprotocol::{UAttributes, UAuthority, UMessage, UMessageType, UStatus, UUri};
-use crate::ustreamer::TransportTag;
 
 const TAG: &str = "UTransportBuilder";
 
@@ -70,11 +70,27 @@ async fn transport_listener(
         UMessageType::UMESSAGE_TYPE_PUBLISH => {
             if attr.sink.is_some() {
                 // if a Notification with a sink
-                send_to_ingress_or_egress(&host_transport_tag, authority_routes, ingress_sender, egress_sender, message, attr).await;
+                send_to_ingress_or_egress(
+                    &host_transport_tag,
+                    authority_routes,
+                    ingress_sender,
+                    egress_sender,
+                    message,
+                    attr,
+                )
+                .await;
             } else {
                 // if a Publish with only a source
                 if attr.source.is_some() {
-                    send_to_ingress_and_egress(&host_transport_tag, authority_routes, ingress_sender, egress_sender, message, attr).await;
+                    send_to_ingress_and_egress(
+                        &host_transport_tag,
+                        authority_routes,
+                        ingress_sender,
+                        egress_sender,
+                        message,
+                        attr,
+                    )
+                    .await;
                 } else {
                     error!("{TAG}: UMessageType is UMESSAGE_TYPE_PUBLISH, but no sink or source UUri. Unable to route.");
                     return;
@@ -83,7 +99,15 @@ async fn transport_listener(
         }
         UMessageType::UMESSAGE_TYPE_REQUEST => {
             if attr.sink.is_some() {
-                send_to_ingress_or_egress(&host_transport_tag, authority_routes, ingress_sender, egress_sender, message, attr).await;
+                send_to_ingress_or_egress(
+                    &host_transport_tag,
+                    authority_routes,
+                    ingress_sender,
+                    egress_sender,
+                    message,
+                    attr,
+                )
+                .await;
             } else {
                 error!("{TAG}: UMessageType is UMESSAGE_TYPE_REQUEST, but no sink UUri. Unable to route.");
                 return;
@@ -91,7 +115,15 @@ async fn transport_listener(
         }
         UMessageType::UMESSAGE_TYPE_RESPONSE => {
             if attr.sink.is_some() {
-                send_to_ingress_or_egress(&host_transport_tag, authority_routes, ingress_sender, egress_sender, message, attr).await;
+                send_to_ingress_or_egress(
+                    &host_transport_tag,
+                    authority_routes,
+                    ingress_sender,
+                    egress_sender,
+                    message,
+                    attr,
+                )
+                .await;
             } else {
                 error!("{TAG}: UMessageType is UMESSAGE_TYPE_RESPONSE, but no sink UUri. Unable to route.");
                 return;
@@ -100,7 +132,14 @@ async fn transport_listener(
     }
 }
 
-async fn send_to_ingress_and_egress(host_transport_tag: &Option<TransportTag>, authority_routes: HashMap<HashableUAuthority, TransportTag>, ingress_sender: Sender<UMessage>, egress_sender: Sender<UMessage>, message: UMessage, attr: &UAttributes) {
+async fn send_to_ingress_and_egress(
+    host_transport_tag: &Option<TransportTag>,
+    authority_routes: HashMap<HashableUAuthority, TransportTag>,
+    ingress_sender: Sender<UMessage>,
+    egress_sender: Sender<UMessage>,
+    message: UMessage,
+    attr: &UAttributes,
+) {
     let Some(authority) = attr.sink.authority.as_ref() else {
         error!("{TAG}: UAuthority missing from UUri. Unable to route.");
         return;
@@ -128,10 +167,16 @@ async fn send_to_ingress_and_egress(host_transport_tag: &Option<TransportTag>, a
             return;
         }
     }
-
 }
 
-async fn send_to_ingress_or_egress(host_transport_tag: &Option<TransportTag>, authority_routes: HashMap<HashableUAuthority, TransportTag>, ingress_sender: Sender<UMessage>, egress_sender: Sender<UMessage>, message: UMessage, attr: &UAttributes) {
+async fn send_to_ingress_or_egress(
+    host_transport_tag: &Option<TransportTag>,
+    authority_routes: HashMap<HashableUAuthority, TransportTag>,
+    ingress_sender: Sender<UMessage>,
+    egress_sender: Sender<UMessage>,
+    message: UMessage,
+    attr: &UAttributes,
+) {
     let Some(authority) = attr.sink.authority.as_ref() else {
         error!("{TAG}: UAuthority missing from UUri. Unable to route.");
         return;
@@ -262,7 +307,12 @@ pub trait UTransportBuilder: Send + Sync {
             }
 
             let transmit_cache = transmit_cache.clone();
-            transmit_loop(transmit_request_receiver.clone(), utransport, transmit_cache).await;
+            transmit_loop(
+                transmit_request_receiver.clone(),
+                utransport,
+                transmit_cache,
+            )
+            .await;
         });
     }
 }
