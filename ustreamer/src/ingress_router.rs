@@ -2,6 +2,7 @@ use crate::hashable_items::HashableUAuthority;
 use crate::streamer_router::StreamerRouter;
 use crate::ustreamer::TransportTag;
 use async_std::channel::{Receiver, SendError, Sender};
+use async_std::task;
 use log::{error, info, warn};
 use std::collections::HashMap;
 use std::error::Error;
@@ -26,18 +27,47 @@ impl StreamerRouter for IngressRouter {
     type Instance = IngressRouterHandle;
 
     fn start(name: &str, start_args: &Self::StartArgs) -> Result<Self::Instance, Box<dyn Error>> {
-        todo!()
+        task::spawn(run(
+            start_args.ingress_receiver.clone(),
+            start_args.host_transport_tag.clone(),
+            start_args.host_transport_sender.clone(),
+            start_args.authority_routes.clone(),
+        ));
+
+        Ok(IngressRouterHandle)
     }
 }
-async fn run(/* necessary params */) {
-    thread::spawn(move || IngressRouterInner::start());
+async fn run(
+    ingress_receiver: Receiver<UMessage>,
+    host_transport_tag: Option<TransportTag>,
+    host_transport_sender: Option<Sender<UMessage>>,
+    authority_routes: HashMap<HashableUAuthority, TransportTag>,
+) {
+    thread::spawn(move || {
+        IngressRouterInner::start(
+            ingress_receiver,
+            host_transport_tag,
+            host_transport_sender,
+            authority_routes,
+        );
+    });
 }
 
 struct IngressRouterInner;
 
 impl IngressRouterInner {
-    fn start() {
-        todo!()
+    fn start(
+        ingress_receiver: Receiver<UMessage>,
+        host_transport_tag: Option<TransportTag>,
+        host_transport_sender: Option<Sender<UMessage>>,
+        authority_routes: HashMap<HashableUAuthority, TransportTag>,
+    ) {
+        task::spawn_local(handle_ingress(
+            ingress_receiver,
+            host_transport_tag,
+            host_transport_sender,
+            authority_routes,
+        ));
     }
 }
 
@@ -93,8 +123,4 @@ async fn handle_ingress(
             }
         }
     }
-
-    // TODO:
-    //   2. We know it's for the host, so we forward it onto the host transport
-    //      => Must have reference to the utransport_sender for host transport
 }
