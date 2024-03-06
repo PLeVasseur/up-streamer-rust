@@ -2,6 +2,7 @@ use crate::hashable_items::HashableUAuthority;
 use crate::streamer_router::StreamerRouter;
 use crate::ustreamer::TransportTag;
 use async_std::channel::{Receiver, SendError, Sender};
+use async_std::task;
 use log::{error, trace};
 use std::collections::HashMap;
 use std::error::Error;
@@ -14,6 +15,8 @@ pub struct EgressRouter {}
 
 pub struct EgressRouterStartArgs {
     pub(crate) egress_receiver: Receiver<UMessage>,
+    pub(crate) authority_routes: HashMap<HashableUAuthority, TransportTag>,
+    pub(crate) utransport_senders: HashMap<TransportTag, Sender<UMessage>>,
 }
 
 pub struct EgressRouterHandle;
@@ -23,19 +26,39 @@ impl StreamerRouter for EgressRouter {
     type Instance = EgressRouterHandle;
 
     fn start(name: &str, start_args: &Self::StartArgs) -> Result<Self::Instance, Box<dyn Error>> {
-        todo!()
+        task::spawn(run(
+            start_args.egress_receiver.clone(),
+            start_args.authority_routes.clone(),
+            start_args.utransport_senders.clone(),
+        ));
+
+        Ok(EgressRouterHandle)
     }
 }
 
-async fn run(/* necessary params */) {
-    thread::spawn(move || EgressRouterInner::start());
+async fn run(
+    egress_receiver: Receiver<UMessage>,
+    authority_routes: HashMap<HashableUAuthority, TransportTag>,
+    utransport_senders: HashMap<TransportTag, Sender<UMessage>>,
+) {
+    thread::spawn(move || {
+        EgressRouterInner::start(egress_receiver, authority_routes, utransport_senders)
+    });
 }
 
 struct EgressRouterInner;
 
 impl EgressRouterInner {
-    fn start() {
-        todo!()
+    fn start(
+        egress_receiver: Receiver<UMessage>,
+        authority_routes: HashMap<HashableUAuthority, TransportTag>,
+        utransport_senders: HashMap<TransportTag, Sender<UMessage>>,
+    ) {
+        task::spawn_local(handle_egress(
+            egress_receiver,
+            authority_routes,
+            utransport_senders,
+        ));
     }
 }
 
@@ -130,7 +153,7 @@ async fn send_over_all_but_originating(
             }
             Err(e) => {
                 // TODO: Need to specify which transport sent over / failed on
-                error!("{TAG}: Failed to send message to transmit queue for transport <FOO>");
+                error!("{TAG}: Failed to send message to transmit queue for transport <FOO>: {e}");
             }
         }
     }

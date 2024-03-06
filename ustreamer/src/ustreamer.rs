@@ -95,6 +95,7 @@ impl UStreamer {
             host_transport_tag,
             host_transport_sender,
             authority_routes.clone(),
+            utransport_senders.clone(),
         )?;
         let utransport_router_handles = Self::start_utransport_routers(
             config,
@@ -279,17 +280,22 @@ impl UStreamer {
         host_transport_tag: Option<TransportTag>,
         host_transport_sender: Option<Sender<UMessage>>,
         authority_routes: HashMap<HashableUAuthority, TransportTag>,
+        utransport_senders: HashMap<TransportTag, Sender<UMessage>>,
     ) -> Result<(IngressRouterHandle, EgressRouterHandle), UStreamerError> {
         let ingress_router_start_args = IngressRouterStartArgs {
             ingress_receiver,
             host_transport_tag,
             host_transport_sender,
-            authority_routes,
+            authority_routes: authority_routes.clone(),
         };
         let ingress_handle = IngressRouter::start("ingress_router", &ingress_router_start_args)
             .expect(&*"Failed to start ingress router".to_string());
 
-        let egress_router_start_args = EgressRouterStartArgs { egress_receiver };
+        let egress_router_start_args = EgressRouterStartArgs {
+            egress_receiver,
+            authority_routes,
+            utransport_senders,
+        };
         let egress_handle = EgressRouter::start("egress_router", &egress_router_start_args)
             .expect(&*"Failed to start ingress router".to_string());
 
