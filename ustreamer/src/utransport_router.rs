@@ -4,6 +4,8 @@ use crate::ustreamer::TransportTag;
 use crate::utransport_builder::UTransportBuilder;
 use async_std::channel::{Receiver, Sender};
 use async_std::sync::Mutex;
+use async_std::task;
+use log::{error, trace};
 use lru::LruCache;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -11,8 +13,6 @@ use std::error::Error;
 use std::io::ErrorKind;
 use std::sync::Arc;
 use std::{io, thread};
-use async_std::task;
-use log::{error, trace};
 use up_rust::transport::datamodel::UTransport;
 use up_rust::uprotocol::{UAttributes, UAuthority, UMessage, UMessageType, UStatus, UUri};
 
@@ -158,10 +158,9 @@ impl UTransportRouterInner {
                 utransport,
                 transmit_cache,
             )
-                .await;
+            .await;
         });
     }
-
 }
 
 async fn transport_listener(
@@ -227,7 +226,7 @@ async fn transport_listener(
                     message,
                     attr,
                 )
-                    .await;
+                .await;
             } else {
                 // if a Publish with only a source
                 if attr.source.is_some() {
@@ -239,7 +238,7 @@ async fn transport_listener(
                         message,
                         attr,
                     )
-                        .await;
+                    .await;
                 } else {
                     error!("{TAG}: UMessageType is UMESSAGE_TYPE_PUBLISH, but no sink or source UUri. Unable to route.");
                     return;
@@ -256,7 +255,7 @@ async fn transport_listener(
                     message,
                     attr,
                 )
-                    .await;
+                .await;
             } else {
                 error!("{TAG}: UMessageType is UMESSAGE_TYPE_REQUEST, but no sink UUri. Unable to route.");
                 return;
@@ -272,7 +271,7 @@ async fn transport_listener(
                     message,
                     attr,
                 )
-                    .await;
+                .await;
             } else {
                 error!("{TAG}: UMessageType is UMESSAGE_TYPE_RESPONSE, but no sink UUri. Unable to route.");
                 return;
