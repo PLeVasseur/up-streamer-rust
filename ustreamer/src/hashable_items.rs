@@ -2,6 +2,8 @@ use prost::bytes::BufMut;
 use std::hash::{Hash, Hasher};
 use up_rust::uprotocol::{UAuthority, UUID};
 
+// TODO: Consider how much of this to upstream into `up-rust`
+
 #[derive(Clone)]
 pub struct HashableUAuthority(pub UAuthority);
 

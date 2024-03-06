@@ -1,5 +1,5 @@
 use crate::hashable_items::HashableUAuthority;
-use crate::streamer_router::StreamerRouter;
+use crate::router::Router;
 use crate::ustreamer::TransportTag;
 use async_std::channel::{Receiver, SendError, Sender};
 use async_std::task;
@@ -21,7 +21,7 @@ pub struct EgressRouterStartArgs {
 
 pub struct EgressRouterHandle;
 
-impl StreamerRouter for EgressRouter {
+impl Router for EgressRouter {
     type StartArgs = EgressRouterStartArgs;
     type Instance = EgressRouterHandle;
 

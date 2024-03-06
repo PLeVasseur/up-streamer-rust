@@ -1,5 +1,5 @@
 use crate::hashable_items::{HashableUAuthority, HashableUUID};
-use crate::streamer_router::StreamerRouter;
+use crate::router::Router;
 use crate::ustreamer::TransportTag;
 use crate::utransport_builder::UTransportBuilder;
 use async_std::channel::{Receiver, Sender};
@@ -33,7 +33,7 @@ pub struct UTransportRouterStartArgs {
 
 pub struct UTransportRouterHandle;
 
-impl StreamerRouter for UTransportRouter {
+impl Router for UTransportRouter {
     type StartArgs = UTransportRouterStartArgs;
     type Instance = UTransportRouterHandle;
 

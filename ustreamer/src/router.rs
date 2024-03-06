@@ -1,6 +1,6 @@
 use std::error::Error;
 
-pub trait StreamerRouter: Sized + 'static {
+pub trait Router: Sized + 'static {
     type StartArgs;
     type Instance;
     /// Starts your router. Use `Ok` to return your router's control structure
