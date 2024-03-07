@@ -1,9 +1,9 @@
 use crate::hashable_items::HashableUAuthority;
 use crate::router::Router;
 use crate::ustreamer::TransportTag;
-use async_std::channel::{Receiver, SendError, Sender};
+use async_std::channel::{Receiver, Sender};
 use async_std::task;
-use log::{error, info, warn};
+use log::{error, warn};
 use std::collections::HashMap;
 use std::error::Error;
 use std::thread;
@@ -26,7 +26,7 @@ impl Router for IngressRouter {
     type StartArgs = IngressRouterStartArgs;
     type Instance = IngressRouterHandle;
 
-    fn start(name: &str, start_args: &Self::StartArgs) -> Result<Self::Instance, Box<dyn Error>> {
+    fn start(_name: &str, start_args: &Self::StartArgs) -> Result<Self::Instance, Box<dyn Error>> {
         task::spawn(run(
             start_args.ingress_receiver.clone(),
             start_args.host_transport_tag.clone(),
@@ -78,7 +78,7 @@ async fn handle_ingress(
     authority_routes: HashMap<HashableUAuthority, TransportTag>,
 ) {
     // Loop over and consume from ingress queue
-    while let Ok(mut message) = ingress_receiver.recv().await {
+    while let Ok(message) = ingress_receiver.recv().await {
         if host_transport_tag.is_none() || host_transport_sender.is_none() {
             warn!("{TAG}: UMessage cannot be directed to host, as host is not defined");
             continue;

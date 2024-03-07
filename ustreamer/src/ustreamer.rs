@@ -11,10 +11,9 @@ use async_std::sync::Mutex;
 use lru::LruCache;
 use std::collections::HashMap;
 use std::error::Error;
-use std::hash::Hash;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use up_rust::uprotocol::{UAuthority, UMessage, UUID};
+use up_rust::uprotocol::{UAuthority, UMessage};
 
 // We use the concept of a TransportTag and not a concrete enum because we want to allow
 // extensibility to use beyond the currently written `up-client-foo-rust` and support closed-source
@@ -50,6 +49,7 @@ pub struct UStreamerConfig {
     routes: Vec<Route>,
 }
 
+#[allow(dead_code)]
 pub struct UStreamer {
     host_transport: Option<TransportTag>,
     authority_routes: HashMap<HashableUAuthority, TransportTag>,

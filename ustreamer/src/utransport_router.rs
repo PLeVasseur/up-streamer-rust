@@ -42,7 +42,7 @@ impl Router for UTransportRouter {
     type StartArgs = UTransportRouterStartArgs;
     type Instance = UTransportRouterHandle;
 
-    fn start(name: &str, start_args: &Self::StartArgs) -> Result<Self::Instance, Box<dyn Error>> {
+    fn start(_name: &str, start_args: &Self::StartArgs) -> Result<Self::Instance, Box<dyn Error>> {
         if start_args.config.transport_builder.borrow_mut().is_none() {
             return Err("Transport is not available".into());
         }
@@ -60,7 +60,6 @@ impl Router for UTransportRouter {
         async_std::task::spawn(run(
             transport_builder,
             start_args.authorities.clone(),
-            start_args.config.host_transport.clone(),
             start_args.host_transport_tag.clone(),
             start_args.authority_routes.clone(),
             start_args.ingress_sender.clone(),
@@ -75,7 +74,6 @@ impl Router for UTransportRouter {
 async fn run(
     transport_builder: Box<dyn UTransportBuilder>,
     authorities: Vec<UAuthority>,
-    host_transport: bool,
     host_transport_tag: Option<TransportTag>,
     authority_routes: HashMap<HashableUAuthority, TransportTag>,
     ingress_sender: Sender<UMessage>,
@@ -87,7 +85,6 @@ async fn run(
         UTransportRouterInner::start(
             transport_builder,
             authorities,
-            host_transport,
             host_transport_tag,
             authority_routes,
             ingress_sender,
@@ -104,7 +101,6 @@ impl UTransportRouterInner {
     fn start(
         transport_builder: Box<dyn UTransportBuilder>,
         authorities: Vec<UAuthority>,
-        host_transport: bool,
         host_transport_tag: Option<TransportTag>,
         authority_routes: HashMap<HashableUAuthority, TransportTag>,
         ingress_sender: Sender<UMessage>,
@@ -116,7 +112,6 @@ impl UTransportRouterInner {
 
         task::spawn_local(async move {
             for authority in &authorities {
-                let host_transport = host_transport.clone();
                 let host_transport_tag = host_transport_tag.clone();
                 let ingress_sender = ingress_sender.clone();
                 let egress_sender = egress_sender.clone();
@@ -125,7 +120,6 @@ impl UTransportRouterInner {
                 let closure_listener = move |result: Result<UMessage, UStatus>| {
                     task::spawn_local(transport_listener(
                         result,
-                        host_transport.clone(),
                         host_transport_tag.clone(),
                         authority_routes.clone(),
                         ingress_sender.clone(),
@@ -165,7 +159,6 @@ impl UTransportRouterInner {
 
 async fn transport_listener(
     result: Result<UMessage, UStatus>,
-    host_transport: bool,
     host_transport_tag: Option<TransportTag>,
     authority_routes: HashMap<HashableUAuthority, TransportTag>,
     ingress_sender: Sender<UMessage>,
@@ -361,7 +354,7 @@ async fn transmit_loop(
     transmit_cache: Arc<Mutex<LruCache<HashableUUID, bool>>>,
 ) {
     // Loop over and consume from transmit_queue
-    while let Ok(mut message) = transmit_request_receiver.recv().await {
+    while let Ok(message) = transmit_request_receiver.recv().await {
         // TODO: Consider how to gracefully shut this down
 
         let hashed_id = {

@@ -1,7 +1,7 @@
 use crate::hashable_items::HashableUAuthority;
 use crate::router::Router;
 use crate::ustreamer::TransportTag;
-use async_std::channel::{Receiver, SendError, Sender};
+use async_std::channel::{Receiver, Sender};
 use async_std::task;
 use log::{error, trace};
 use std::collections::HashMap;
@@ -25,7 +25,7 @@ impl Router for EgressRouter {
     type StartArgs = EgressRouterStartArgs;
     type Instance = EgressRouterHandle;
 
-    fn start(name: &str, start_args: &Self::StartArgs) -> Result<Self::Instance, Box<dyn Error>> {
+    fn start(_name: &str, start_args: &Self::StartArgs) -> Result<Self::Instance, Box<dyn Error>> {
         task::spawn(run(
             start_args.egress_receiver.clone(),
             start_args.authority_routes.clone(),
@@ -119,7 +119,7 @@ async fn handle_egress(
 async fn send_over_all_but_originating(
     authority_routes: &HashMap<HashableUAuthority, TransportTag>,
     utransport_senders: &HashMap<TransportTag, Sender<UMessage>>,
-    mut message: &mut UMessage,
+    message: &mut UMessage,
     attr: &UAttributes,
 ) -> bool {
     let Some(authority) = attr.source.authority.as_ref() else {
@@ -163,7 +163,7 @@ async fn send_over_all_but_originating(
 async fn send_on_one_transport(
     authority_routes: &HashMap<HashableUAuthority, TransportTag>,
     utransport_senders: HashMap<TransportTag, Sender<UMessage>>,
-    mut message: UMessage,
+    message: UMessage,
     attr: &UAttributes,
 ) {
     let Some(authority) = attr.sink.authority.as_ref() else {
