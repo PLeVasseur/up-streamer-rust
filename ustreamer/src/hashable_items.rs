@@ -36,7 +36,7 @@ impl HashableUAuthority {
         if self.0.has_id() || self.0.has_ip() {
             return true;
         }
-        return false;
+        false
     }
 }
 

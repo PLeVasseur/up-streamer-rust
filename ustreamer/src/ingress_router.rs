@@ -1,3 +1,5 @@
+#![allow(clippy::mutable_key_type)]
+// TODO: Consider again, if we want to upstream the ability to hash and compare UAuthority & UUri
 use crate::hashable_items::HashableUAuthority;
 use crate::router::Router;
 use crate::ustreamer::TransportTag;
@@ -29,7 +31,7 @@ impl Router for IngressRouter {
     fn start(_name: &str, start_args: &Self::StartArgs) -> Result<Self::Instance, Box<dyn Error>> {
         task::spawn(run(
             start_args.ingress_receiver.clone(),
-            start_args.host_transport_tag.clone(),
+            start_args.host_transport_tag,
             start_args.host_transport_sender.clone(),
             start_args.authority_routes.clone(),
         ));

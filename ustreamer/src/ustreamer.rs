@@ -1,3 +1,5 @@
+#![allow(clippy::mutable_key_type)]
+// TODO: Consider again, if we want to upstream the ability to hash and compare UAuthority & UUri
 use crate::egress_router::{EgressRouter, EgressRouterHandle, EgressRouterStartArgs};
 use crate::errors::UStreamerError;
 use crate::hashable_items::{HashableUAuthority, HashableUUID};
@@ -75,13 +77,11 @@ impl UStreamer {
 
         let host_transport_tag = Self::find_host_transport(&config)?;
         let host_transport_sender: Option<Sender<UMessage>> = {
-            if host_transport_tag.is_some() {
-                let sender = utransport_senders.get(&host_transport_tag.unwrap());
-                if sender.is_some() {
-                    sender.clone().unwrap();
-                }
-            };
-            None
+            if let Some(host_transport_tag) = host_transport_tag {
+                utransport_senders.get(&host_transport_tag).cloned()
+            } else {
+                None
+            }
         };
 
         let transmit_cache = Arc::new(Mutex::new(LruCache::new(
@@ -148,7 +148,7 @@ impl UStreamer {
             }
         }
 
-        return Ok(host_transport);
+        Ok(host_transport)
     }
 
     fn assemble_utransport_senders_receivers(

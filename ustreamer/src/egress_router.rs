@@ -1,3 +1,5 @@
+#![allow(clippy::mutable_key_type)]
+// TODO: Consider again, if we want to upstream the ability to hash and compare UAuthority & UUri
 use crate::hashable_items::HashableUAuthority;
 use crate::router::Router;
 use crate::ustreamer::TransportTag;
@@ -136,7 +138,7 @@ async fn send_over_all_but_originating(
     let exclude_transport_tag = transport_tag.unwrap();
     let senders_except_for_origin: Vec<&Sender<UMessage>> = utransport_senders
         .iter()
-        .filter_map(|(key, &ref value)| {
+        .filter_map(|(key, value)| {
             if key != exclude_transport_tag {
                 Some(value)
             } else {
