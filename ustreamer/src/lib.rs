@@ -1,3 +1,4 @@
+pub mod config;
 mod egress_router;
 pub mod errors;
 mod hashable_items;

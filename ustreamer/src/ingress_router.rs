@@ -1,8 +1,8 @@
 #![allow(clippy::mutable_key_type)]
 // TODO: Consider again, if we want to upstream the ability to hash and compare UAuthority & UUri
+use crate::config::TransportTag;
 use crate::hashable_items::HashableUAuthority;
 use crate::router::Router;
-use crate::ustreamer::TransportTag;
 use async_std::channel::{Receiver, Sender};
 use async_std::task;
 use log::{error, warn};

@@ -2,7 +2,7 @@ use up_rust::uprotocol::UAuthority;
 
 #[derive(Debug)]
 pub enum UStreamerError {
-    DuplicateTransportTag(crate::ustreamer::TransportTag),
+    DuplicateTransportTag(crate::config::TransportTag),
     UAuthorityNotHashable(UAuthority),
     GeneralError(String),
 }

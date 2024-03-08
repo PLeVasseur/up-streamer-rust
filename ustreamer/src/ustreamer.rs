@@ -1,12 +1,13 @@
 #![allow(clippy::mutable_key_type)]
 // TODO: Consider again, if we want to upstream the ability to hash and compare UAuthority & UUri
+use crate::config::{TransportTag, UStreamerConfig};
 use crate::egress_router::{EgressRouter, EgressRouterHandle, EgressRouterStartArgs};
 use crate::errors::UStreamerError;
 use crate::hashable_items::{HashableUAuthority, HashableUUID};
 use crate::ingress_router::{IngressRouter, IngressRouterHandle, IngressRouterStartArgs};
 use crate::router::Router;
 use crate::utransport_router::{
-    UTransportRouter, UTransportRouterConfig, UTransportRouterHandle, UTransportRouterStartArgs,
+    UTransportRouter, UTransportRouterHandle, UTransportRouterStartArgs,
 };
 use async_std::channel::{self, Receiver, Sender};
 use async_std::sync::Mutex;
@@ -15,69 +16,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
-use up_rust::uprotocol::{UAuthority, UMessage};
-
-// We use the concept of a TransportTag and not a concrete enum because we want to allow
-// extensibility to use beyond the currently written `up-client-foo-rust` and support closed-source
-// or vendor-specific implementations
-pub type TransportTag = u8;
-pub type TransportId = String;
-
-pub struct Route {
-    authority: UAuthority,
-    transport: TransportTag,
-}
-
-pub struct TaggedTransportRouterConfig {
-    tag: TransportTag,
-    id: TransportId,
-    queue_length: usize,
-    config: UTransportRouterConfig,
-}
-
-pub struct IngressEgressQueueConfig {
-    ingress_queue_length: usize,
-    egress_queue_length: usize,
-}
-
-pub struct BookkeepingConfig {
-    transmit_cache_size: usize,
-}
-
-pub struct UStreamerConfig {
-    transport_router_configs: Vec<TaggedTransportRouterConfig>,
-    ingress_egress_queue_config: IngressEgressQueueConfig,
-    bookkeeping_config: BookkeepingConfig,
-    routes: Vec<Route>,
-}
-
-impl UStreamerConfig {
-    pub fn new(
-        transport_router_configs: Vec<TaggedTransportRouterConfig>,
-        ingress_egress_queue_config: IngressEgressQueueConfig,
-        bookkeeping_config: BookkeepingConfig,
-        routes: Vec<Route>,
-    ) -> Result<Self, UStreamerError> {
-        if transport_router_configs.is_empty() {
-            return Err(UStreamerError::GeneralError(
-                "No transport router configs provided".to_string(),
-            ));
-        }
-
-        if routes.is_empty() {
-            return Err(UStreamerError::GeneralError(
-                "No routes provided".to_string(),
-            ));
-        }
-
-        Ok(Self {
-            transport_router_configs,
-            ingress_egress_queue_config,
-            bookkeeping_config,
-            routes,
-        })
-    }
-}
+use up_rust::uprotocol::UMessage;
 
 #[allow(dead_code)]
 pub struct UStreamer {
