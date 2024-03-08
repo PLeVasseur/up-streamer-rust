@@ -13,6 +13,22 @@ pub struct Route {
     pub(crate) transport: TransportTag,
 }
 
+impl Route {
+    pub fn new(authority: UAuthority, transport: TransportTag) -> Result<Self, UStreamerError> {
+        if authority.number.is_none() {
+            return Err(UStreamerError::GeneralError(format!(
+                "Route UAuthority provided does not contain number representation: {:?}",
+                &authority
+            )));
+        }
+
+        Ok(Self {
+            authority,
+            transport,
+        })
+    }
+}
+
 pub struct TaggedTransportRouterConfig {
     pub(crate) tag: TransportTag,
     pub(crate) id: TransportId,
