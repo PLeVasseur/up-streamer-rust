@@ -23,8 +23,8 @@ const TAG: &str = "UTransportRouter";
 pub struct UTransportRouter {}
 
 pub struct UTransportRouterConfig {
-    transport_builder: RefCell<Option<Box<dyn UTransportBuilder>>>,
-    pub(crate) host_transport: bool,
+    pub transport_builder: RefCell<Option<Box<dyn UTransportBuilder>>>,
+    pub host_transport: bool,
 }
 
 pub struct UTransportRouterStartArgs {
