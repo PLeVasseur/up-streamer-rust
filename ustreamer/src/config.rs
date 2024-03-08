@@ -20,6 +20,28 @@ pub struct TaggedTransportRouterConfig {
     pub(crate) config: UTransportRouterConfig,
 }
 
+impl TaggedTransportRouterConfig {
+    pub fn new(
+        tag: TransportTag,
+        id: TransportId,
+        queue_length: usize,
+        config: UTransportRouterConfig,
+    ) -> Result<Self, UStreamerError> {
+        if queue_length < 1 {
+            return Err(UStreamerError::GeneralError(
+                "Queue lengths must be > 0".to_string(),
+            ));
+        }
+
+        Ok(Self {
+            tag,
+            id,
+            queue_length,
+            config,
+        })
+    }
+}
+
 pub struct IngressEgressQueueConfig {
     pub(crate) ingress_queue_length: usize,
     pub(crate) egress_queue_length: usize,
