@@ -51,6 +51,34 @@ pub struct UStreamerConfig {
     routes: Vec<Route>,
 }
 
+impl UStreamerConfig {
+    pub fn new(
+        transport_router_configs: Vec<TaggedTransportRouterConfig>,
+        ingress_egress_queue_config: IngressEgressQueueConfig,
+        bookkeeping_config: BookkeepingConfig,
+        routes: Vec<Route>,
+    ) -> Result<Self, UStreamerError> {
+        if transport_router_configs.is_empty() {
+            return Err(UStreamerError::GeneralError(
+                "No transport router configs provided".to_string(),
+            ));
+        }
+
+        if routes.is_empty() {
+            return Err(UStreamerError::GeneralError(
+                "No routes provided".to_string(),
+            ));
+        }
+
+        Ok(Self {
+            transport_router_configs,
+            ingress_egress_queue_config,
+            bookkeeping_config,
+            routes,
+        })
+    }
+}
+
 #[allow(dead_code)]
 pub struct UStreamer {
     host_transport: Option<TransportTag>,

@@ -1,5 +1,6 @@
 #![allow(clippy::mutable_key_type)]
 // TODO: Consider again, if we want to upstream the ability to hash and compare UAuthority & UUri
+use crate::errors::UStreamerError;
 use crate::hashable_items::{HashableUAuthority, HashableUUID};
 use crate::router::Router;
 use crate::ustreamer::TransportTag;
@@ -23,8 +24,20 @@ const TAG: &str = "UTransportRouter";
 pub struct UTransportRouter {}
 
 pub struct UTransportRouterConfig {
-    pub transport_builder: RefCell<Option<Box<dyn UTransportBuilder>>>,
-    pub host_transport: bool,
+    transport_builder: RefCell<Option<Box<dyn UTransportBuilder>>>,
+    pub(crate) host_transport: bool,
+}
+
+impl UTransportRouterConfig {
+    pub fn new(
+        transport_builder: Box<dyn UTransportBuilder>,
+        host_transport: bool,
+    ) -> Result<Self, UStreamerError> {
+        Ok(Self {
+            transport_builder: RefCell::new(Some(transport_builder)),
+            host_transport,
+        })
+    }
 }
 
 pub struct UTransportRouterStartArgs {
