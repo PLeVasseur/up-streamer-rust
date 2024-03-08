@@ -6,3 +6,7 @@ mod router;
 pub mod ustreamer;
 pub mod utransport_builder;
 mod utransport_router;
+
+pub mod transport_router {
+    pub use crate::utransport_router::UTransportRouterConfig;
+}
