@@ -24,7 +24,7 @@ impl ZenohTransportBuilder {
 
 impl UTransportBuilder for ZenohTransportBuilder {
     fn build(&self) -> Box<dyn UTransport> {
-        let config = self.config.clone().unwrap_or_else(Config::default);
+        let config = self.config.clone().unwrap_or_default();
         let utransport: Box<dyn UTransport> = Box::new(
             task::block_on(UPClientZenoh::new(config)).expect("Unable to create UPClientZenoh!"),
         );

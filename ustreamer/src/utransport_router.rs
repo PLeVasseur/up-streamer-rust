@@ -62,7 +62,7 @@ impl Router for UTransportRouter {
         async_std::task::spawn(run(
             transport_builder,
             start_args.authorities.clone(),
-            start_args.host_transport_tag.clone(),
+            start_args.host_transport_tag,
             start_args.authority_routes.clone(),
             start_args.ingress_sender.clone(),
             start_args.egress_sender.clone(),
@@ -73,6 +73,7 @@ impl Router for UTransportRouter {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run(
     transport_builder: Box<dyn UTransportBuilder>,
     authorities: Vec<UAuthority>,
@@ -100,6 +101,7 @@ async fn run(
 struct UTransportRouterInner;
 
 impl UTransportRouterInner {
+    #[allow(clippy::too_many_arguments)]
     fn start(
         transport_builder: Box<dyn UTransportBuilder>,
         authorities: Vec<UAuthority>,
@@ -114,7 +116,6 @@ impl UTransportRouterInner {
 
         task::spawn_local(async move {
             for authority in &authorities {
-                let host_transport_tag = host_transport_tag.clone();
                 let ingress_sender = ingress_sender.clone();
                 let egress_sender = egress_sender.clone();
                 let transmit_cache = transmit_cache.clone();
@@ -122,7 +123,7 @@ impl UTransportRouterInner {
                 let closure_listener = move |result: Result<UMessage, UStatus>| {
                     task::spawn_local(transport_listener(
                         result,
-                        host_transport_tag.clone(),
+                        host_transport_tag,
                         authority_routes.clone(),
                         ingress_sender.clone(),
                         egress_sender.clone(),
@@ -208,7 +209,6 @@ async fn transport_listener(
     match message_type {
         UMessageType::UMESSAGE_TYPE_UNSPECIFIED => {
             error!("{TAG}: UMessageType is UMESSAGE_TYPE_UNSPECIFIED. Cannot route.");
-            return;
         }
         UMessageType::UMESSAGE_TYPE_PUBLISH => {
             if attr.sink.is_some() {
@@ -236,7 +236,6 @@ async fn transport_listener(
                     .await;
                 } else {
                     error!("{TAG}: UMessageType is UMESSAGE_TYPE_PUBLISH, but no sink or source UUri. Unable to route.");
-                    return;
                 }
             }
         }
@@ -253,7 +252,6 @@ async fn transport_listener(
                 .await;
             } else {
                 error!("{TAG}: UMessageType is UMESSAGE_TYPE_REQUEST, but no sink UUri. Unable to route.");
-                return;
             }
         }
         UMessageType::UMESSAGE_TYPE_RESPONSE => {
@@ -269,7 +267,6 @@ async fn transport_listener(
                 .await;
             } else {
                 error!("{TAG}: UMessageType is UMESSAGE_TYPE_RESPONSE, but no sink UUri. Unable to route.");
-                return;
             }
         }
     }
@@ -307,7 +304,6 @@ async fn send_to_ingress_and_egress(
         Ok(_) => {}
         Err(e) => {
             error!("{TAG}: Unable to send UMessage to egress: {:?}", e);
-            return;
         }
     }
 }
@@ -336,7 +332,6 @@ async fn send_to_ingress_or_egress(
             Ok(_) => {}
             Err(e) => {
                 error!("{TAG}: Unable to send UMessage to ingress: {:?}", e);
-                return;
             }
         }
     } else {
@@ -344,7 +339,6 @@ async fn send_to_ingress_or_egress(
             Ok(_) => {}
             Err(e) => {
                 error!("{TAG}: Unable to send UMessage to egress: {:?}", e);
-                return;
             }
         }
     }

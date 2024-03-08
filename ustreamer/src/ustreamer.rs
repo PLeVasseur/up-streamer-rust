@@ -151,6 +151,7 @@ impl UStreamer {
         Ok(host_transport)
     }
 
+    #[allow(clippy::type_complexity)]
     fn assemble_utransport_senders_receivers(
         config: &UStreamerConfig,
     ) -> Result<
@@ -186,18 +187,16 @@ impl UStreamer {
                 ));
             }
 
-            let previously_inserted =
-                authority_routes.insert(hashable_uauthority, route.transport.clone());
-            if previously_inserted.is_some() {
-                return Err(UStreamerError::DuplicateTransportTag(
-                    previously_inserted.unwrap(),
-                ));
+            let previously_inserted = authority_routes.insert(hashable_uauthority, route.transport);
+            if let Some(previously_inserted) = previously_inserted {
+                return Err(UStreamerError::DuplicateTransportTag(previously_inserted));
             }
         }
 
         Ok(authority_routes)
     }
 
+    #[allow(clippy::type_complexity)]
     fn assemble_ingress_egress(
         config: &UStreamerConfig,
     ) -> Result<
@@ -263,14 +262,13 @@ impl UStreamer {
 
             let handle =
                 UTransportRouter::start(&transport_router_config.id, &transport_router_start_args)
-                    .expect(&*format!(
-                        "Failed to start {} router",
-                        &transport_router_config.id
-                    ));
+                    .unwrap_or_else(|_| {
+                        panic!("Failed to start {} router", &transport_router_config.id)
+                    });
             utransport_router_handles.insert(transport_router_config.tag, handle);
         }
 
-        return Ok(utransport_router_handles);
+        Ok(utransport_router_handles)
     }
 
     fn start_ingress_egress_routers(
@@ -288,8 +286,9 @@ impl UStreamer {
             host_transport_sender,
             authority_routes: authority_routes.clone(),
         };
+        // TODO: See if we should remove the couple of panics in here
         let ingress_handle = IngressRouter::start("ingress_router", &ingress_router_start_args)
-            .expect(&*"Failed to start ingress router".to_string());
+            .unwrap_or_else(|_| panic!("{}", "Failed to start ingress router".to_string()));
 
         let egress_router_start_args = EgressRouterStartArgs {
             egress_receiver,
@@ -297,7 +296,7 @@ impl UStreamer {
             utransport_senders,
         };
         let egress_handle = EgressRouter::start("egress_router", &egress_router_start_args)
-            .expect(&*"Failed to start ingress router".to_string());
+            .unwrap_or_else(|_| panic!("{}", "Failed to start egress router".to_string()));
 
         Ok((ingress_handle, egress_handle))
     }
