@@ -56,7 +56,7 @@ impl EgressRouterInner {
         authority_routes: HashMap<HashableUAuthority, TransportTag>,
         utransport_senders: HashMap<TransportTag, Sender<UMessage>>,
     ) {
-        task::spawn_local(handle_egress(
+        task::block_on(handle_egress(
             egress_receiver,
             authority_routes,
             utransport_senders,

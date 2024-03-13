@@ -64,7 +64,7 @@ impl IngressRouterInner {
         host_transport_sender: Option<Sender<UMessage>>,
         authority_routes: HashMap<HashableUAuthority, TransportTag>,
     ) {
-        task::spawn_local(handle_ingress(
+        task::block_on(handle_ingress(
             ingress_receiver,
             host_transport_tag,
             host_transport_sender,

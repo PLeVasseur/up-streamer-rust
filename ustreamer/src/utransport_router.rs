@@ -127,7 +127,7 @@ impl UTransportRouterInner {
     ) {
         let utransport = transport_builder.build();
 
-        task::spawn_local(async move {
+        task::block_on(async move {
             for authority in &authorities {
                 let ingress_sender = ingress_sender.clone();
                 let egress_sender = egress_sender.clone();
