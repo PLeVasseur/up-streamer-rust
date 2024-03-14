@@ -14,7 +14,6 @@ resolver = "2"
 members = [
     "example-utils/example-proto",
     "ustreamer",
-    "ustreamer-transport-builders",
     "ustreamer-example",
     # "ustreamer-previous",
 ]
@@ -46,20 +45,7 @@ strum = { version = "0.25", features = ["derive"] }
 uuid = "1.7.0"
 zenoh = { version = "0.10.1-rc", features = ["unstable"] }
 up-rust = { git = "https://github.com/eclipse-uprotocol/up-rust", rev = "68c8a1d94f0006daf4ba135c9cbbfddcd793108d" }
-up-client-zenoh-rust = { package = "uprotocol_zenoh", git = "https://github.com/eclipse-uprotocol/up-client-zenoh-rust", branch = "main" }
 
-# upstream
-# uprotocol-sdk = { git = "https://github.com/eclipse-uprotocol/uprotocol-rust.git", branch = "main" }
-# zettascale version
-#uprotocol-sdk = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust.git", branch = "support_rpcserver" }
-# Pete one
-# uprotocol-sdk = { git = "https://github.com/PLeVasseur/uprotocol-rust_fork.git", branch = "feature/turn_send_sync_back_off" }
-# upstream
-# uprotocol_zenoh_rust = { git = "https://github.com/ZettaScaleLabs/uprotocol-rust-ulink-zenoh.git", branch = "support_rpcserver" }
-# my version, increasing timeout to 2 seconds
-# uprotocol-rust-transport-sommr = { git = "https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git", branch = "feature/stand-in_for_uprotocol-rust-transport-sommr" }
-# uprotocol-rust-transport-mqtt = { git = "https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git", branch = "feature/stand-in_for_uprotocol-rust-transport-mqtt" }
-# uprotocol_zenoh_rust = { git = "https://github.com/PLeVasseur/uprotocol-rust-ulink-zenoh_zettascale.git", branch = "feature/update_timeout" }
 
 [profile.dev]
 debug = true

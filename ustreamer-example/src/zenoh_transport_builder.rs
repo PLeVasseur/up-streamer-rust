@@ -1,23 +1,23 @@
 use async_std::task;
-use up_client_zenoh_rust::UPClientZenoh;
+use up_client_zenoh::UPClientZenoh;
 use up_rust::transport::datamodel::UTransport;
 use ustreamer::utransport_builder::UTransportBuilder;
 use zenoh::prelude::Config;
 
-struct ZenohTransportBuilder {
+pub struct ZenohTransportBuilder {
     config: Option<Config>,
 }
 
 impl ZenohTransportBuilder {
     #[allow(dead_code)]
-    fn new_with_config(config: Config) -> Self {
+    pub fn new_with_config(config: Config) -> Self {
         Self {
             config: Some(config),
         }
     }
 
     #[allow(dead_code)]
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self { config: None }
     }
 }

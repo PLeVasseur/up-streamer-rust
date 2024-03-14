@@ -24,6 +24,10 @@ uuid = { workspace = true }
 zenoh = { workspace = true }
 serde_json = { workspace = true }
 up-rust = { workspace = true }
+ustreamer = { path = "../ustreamer" }
+
+up-client-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", branch = "feature/zenoh-transport-builder" }
+up-client-someipstandin = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", branch = "feature/dummy-someip-standin" }
 
 [dev-dependencies]
 example-proto = { path = "../example-utils/example-proto" }

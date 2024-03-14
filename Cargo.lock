@@ -2925,6 +2925,44 @@ dependencies = [
 ]
 
 [[package]]
+name = "up-client-someipstandin"
+version = "0.1.0"
+source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?branch=feature/dummy-someip-standin#70eb101ed83b05eae74a810c033cb8c56250289c"
+dependencies = [
+ "anyhow",
+ "async-std",
+ "async-trait",
+ "chrono",
+ "env_logger",
+ "log",
+ "prost",
+ "prost-types",
+ "protobuf",
+ "up-rust",
+ "ustreamer 0.1.5-dev (git+https://github.com/PLeVasseur/up-streamer-rust.git?branch=feature/initial-pluggable-ustreamer)",
+ "zenoh",
+]
+
+[[package]]
+name = "up-client-zenoh"
+version = "0.1.0"
+source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?branch=feature/zenoh-transport-builder#9c24a3b1236fb399ca6bc90966bd28d3b6a809ad"
+dependencies = [
+ "anyhow",
+ "async-std",
+ "async-trait",
+ "chrono",
+ "env_logger",
+ "log",
+ "prost",
+ "prost-types",
+ "protobuf",
+ "up-rust",
+ "ustreamer 0.1.5-dev (git+https://github.com/PLeVasseur/up-streamer-rust.git?branch=feature/initial-pluggable-ustreamer)",
+ "zenoh",
+]
+
+[[package]]
 name = "up-rust"
 version = "0.1.5"
 source = "git+https://github.com/eclipse-uprotocol/up-rust?rev=68c8a1d94f0006daf4ba135c9cbbfddcd793108d#68c8a1d94f0006daf4ba135c9cbbfddcd793108d"
@@ -2944,24 +2982,6 @@ dependencies = [
  "ureq",
  "url",
  "uuid",
-]
-
-[[package]]
-name = "uprotocol_zenoh"
-version = "0.1.0"
-source = "git+https://github.com/eclipse-uprotocol/up-client-zenoh-rust?branch=main#cca6bdb761500b02717a480bb240b1f061cf3f29"
-dependencies = [
- "anyhow",
- "async-std",
- "async-trait",
- "chrono",
- "env_logger",
- "log",
- "prost",
- "prost-types",
- "protobuf",
- "up-rust",
- "zenoh",
 ]
 
 [[package]]
@@ -3013,6 +3033,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ustreamer"
+version = "0.1.5-dev"
+source = "git+https://github.com/PLeVasseur/up-streamer-rust.git?branch=feature/initial-pluggable-ustreamer#da777ccb7f30ee57565e864a088cd19da1949cf9"
+dependencies = [
+ "async-std",
+ "async-trait",
+ "env_logger",
+ "futures",
+ "log",
+ "lru",
+ "prost",
+ "serde_json",
+ "strum",
+ "up-rust",
+ "uuid",
+ "zenoh",
+]
+
+[[package]]
 name = "ustreamer-example"
 version = "0.1.5-dev"
 dependencies = [
@@ -3027,29 +3066,10 @@ dependencies = [
  "prost",
  "serde_json",
  "strum",
+ "up-client-someipstandin",
+ "up-client-zenoh",
  "up-rust",
- "uuid",
- "zenoh",
-]
-
-[[package]]
-name = "ustreamer-transport-builders"
-version = "0.1.5-dev"
-dependencies = [
- "async-std",
- "async-trait",
- "chrono",
- "env_logger",
- "example-proto",
- "futures",
- "log",
- "lru",
- "prost",
- "serde_json",
- "strum",
- "up-rust",
- "uprotocol_zenoh",
- "ustreamer",
+ "ustreamer 0.1.5-dev",
  "uuid",
  "zenoh",
 ]
