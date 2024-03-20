@@ -14,8 +14,8 @@ resolver = "2"
 members = [
     "example-utils/example-proto",
     "up-streamer",
-    "ustreamer-previous-1",
-    "ustreamer-example",
+    # "ustreamer-example",
+    # "ustreamer-previous-1",
     # "ustreamer-previous-2",
 ]
 
@@ -45,7 +45,10 @@ serde_json = "1.0.111"
 strum = { version = "0.25", features = ["derive"] }
 uuid = "1.7.0"
 zenoh = { version = "0.10.1-rc", features = ["unstable"] }
-up-rust = { git = "https://github.com/eclipse-uprotocol/up-rust", rev = "68c8a1d94f0006daf4ba135c9cbbfddcd793108d" }
+# pete version with hashable uuris
+up-rust = { git = "https://github.com/PLeVasseur/uprotocol-rust_fork", branch = "feature/hashable_uuris" }
+# upstream
+# up-rust = { git = "https://github.com/eclipse-uprotocol/up-rust", rev = "68c8a1d94f0006daf4ba135c9cbbfddcd793108d" }
 
 
 [profile.dev]
