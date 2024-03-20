@@ -196,7 +196,10 @@ impl UTransportRouterInner {
     }
 
     async fn handle_message(&self, message: UMessage) {
-        todo!()
+        let send_result = self.utransport.send(message).await;
+        if let Err(e) = send_result {
+            // log an error
+        }
     }
 }
 
