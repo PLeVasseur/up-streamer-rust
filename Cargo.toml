@@ -13,9 +13,10 @@
 resolver = "2"
 members = [
     "example-utils/example-proto",
-    "ustreamer",
+    "up-streamer",
+    "ustreamer-previous-1",
     "ustreamer-example",
-    # "ustreamer-previous",
+    # "ustreamer-previous-2",
 ]
 
 [workspace.package]

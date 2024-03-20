@@ -1,5 +1,5 @@
 [package]
-name = "ustreamer-example"
+name = "up-streamer"
 rust-version.workspace = true
 version.workspace = true
 repository.workspace = true
@@ -24,10 +24,11 @@ uuid = { workspace = true }
 zenoh = { workspace = true }
 serde_json = { workspace = true }
 up-rust = { workspace = true }
-ustreamer = { path = "../ustreamer-previous-1" }
 
-up-client-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", branch = "feature/zenoh-transport-builder" }
-up-client-someipstandin = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", branch = "feature/dummy-someip-standin" }
+# uprotocol-sdk = { workspace = true }
+# uprotocol-rust-transport-mqtt = { workspace = true }
+# uprotocol-rust-transport-sommr = { workspace = true }
+# uprotocol_zenoh_rust = { workspace = true }
 
 [dev-dependencies]
 example-proto = { path = "../example-utils/example-proto" }
