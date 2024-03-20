@@ -239,12 +239,22 @@ impl UTransportRouterHandle {
         Ok(())
     }
 
-    pub fn unregister(
+    pub async fn unregister(
         &self,
-        in_uauthority: UAuthority,
+        in_authority: UAuthority,
         in_sender_wrapper: SenderWrapper<UMessage>,
-    ) {
-        todo!()
+    ) -> Result<(), UStatus> {
+        let send_res = self
+            .command_sender
+            .send(UTransportRouterCommand::Unregister(
+                in_authority,
+                in_sender_wrapper,
+            ))
+            .await
+            .map_err(|e| {
+                UStatus::fail_with_code(UCode::INTERNAL, format!("Unable to forward: {:?}", e))
+            })?;
+        Ok(())
     }
 }
 
