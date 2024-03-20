@@ -6,6 +6,7 @@ use futures::select;
 use futures::FutureExt;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::ops::Deref;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use up_rust::{UAuthority, UCode, UMessage, UStatus, UTransport, UUIDBuilder, UUri, UUID};
@@ -28,6 +29,14 @@ impl<T> SenderWrapper<T> {
         let id = UUIDBuilder::new().build();
         let sender = Arc::new(sender);
         Self { id, sender }
+    }
+}
+
+impl<T> Deref for SenderWrapper<T> {
+    type Target = Sender<T>;
+
+    fn deref(&self) -> &Self::Target {
+        &*self.sender
     }
 }
 
@@ -140,6 +149,7 @@ impl UTransportRouterInner {
             UTransportRouterCommand::Register(in_authority, in_sender_wrapper) => {
                 if self.message_sender == in_sender_wrapper {
                     // bail in this case, we shouldn't be sending to ourselves
+                    // log an error
                 }
 
                 let mut listener_map = self.listener_map.lock().unwrap();
@@ -148,17 +158,31 @@ impl UTransportRouterInner {
                     .get(&(in_authority.clone(), in_sender_wrapper.clone()))
                     .is_none()
                 {
+                    let in_sender_wrapper_closure = in_sender_wrapper.clone();
+                    let callback_closure = move |received: Result<UMessage, UStatus>| {
+                        let in_sender_wrapper_closure = in_sender_wrapper_closure.clone();
+                        task::spawn_local(forwarding_callback(
+                            received,
+                            in_sender_wrapper_closure.clone(),
+                        ));
+                    };
+
                     let registration_uuri = uauthority_to_uuri(in_authority.clone());
                     let registration_result = self
                         .utransport
-                        .register_listener(registration_uuri, Box::new(forwarding_callback))
+                        .register_listener(registration_uuri, Box::new(callback_closure))
                         .await;
                     if let Ok(registration_string) = registration_result {
                         listener_map.insert((in_authority, in_sender_wrapper), registration_string);
                     }
                 }
             }
-            UTransportRouterCommand::Unregister(authority, sender_wrapper) => {}
+            UTransportRouterCommand::Unregister(in_authority, in_sender_wrapper) => {
+                if self.message_sender == in_sender_wrapper {
+                    // bail in this case, we shouldn't be sending to ourselves
+                    // log an error
+                }
+            }
         }
     }
 
@@ -167,7 +191,22 @@ impl UTransportRouterInner {
     }
 }
 
-fn forwarding_callback(received: Result<UMessage, UStatus>) {}
+async fn forwarding_callback(
+    received: Result<UMessage, UStatus>,
+    in_sender_wrapper: SenderWrapper<UMessage>,
+) {
+    // need to be able to get a copy of the in_sender_wrapper from up above in handle_command
+    // so that we can do this:
+    if let Ok(msg) = received {
+        // how can I pipe in_sender_wrapper into forwarding_callback?
+        // note that I cannot change the signature of forwarding_callback because it's the expected
+        // signature of the function passed into register_listener up above
+        let forward_result = in_sender_wrapper.send(msg).await;
+        if let Err(e) = forward_result {
+            // log error e here
+        }
+    }
+}
 
 pub struct UTransportRouterHandle {
     pub(crate) command_sender: Sender<UTransportRouterCommand>,
