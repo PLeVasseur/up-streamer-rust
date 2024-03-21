@@ -1,8 +1,8 @@
+use async_std::channel::Sender;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync::Arc;
-use async_std::channel::Sender;
-use up_rust::{UUID, UUIDBuilder};
+use up_rust::{UUIDBuilder, UUID};
 
 #[derive(Clone)]
 pub(crate) struct SenderWrapper<T> {

@@ -4,10 +4,10 @@
 //! transports.
 
 mod route;
+mod sender_wrapper;
 mod ustreamer;
 mod utransport_builder;
 mod utransport_router;
-mod sender_wrapper;
 
 pub use route::Route;
 

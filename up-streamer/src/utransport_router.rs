@@ -1,3 +1,4 @@
+use crate::sender_wrapper::SenderWrapper;
 use crate::utransport_builder::UTransportBuilder;
 use async_std::channel::{bounded, Receiver, Sender};
 use async_std::future::timeout;
@@ -12,7 +13,6 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use up_rust::{UAuthority, UCode, UMessage, UStatus, UTransport, UUri};
-use crate::sender_wrapper::SenderWrapper;
 
 /// A [`UTransportRouterHandle`] which is returned from starting a [`UTransportRouter`]
 ///
@@ -135,9 +135,6 @@ impl UTransportRouterHandle {
         }
     }
 }
-
-
-
 
 pub(crate) struct RegisterUnregisterControl {
     in_authority: UAuthority,
@@ -498,7 +495,8 @@ impl UTransportRouterInner {
                         ));
                     });
 
-                    let registration_uuri = UTransportRouterInner::uauthority_to_uuri(in_authority.clone());
+                    let registration_uuri =
+                        UTransportRouterInner::uauthority_to_uuri(in_authority.clone());
                     let registration_result = self
                         .utransport
                         .register_listener(registration_uuri, callback_closure)
