@@ -3,6 +3,214 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use up_rust::UStatus;
 
+/// A [`UStreamer`] is used to coordinate the addition and deletion of forwarding rules between
+/// [`Route`][crate::Route]s
+///
+/// Essentially, it's a means of setting up rules so that messages from one transport (e.g. Zenoh)
+/// are bridged onto another transport (e.g. SOME/IP).
+///
+/// # Examples
+///
+/// ## Typical usage
+/// ```
+/// use std::sync::Arc;
+/// use up_rust::{Number, UAuthority};
+/// use up_streamer::{Route, UStreamer, UTransportRouter};
+/// # pub mod utransport_builder_foo {
+/// #     use async_trait::async_trait;
+/// #     use up_rust::{UMessage, UStatus, UUIDBuilder, UUri};
+/// #     use up_rust::UTransport;
+/// #     use up_streamer::UTransportBuilder;
+/// #
+/// #     pub struct UPClientFoo;
+/// #
+/// #     #[async_trait]
+/// #     impl UTransport for UPClientFoo {
+/// #         async fn send(&self, _message: UMessage) -> Result<(), UStatus> {
+/// #             todo!()
+/// #         }
+/// #
+/// #         async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
+/// #             todo!()
+/// #         }
+/// #
+/// #         async fn register_listener(
+/// #             &self,
+/// #             topic: UUri,
+/// #             _listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
+/// #         ) -> Result<String, UStatus> {
+/// #             println!("UPClientFoo: registering topic: {:?}", topic);
+/// #             let uuid = UUIDBuilder::new().build();
+/// #             Ok(uuid.to_string())
+/// #         }
+/// #
+/// #         async fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
+/// #             println!(
+/// #                 "UPClientFoo: unregistering topic: {topic:?} with listener string: {listener}"
+/// #             );
+/// #             Ok(())
+/// #         }
+/// #     }
+/// #
+/// #     impl UPClientFoo {
+/// #         pub fn new() -> Self {
+/// #             Self {}
+/// #         }
+/// #     }
+/// #     pub struct UTransportBuilderFoo;
+/// #     impl UTransportBuilder for UTransportBuilderFoo {
+/// #         fn build(&self) -> Box<dyn UTransport> {
+/// #             let utransport_foo: Box<dyn UTransport> = Box::new(UPClientFoo::new());
+/// #             utransport_foo
+/// #         }
+/// #     }
+/// #
+/// #     impl UTransportBuilderFoo {
+/// #         pub fn new() -> Self {
+/// #             Self {}
+/// #         }
+/// #     }
+/// # }
+/// #
+/// # pub mod utransport_builder_bar {
+/// #     use async_trait::async_trait;
+/// #     use up_rust::{UMessage, UStatus, UTransport, UUIDBuilder, UUri};use up_streamer::UTransportBuilder;
+/// #     pub struct UPClientBar;
+/// #
+/// #     #[async_trait]
+/// #     impl UTransport for UPClientBar {
+/// #         async fn send(&self, _message: UMessage) -> Result<(), UStatus> {
+/// #             todo!()
+/// #         }
+/// #
+/// #         async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
+/// #             todo!()
+/// #         }
+/// #
+/// #         async fn register_listener(
+/// #             &self,
+/// #             topic: UUri,
+/// #             _listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
+/// #         ) -> Result<String, UStatus> {
+/// #             println!("UPClientBar: registering topic: {:?}", topic);
+/// #             let uuid = UUIDBuilder::new().build();
+/// #             Ok(uuid.to_string())
+/// #         }
+/// #
+/// #         async fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
+/// #             println!(
+/// #                 "UPClientFoo: unregistering topic: {topic:?} with listener string: {listener}"
+/// #             );
+/// #             Ok(())
+/// #         }
+/// #     }
+/// #
+/// #     impl UPClientBar {
+/// #         pub fn new() -> Self {
+/// #             Self {}
+/// #         }
+/// #     }
+/// #
+/// #     pub struct UTransportBuilderBar;
+/// #     impl UTransportBuilder for UTransportBuilderBar {
+/// #         fn build(&self) -> Box<dyn UTransport> {
+/// #             let utransport_foo: Box<dyn UTransport> = Box::new(UPClientBar::new());
+/// #             utransport_foo
+/// #         }
+/// #     }
+/// #
+/// #     impl UTransportBuilderBar {
+/// #         pub fn new() -> Self {
+/// #             Self {}
+/// #         }
+/// #     }
+/// # }
+/// #
+/// # async fn async_main() {
+///
+/// // Local transport router
+/// let local_transport_router =
+///     UTransportRouter::start("FOO".to_string(), utransport_builder_foo::UTransportBuilderFoo::new());
+/// assert!(local_transport_router.is_ok());
+/// let local_transport_router_handle = Arc::new(local_transport_router.unwrap());
+///
+/// // Remote transport router
+/// let remote_transport_router =
+///     UTransportRouter::start("BAR".to_string(), utransport_builder_bar::UTransportBuilderBar::new());
+/// assert!(remote_transport_router.is_ok());
+/// let remote_transport_router_handle = Arc::new(remote_transport_router.unwrap());
+///
+/// // Local route
+/// let local_authority = UAuthority {
+///     name: Some("local".to_string()),
+///     number: Some(Number::Ip(vec![192, 168, 1, 100])),
+///     ..Default::default()
+/// };
+/// let local_route = Route::new(&local_authority, &local_transport_router_handle);
+///
+/// // A remote route
+/// let remote_authority = UAuthority {
+///     name: Some("remote".to_string()),
+///     number: Some(Number::Ip(vec![192, 168, 1, 200])),
+///     ..Default::default()
+/// };
+/// let remote_route = Route::new(&remote_authority, &remote_transport_router_handle);
+///
+/// let streamer = UStreamer;
+///
+/// // Add forwarding rules to route local<->remote
+/// assert_eq!(
+///     streamer
+///         .add_forwarding_rule(local_route.clone(), remote_route.clone())
+///         .await,
+///     Ok(())
+/// );
+/// assert_eq!(
+///     streamer
+///         .add_forwarding_rule(remote_route.clone(), local_route.clone())
+///         .await,
+///     Ok(())
+/// );
+///
+/// // Add forwarding rules to route local<->local, should report an error
+/// assert!(streamer
+///     .add_forwarding_rule(local_route.clone(), local_route.clone())
+///     .await
+///     .is_err());
+///
+/// // Rule already exists so it should report an error
+/// assert!(streamer
+///     .add_forwarding_rule(local_route.clone(), remote_route.clone())
+///     .await
+///     .is_err());
+///
+/// // Try and remove an invalid rule
+/// assert!(streamer
+///     .delete_forwarding_rule(remote_route.clone(), remote_route.clone())
+///     .await
+///     .is_err());
+///
+/// // remove valid routing rules
+/// assert_eq!(
+///     streamer
+///         .delete_forwarding_rule(local_route.clone(), remote_route.clone())
+///         .await,
+///     Ok(())
+/// );
+/// assert_eq!(
+///     streamer
+///         .delete_forwarding_rule(remote_route.clone(), local_route.clone())
+///         .await,
+///     Ok(())
+/// );
+///
+/// // Try and remove a rule that doesn't exist, should report an error
+/// assert!(streamer
+///     .delete_forwarding_rule(local_route.clone(), remote_route.clone())
+///     .await
+///     .is_err());
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct UStreamer;
 
