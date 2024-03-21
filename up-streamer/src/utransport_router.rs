@@ -265,7 +265,7 @@ pub(crate) struct UTransportChannels {
 /// # }
 ///
 /// let local_transport_router =
-///             UTransportRouter::start("FOO".to_string(), foo_transport_builder::UTransportBuilderFoo::new());
+///             UTransportRouter::start("FOO".to_string(), foo_transport_builder::UTransportBuilderFoo::new(), 100, 200);
 ///         assert!(local_transport_router.is_ok());
 ///         let local_transport_router_handle = Arc::new(local_transport_router.unwrap());
 /// ```
@@ -279,6 +279,10 @@ impl UTransportRouter {
     /// * `name` - Used for debugging and trace statements to disambiguate which [`UTransportRouter`]
     ///            is logging.
     /// * `utransport_builder` - A struct which implements [`UTransportBuilder`][crate::UTransportBuilder]
+    /// * `command_queue_size` - The size of queue which can hold command messages from
+    ///                          [`UTransportRouterHandle`] into [`UTransportRouter`]
+    /// * `message_queue_size` - The size of queue which can hold messages intended to be
+    ///                          sent onto the held `Box<dyn UTransport>`
     ///
     /// # Rationale
     ///
@@ -294,7 +298,12 @@ impl UTransportRouter {
     /// # Errors
     ///
     /// Returns a [`UStatus`][up_rust::UStatus] if unsuccessful indicating the error which occurred.
-    pub fn start<T>(name: String, utransport_builder: T) -> Result<UTransportRouterHandle, UStatus>
+    pub fn start<T>(
+        name: String,
+        utransport_builder: T,
+        command_queue_size: usize,
+        message_queue_size: usize,
+    ) -> Result<UTransportRouterHandle, UStatus>
     where
         T: UTransportBuilder + 'static,
     {
@@ -302,8 +311,8 @@ impl UTransportRouter {
 
         println!("{name}: before spawning thread");
 
-        let (command_sender, command_receiver) = bounded(100);
-        let (message_sender, message_receiver) = bounded(200);
+        let (command_sender, command_receiver) = bounded(command_queue_size);
+        let (message_sender, message_receiver) = bounded(message_queue_size);
         let message_sender = SenderWrapper::new(message_sender);
 
         let utransport_channels = UTransportChannels {

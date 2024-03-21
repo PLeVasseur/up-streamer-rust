@@ -69,7 +69,8 @@ use up_rust::UAuthority;
 /// # }
 ///
 /// let local_transport_router =
-///             UTransportRouter::start("FOO".to_string(), foo_transport_builder::UTransportBuilderFoo::new());
+///             UTransportRouter::start("FOO".to_string(),
+///                 foo_transport_builder::UTransportBuilderFoo::new(), 100, 200);
 ///         assert!(local_transport_router.is_ok());
 ///         let local_transport_router_handle = Arc::new(local_transport_router.unwrap());
 ///
