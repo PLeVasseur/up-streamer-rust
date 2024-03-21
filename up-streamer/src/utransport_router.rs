@@ -6,13 +6,13 @@ use async_std::task;
 use futures::select;
 use futures::FutureExt;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::ops::Deref;
+use std::hash::Hash;
 use std::rc::Rc;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use up_rust::{UAuthority, UCode, UMessage, UStatus, UTransport, UUIDBuilder, UUri, UUID};
+use up_rust::{UAuthority, UCode, UMessage, UStatus, UTransport, UUri};
+use crate::sender_wrapper::SenderWrapper;
 
 /// A [`UTransportRouterHandle`] which is returned from starting a [`UTransportRouter`]
 ///
@@ -136,48 +136,8 @@ impl UTransportRouterHandle {
     }
 }
 
-fn uauthority_to_uuri(authority: UAuthority) -> UUri {
-    UUri {
-        authority: Some(authority).into(),
-        ..Default::default()
-    }
-}
 
-#[derive(Clone)]
-pub(crate) struct SenderWrapper<T> {
-    id: UUID,
-    sender: Arc<Sender<T>>,
-}
 
-impl<T> SenderWrapper<T> {
-    pub fn new(sender: Sender<T>) -> Self {
-        let id = UUIDBuilder::new().build();
-        let sender = Arc::new(sender);
-        Self { id, sender }
-    }
-}
-
-impl<T> Deref for SenderWrapper<T> {
-    type Target = Sender<T>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.sender
-    }
-}
-
-impl<T> Hash for SenderWrapper<T> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.id.hash(state);
-    }
-}
-
-impl<T> PartialEq for SenderWrapper<T> {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl<T> Eq for SenderWrapper<T> {}
 
 pub(crate) struct RegisterUnregisterControl {
     in_authority: UAuthority,
@@ -373,6 +333,13 @@ struct UTransportRouterInner {
 }
 
 impl UTransportRouterInner {
+    fn uauthority_to_uuri(authority: UAuthority) -> UUri {
+        UUri {
+            authority: Some(authority).into(),
+            ..Default::default()
+        }
+    }
+
     pub async fn start<T>(
         name: String,
         utransport_builder: T,
@@ -531,7 +498,7 @@ impl UTransportRouterInner {
                         ));
                     });
 
-                    let registration_uuri = uauthority_to_uuri(in_authority.clone());
+                    let registration_uuri = UTransportRouterInner::uauthority_to_uuri(in_authority.clone());
                     let registration_result = self
                         .utransport
                         .register_listener(registration_uuri, callback_closure)
