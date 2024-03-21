@@ -12,15 +12,11 @@ impl UStreamer {
             .await
     }
 
-    pub async fn delete_forwarding_rule(&self, r#in: Route, out: Route) {
+    pub async fn delete_forwarding_rule(&self, r#in: Route, out: Route) -> Result<(), UStatus> {
         let in_message_sender = &r#in.get_transport_router_handle().clone().message_sender;
-        let forwarding_rule_delete_res = out
-            .get_transport_router_handle()
+        out.get_transport_router_handle()
             .unregister(r#in.get_authority(), in_message_sender.clone())
-            .await;
-        if let Err(e) = forwarding_rule_delete_res {
-            // log an error here
-        }
+            .await
     }
 }
 
@@ -162,8 +158,7 @@ mod tests {
 
         let streamer = UStreamer;
 
-        task::sleep(Duration::from_millis(2000)).await;
-
+        // Add forwarding rules to route local<->remote
         assert_eq!(
             streamer
                 .add_forwarding_rule(local_route.clone(), remote_route.clone())
@@ -172,10 +167,21 @@ mod tests {
         );
         assert_eq!(
             streamer
-                .add_forwarding_rule(remote_route, local_route)
+                .add_forwarding_rule(remote_route.clone(), local_route.clone())
                 .await,
             Ok(())
         );
+
+        // Add forwarding rules to route local<->local, should report an error
+        assert!(streamer
+            .add_forwarding_rule(local_route.clone(), local_route.clone())
+            .await
+            .is_err());
+        // Try and remove an invalid rule
+        assert!(streamer
+            .delete_forwarding_rule(remote_route.clone(), remote_route.clone())
+            .await
+            .is_err());
     }
 
     //     /**

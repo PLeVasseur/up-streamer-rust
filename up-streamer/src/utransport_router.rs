@@ -1,5 +1,6 @@
 use crate::utransport_builder::UTransportBuilder;
 use async_std::channel::{bounded, Receiver, Sender};
+use async_std::future::timeout;
 use async_std::task;
 use async_trait::async_trait;
 use futures::select;
@@ -9,6 +10,7 @@ use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 use up_rust::{UAuthority, UCode, UMessage, UStatus, UTransport, UUIDBuilder, UUri, UUID};
 
 fn uauthority_to_uuri(authority: UAuthority) -> UUri {
@@ -55,8 +57,16 @@ impl<T> PartialEq for SenderWrapper<T> {
 impl<T> Eq for SenderWrapper<T> {}
 
 pub enum UTransportRouterCommand {
-    Register(UAuthority, SenderWrapper<UMessage>),
-    Unregister(UAuthority, SenderWrapper<UMessage>),
+    Register(
+        UAuthority,
+        SenderWrapper<UMessage>,
+        Sender<Result<(), UStatus>>,
+    ),
+    Unregister(
+        UAuthority,
+        SenderWrapper<UMessage>,
+        Sender<Result<(), UStatus>>,
+    ),
 }
 
 pub(crate) struct UTransportChannels {
@@ -209,11 +219,22 @@ impl UTransportRouterInner {
 
     async fn handle_command(&self, command: UTransportRouterCommand) {
         match command {
-            UTransportRouterCommand::Register(in_authority, in_sender_wrapper) => {
+            UTransportRouterCommand::Register(in_authority, in_sender_wrapper, result_sender) => {
                 println!("{}: Register command", &self.name);
                 if self.message_sender == in_sender_wrapper {
-                    // bail in this case, we shouldn't be sending to ourselves
-                    // log an error
+                    let result_send_res = result_sender
+                        .send(Err(UStatus::fail_with_code(
+                            UCode::INVALID_ARGUMENT,
+                            "Cannot send message to self!",
+                        )))
+                        .await;
+                    if let Err(e) = result_send_res {
+                        println!(
+                            "{}: Unable to return result from handle_command: {:?}",
+                            &self.name, e
+                        );
+                    }
+                    return;
                 }
 
                 let mut listener_map = self.listener_map.lock().unwrap();
@@ -243,12 +264,31 @@ impl UTransportRouterInner {
                         listener_map.insert((in_authority, in_sender_wrapper), registration_string);
                     }
                 }
+
+                let result_send_res = result_sender.send(Ok(())).await;
+                if let Err(e) = result_send_res {
+                    println!(
+                        "{}: Unable to return result from handle_command: {:?}",
+                        &self.name, e
+                    );
+                }
             }
-            UTransportRouterCommand::Unregister(in_authority, in_sender_wrapper) => {
+            UTransportRouterCommand::Unregister(in_authority, in_sender_wrapper, result_sender) => {
                 println!("{}: Unregister command", &self.name);
                 if self.message_sender == in_sender_wrapper {
-                    // bail in this case, we shouldn't be sending to ourselves
-                    // log an error
+                    let result_send_res = result_sender
+                        .send(Err(UStatus::fail_with_code(
+                            UCode::INVALID_ARGUMENT,
+                            "Cannot send message to self!",
+                        )))
+                        .await;
+                    if let Err(e) = result_send_res {
+                        println!(
+                            "{}: Unable to return result from handle_command: {:?}",
+                            &self.name, e
+                        );
+                    }
+                    return;
                 }
 
                 let mut listener_map = self.listener_map.lock().unwrap();
@@ -258,6 +298,14 @@ impl UTransportRouterInner {
                     .is_none()
                 {
                     // log an error
+                }
+
+                let result_send_res = result_sender.send(Ok(())).await;
+                if let Err(e) = result_send_res {
+                    println!(
+                        "{}: Unable to return result from handle_command: {:?}",
+                        &self.name, e
+                    );
                 }
             }
         }
@@ -299,21 +347,50 @@ impl UTransportRouterHandle {
         in_sender_wrapper: SenderWrapper<UMessage>,
     ) -> Result<(), UStatus> {
         println!("{}: inside of register", &self.name);
+        let (tx_result, rx_result) = bounded(1);
         match self
             .command_sender
             .send(UTransportRouterCommand::Register(
                 in_authority,
                 in_sender_wrapper,
+                tx_result,
             ))
             .await
         {
-            Ok(_) => Ok(()),
+            Ok(_) => {}
             Err(e) => {
-                eprintln!("Failed to send register command: {:?}", e); // Log the error detail
-                Err(UStatus::fail_with_code(
+                eprintln!("Failed to send register command: {:?}", e);
+                return Err(UStatus::fail_with_code(
                     UCode::INTERNAL,
                     format!("{}: Unable to forward: {:?}", &self.name, e),
-                ))
+                ));
+            }
+        }
+
+        let timeout_duration = Duration::from_millis(1000); // Example: 5 seconds
+        match timeout(timeout_duration, rx_result.recv()).await {
+            Ok(result) => match result {
+                Ok(result) => match result {
+                    Ok(_) => return Ok(()),
+                    Err(e) => return Err(e),
+                },
+                Err(e) => {
+                    // The channel was closed before a message was received.
+                    return Err(UStatus::fail_with_code(
+                        UCode::INTERNAL,
+                        format!(
+                            "{}: Channel closed before receiving a response: {e:?}",
+                            &self.name
+                        ),
+                    ));
+                }
+            },
+            Err(_) => {
+                // Timeout occurred
+                return Err(UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("{}: Operation timed out", &self.name),
+                ));
             }
         }
     }
@@ -324,10 +401,12 @@ impl UTransportRouterHandle {
         in_sender_wrapper: SenderWrapper<UMessage>,
     ) -> Result<(), UStatus> {
         println!("{}: inside of unregister", &self.name);
+        let (tx_result, rx_result) = bounded(1);
         self.command_sender
             .send(UTransportRouterCommand::Unregister(
                 in_authority,
                 in_sender_wrapper,
+                tx_result,
             ))
             .await
             .map_err(|e| {
@@ -336,6 +415,32 @@ impl UTransportRouterHandle {
                     format!("{}: Unable to forward: {:?}", &self.name, e),
                 )
             })?;
-        Ok(())
+
+        let timeout_duration = Duration::from_millis(1000); // Example: 5 seconds
+        match timeout(timeout_duration, rx_result.recv()).await {
+            Ok(result) => match result {
+                Ok(result) => match result {
+                    Ok(_) => return Ok(()),
+                    Err(e) => return Err(e),
+                },
+                Err(e) => {
+                    // The channel was closed before a message was received.
+                    return Err(UStatus::fail_with_code(
+                        UCode::INTERNAL,
+                        format!(
+                            "{}: Channel closed before receiving a response: {e:?}",
+                            &self.name
+                        ),
+                    ));
+                }
+            },
+            Err(_) => {
+                // Timeout occurred
+                return Err(UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("{}: Operation timed out", &self.name),
+                ));
+            }
+        }
     }
 }
