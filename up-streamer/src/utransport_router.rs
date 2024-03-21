@@ -56,17 +56,16 @@ impl<T> PartialEq for SenderWrapper<T> {
 
 impl<T> Eq for SenderWrapper<T> {}
 
+pub(crate) struct RegisterUnregisterControl {
+    in_authority: UAuthority,
+    out_authority: UAuthority,
+    in_sender_wrapper: SenderWrapper<UMessage>,
+    result_sender: Sender<Result<(), UStatus>>,
+}
+
 pub enum UTransportRouterCommand {
-    Register(
-        UAuthority,
-        SenderWrapper<UMessage>,
-        Sender<Result<(), UStatus>>,
-    ),
-    Unregister(
-        UAuthority,
-        SenderWrapper<UMessage>,
-        Sender<Result<(), UStatus>>,
-    ),
+    Register(RegisterUnregisterControl),
+    Unregister(RegisterUnregisterControl),
 }
 
 pub(crate) struct UTransportChannels {
@@ -127,10 +126,17 @@ impl UTransportRouter {
     }
 }
 
+#[derive(Clone, Hash, PartialEq, Eq)]
+pub(crate) struct ListenerMapKey {
+    in_authority: UAuthority,
+    out_authority: UAuthority,
+    in_sender_wrapper: SenderWrapper<UMessage>,
+}
+
 struct UTransportRouterInner {
     name: Arc<String>,
     utransport: Box<dyn UTransport>,
-    listener_map: Arc<Mutex<HashMap<(UAuthority, SenderWrapper<UMessage>), String>>>,
+    listener_map: Arc<Mutex<HashMap<ListenerMapKey, String>>>,
     command_sender: Sender<UTransportRouterCommand>,
     command_receiver: Receiver<UTransportRouterCommand>,
     message_sender: SenderWrapper<UMessage>,
@@ -219,7 +225,14 @@ impl UTransportRouterInner {
 
     async fn handle_command(&self, command: UTransportRouterCommand) {
         match command {
-            UTransportRouterCommand::Register(in_authority, in_sender_wrapper, result_sender) => {
+            UTransportRouterCommand::Register(register_control) => {
+                let RegisterUnregisterControl {
+                    in_authority,
+                    out_authority,
+                    in_sender_wrapper,
+                    result_sender,
+                } = register_control;
+
                 println!("{}: Register command", &self.name);
                 if self.message_sender == in_sender_wrapper {
                     let result_send_res = result_sender
@@ -239,10 +252,13 @@ impl UTransportRouterInner {
 
                 let mut listener_map = self.listener_map.lock().unwrap();
 
-                if listener_map
-                    .get(&(in_authority.clone(), in_sender_wrapper.clone()))
-                    .is_some()
-                {
+                let lister_map_key = ListenerMapKey {
+                    in_authority: in_authority.clone(),
+                    out_authority: out_authority.clone(),
+                    in_sender_wrapper: in_sender_wrapper.clone(),
+                };
+
+                if listener_map.get(&lister_map_key.clone()).is_some() {
                     let result_send_res = result_sender
                         .send(Err(UStatus::fail_with_code(
                             UCode::ALREADY_EXISTS,
@@ -258,10 +274,7 @@ impl UTransportRouterInner {
                     return;
                 }
 
-                if listener_map
-                    .get(&(in_authority.clone(), in_sender_wrapper.clone()))
-                    .is_none()
-                {
+                if listener_map.get(&lister_map_key.clone()).is_none() {
                     let in_sender_wrapper_closure = in_sender_wrapper.clone();
                     let callback_closure: Box<
                         dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static,
@@ -280,7 +293,7 @@ impl UTransportRouterInner {
                         .register_listener(registration_uuri, callback_closure)
                         .await;
                     if let Ok(registration_string) = registration_result {
-                        listener_map.insert((in_authority, in_sender_wrapper), registration_string);
+                        listener_map.insert(lister_map_key, registration_string);
                     }
                 }
 
@@ -292,7 +305,14 @@ impl UTransportRouterInner {
                     );
                 }
             }
-            UTransportRouterCommand::Unregister(in_authority, in_sender_wrapper, result_sender) => {
+            UTransportRouterCommand::Unregister(unregister_control) => {
+                let RegisterUnregisterControl {
+                    in_authority,
+                    out_authority,
+                    in_sender_wrapper,
+                    result_sender,
+                } = unregister_control;
+
                 println!("{}: Unregister command", &self.name);
                 if self.message_sender == in_sender_wrapper {
                     let result_send_res = result_sender
@@ -312,10 +332,13 @@ impl UTransportRouterInner {
 
                 let mut listener_map = self.listener_map.lock().unwrap();
 
-                if listener_map
-                    .remove(&(in_authority.clone(), in_sender_wrapper.clone()))
-                    .is_none()
-                {
+                let lister_map_key = ListenerMapKey {
+                    in_authority: in_authority.clone(),
+                    out_authority: out_authority.clone(),
+                    in_sender_wrapper: in_sender_wrapper.clone(),
+                };
+
+                if listener_map.remove(&lister_map_key).is_none() {
                     let result_send_res = result_sender
                         .send(Err(UStatus::fail_with_code(
                             UCode::NOT_FOUND,
@@ -375,6 +398,7 @@ impl UTransportRouterHandle {
     pub async fn register(
         &self,
         in_authority: UAuthority,
+        out_authority: UAuthority,
         in_sender_wrapper: SenderWrapper<UMessage>,
     ) -> Result<(), UStatus> {
         println!("{}: inside of register", &self.name);
@@ -382,9 +406,12 @@ impl UTransportRouterHandle {
         match self
             .command_sender
             .send(UTransportRouterCommand::Register(
-                in_authority,
-                in_sender_wrapper,
-                tx_result,
+                RegisterUnregisterControl {
+                    in_authority,
+                    out_authority,
+                    in_sender_wrapper,
+                    result_sender: tx_result,
+                },
             ))
             .await
         {
@@ -429,15 +456,19 @@ impl UTransportRouterHandle {
     pub async fn unregister(
         &self,
         in_authority: UAuthority,
+        out_authority: UAuthority,
         in_sender_wrapper: SenderWrapper<UMessage>,
     ) -> Result<(), UStatus> {
         println!("{}: inside of unregister", &self.name);
         let (tx_result, rx_result) = bounded(1);
         self.command_sender
             .send(UTransportRouterCommand::Unregister(
-                in_authority,
-                in_sender_wrapper,
-                tx_result,
+                RegisterUnregisterControl {
+                    in_authority,
+                    out_authority,
+                    in_sender_wrapper,
+                    result_sender: tx_result,
+                },
             ))
             .await
             .map_err(|e| {
