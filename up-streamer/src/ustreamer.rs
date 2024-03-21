@@ -1,11 +1,9 @@
 use crate::route::Route;
-use crate::ustreamer::tests::{UTransportBuilderBar, UTransportBuilderFoo};
-use crate::utransport_router::UTransportRouter;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::sync::Arc;
-use up_rust::{Number, UAuthority, UStatus};
+use up_rust::UStatus;
 
+#[derive(Clone)]
 pub struct UStreamer;
 
 impl UStreamer {
@@ -47,42 +45,50 @@ impl UStreamer {
     }
 }
 
+#[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use crate::route::Route;
+    #[allow(unused_imports)]
     use crate::ustreamer::UStreamer;
+    #[allow(unused_imports)]
     use crate::utransport_builder::UTransportBuilder;
+    #[allow(unused_imports)]
     use crate::utransport_router::UTransportRouter;
-    use async_std::task;
+    #[allow(unused_imports)]
     use async_trait::async_trait;
+    #[allow(unused_imports)]
     use std::sync::Arc;
-    use std::thread;
-    use std::time::Duration;
+    #[allow(unused_imports)]
     use up_rust::{Number, UAuthority, UMessage, UStatus, UTransport, UUIDBuilder, UUri};
 
     pub struct UPClientFoo;
 
     #[async_trait]
     impl UTransport for UPClientFoo {
-        async fn send(&self, message: UMessage) -> Result<(), UStatus> {
+        async fn send(&self, _message: UMessage) -> Result<(), UStatus> {
             todo!()
         }
 
-        async fn receive(&self, topic: UUri) -> Result<UMessage, UStatus> {
+        async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
             todo!()
         }
 
         async fn register_listener(
             &self,
             topic: UUri,
-            listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
+            _listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
         ) -> Result<String, UStatus> {
-            println!("UPClientFoo: topic: {:?}", topic);
+            println!("UPClientFoo: registering topic: {:?}", topic);
             let uuid = UUIDBuilder::new().build();
             Ok(uuid.to_string())
         }
 
         async fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
-            todo!()
+            println!(
+                "UPClientFoo: unregistering topic: {topic:?} with listener string: {listener}"
+            );
+            Ok(())
         }
     }
 
@@ -109,26 +115,29 @@ mod tests {
 
     #[async_trait]
     impl UTransport for UPClientBar {
-        async fn send(&self, message: UMessage) -> Result<(), UStatus> {
+        async fn send(&self, _message: UMessage) -> Result<(), UStatus> {
             todo!()
         }
 
-        async fn receive(&self, topic: UUri) -> Result<UMessage, UStatus> {
+        async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
             todo!()
         }
 
         async fn register_listener(
             &self,
             topic: UUri,
-            listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
+            _listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
         ) -> Result<String, UStatus> {
-            println!("UPClientBar: topic: {:?}", topic);
+            println!("UPClientBar: registering topic: {:?}", topic);
             let uuid = UUIDBuilder::new().build();
             Ok(uuid.to_string())
         }
 
         async fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
-            todo!()
+            println!(
+                "UPClientFoo: unregistering topic: {topic:?} with listener string: {listener}"
+            );
+            Ok(())
         }
     }
 

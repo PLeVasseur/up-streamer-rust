@@ -2,7 +2,6 @@ use crate::utransport_builder::UTransportBuilder;
 use async_std::channel::{bounded, Receiver, Sender};
 use async_std::future::timeout;
 use async_std::task;
-use async_trait::async_trait;
 use futures::select;
 use futures::FutureExt;
 use std::collections::HashMap;
@@ -63,7 +62,7 @@ pub(crate) struct RegisterUnregisterControl {
     result_sender: Sender<Result<(), UStatus>>,
 }
 
-pub enum UTransportRouterCommand {
+pub(crate) enum UTransportRouterCommand {
     Register(RegisterUnregisterControl),
     Unregister(RegisterUnregisterControl),
 }
@@ -137,9 +136,13 @@ struct UTransportRouterInner {
     name: Arc<String>,
     utransport: Box<dyn UTransport>,
     listener_map: Arc<Mutex<HashMap<ListenerMapKey, String>>>,
+    #[allow(dead_code)] // allow us flexibility in the future
     command_sender: Sender<UTransportRouterCommand>,
+    #[allow(dead_code)] // allow us flexibility in the future
     command_receiver: Receiver<UTransportRouterCommand>,
+    #[allow(dead_code)] // allow us flexibility in the future
     message_sender: SenderWrapper<UMessage>,
+    #[allow(dead_code)] // allow us flexibility in the future
     message_receiver: Receiver<UMessage>,
 }
 
@@ -191,8 +194,8 @@ impl UTransportRouterInner {
 
     async fn launch(
         &self,
-        mut command_receiver: Receiver<UTransportRouterCommand>,
-        mut message_receiver: Receiver<UMessage>,
+        command_receiver: Receiver<UTransportRouterCommand>,
+        message_receiver: Receiver<UMessage>,
     ) {
         let mut command_fut = command_receiver.recv().fuse();
         let mut message_fut = message_receiver.recv().fuse();
@@ -274,6 +277,7 @@ impl UTransportRouterInner {
                     return;
                 }
 
+                let closure_name = self.name.clone();
                 if listener_map.get(&lister_map_key.clone()).is_none() {
                     let in_sender_wrapper_closure = in_sender_wrapper.clone();
                     let callback_closure: Box<
@@ -281,7 +285,7 @@ impl UTransportRouterInner {
                     > = Box::new(move |received: Result<UMessage, UStatus>| {
                         let in_sender_wrapper_closure = in_sender_wrapper_closure.clone();
                         task::spawn_local(forwarding_callback(
-                            // self.name.clone(),
+                            closure_name.clone(),
                             received,
                             in_sender_wrapper_closure.clone(),
                         ));
@@ -369,13 +373,16 @@ impl UTransportRouterInner {
         println!("{}: inside handle_message", &self.name);
         let send_result = self.utransport.send(message).await;
         if let Err(e) = send_result {
-            // log an error
+            println!(
+                "{}: unable to handle_message(), with error: {:?}",
+                &self.name, e
+            );
         }
     }
 }
 
 async fn forwarding_callback(
-    // name: String,
+    name: Arc<String>,
     received: Result<UMessage, UStatus>,
     in_sender_wrapper: SenderWrapper<UMessage>,
 ) {
@@ -383,7 +390,10 @@ async fn forwarding_callback(
     if let Ok(msg) = received {
         let forward_result = in_sender_wrapper.send(msg).await;
         if let Err(e) = forward_result {
-            // log error e here
+            println!(
+                "{}: unable to forwarding_callback(), with error: {:?}",
+                name, e
+            );
         }
     }
 }
@@ -395,7 +405,7 @@ pub struct UTransportRouterHandle {
 }
 
 impl UTransportRouterHandle {
-    pub async fn register(
+    pub(crate) async fn register(
         &self,
         in_authority: UAuthority,
         out_authority: UAuthority,
@@ -453,7 +463,7 @@ impl UTransportRouterHandle {
         }
     }
 
-    pub async fn unregister(
+    pub(crate) async fn unregister(
         &self,
         in_authority: UAuthority,
         out_authority: UAuthority,
