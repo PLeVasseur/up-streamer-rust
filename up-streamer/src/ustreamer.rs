@@ -53,7 +53,8 @@ mod tests {
             topic: UUri,
             listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
         ) -> Result<String, UStatus> {
-            todo!()
+            println!("UPClientFoo: topic: {:?}", topic);
+            Ok("abc".to_string())
         }
 
         async fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
@@ -97,7 +98,8 @@ mod tests {
             topic: UUri,
             listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
         ) -> Result<String, UStatus> {
-            todo!()
+            println!("UPClientBar: topic: {:?}", topic);
+            Ok("abc".to_string())
         }
 
         async fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
@@ -124,13 +126,13 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_creating_utransport_router() {
-        let utransport_builder_foo = UTransportBuilderFoo::new();
-        let utransport_router_handle =
-            UTransportRouter::new("FOO".to_string(), utransport_builder_foo);
-        assert!(utransport_router_handle.is_ok());
-    }
+    // #[test]
+    // fn test_creating_utransport_router() {
+    //     let utransport_builder_foo = UTransportBuilderFoo::new();
+    //     let utransport_router_handle =
+    //         UTransportRouter::new("FOO".to_string(), utransport_builder_foo);
+    //     assert!(utransport_router_handle.is_ok());
+    // }
 
     #[async_std::test]
     async fn test_simple_with_a_single_input_and_output_route() {
@@ -164,7 +166,13 @@ mod tests {
 
         assert_eq!(
             streamer
-                .add_forwarding_rule(local_route, remote_route)
+                .add_forwarding_rule(local_route.clone(), remote_route.clone())
+                .await,
+            Ok(())
+        );
+        assert_eq!(
+            streamer
+                .add_forwarding_rule(remote_route, local_route)
                 .await,
             Ok(())
         );

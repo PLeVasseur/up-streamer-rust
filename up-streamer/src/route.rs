@@ -2,6 +2,7 @@ use crate::utransport_router::UTransportRouterHandle;
 use std::sync::Arc;
 use up_rust::UAuthority;
 
+#[derive(Clone)]
 pub struct Route {
     authority: UAuthority,
     transport_router_handle: Arc<UTransportRouterHandle>,
