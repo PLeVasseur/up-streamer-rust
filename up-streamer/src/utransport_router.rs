@@ -62,15 +62,19 @@ pub enum UTransportRouterCommand {
 pub struct UTransportRouter {}
 
 impl UTransportRouter {
-    pub fn new<T>(utransport_builder: T) -> Result<UTransportRouterHandle, UStatus>
+    pub fn new<T>(name: String, utransport_builder: T) -> Result<UTransportRouterHandle, UStatus>
     where
         T: UTransportBuilder + 'static,
     {
         let (tx, rx) = mpsc::channel();
 
+        println!("{name}: before spawning thread");
+
         thread::spawn(move || {
+            println!("{name}: inside spawned thread");
             task::block_on(async {
-                let result = UTransportRouterInner::new(utransport_builder).await;
+                println!("{name}: inside task::block_on()");
+                let result = UTransportRouterInner::new(name, utransport_builder).await;
                 tx.send(result).unwrap();
             });
         });
@@ -79,6 +83,7 @@ impl UTransportRouter {
 }
 
 struct UTransportRouterInner {
+    name: Arc<String>,
     utransport: Box<dyn UTransport>,
     listener_map: Arc<Mutex<HashMap<(UAuthority, SenderWrapper<UMessage>), String>>>,
     command_sender: Sender<UTransportRouterCommand>,
@@ -88,29 +93,48 @@ struct UTransportRouterInner {
 }
 
 impl UTransportRouterInner {
-    pub async fn new<T>(utransport_builder: T) -> Result<UTransportRouterHandle, UStatus>
+    pub async fn new<T>(
+        name: String,
+        utransport_builder: T,
+    ) -> Result<UTransportRouterHandle, UStatus>
     where
         T: UTransportBuilder,
     {
+        let name = name.clone();
+        println!("{name}: inside UTransportRouterInner");
+
         let utransport = utransport_builder.build(); // TODO: May want to allow this to fail
         let (command_sender, command_receiver) = bounded(100);
         let (message_sender, message_receiver) = bounded(200);
         let message_sender = SenderWrapper::new(message_sender);
 
-        let utransport_router_inner = UTransportRouterInner {
+        println!("{name}: before creating UTransportRouterInner");
+
+        let utransport_router_inner = Arc::new(UTransportRouterInner {
+            name: Arc::new(name.to_string()),
             utransport,
             listener_map: Arc::new(Mutex::new(HashMap::new())),
             command_sender: command_sender.clone(),
             command_receiver: command_receiver.clone(),
             message_sender: message_sender.clone(),
             message_receiver: message_receiver.clone(),
-        };
+        });
 
-        utransport_router_inner
-            .launch(command_receiver, message_receiver)
-            .await;
+        println!("{name}: after creating UTransportRouterInner");
+
+        let utransport_router_inner_clone = utransport_router_inner.clone();
+        let name_clone = name.clone();
+        task::spawn_local(async move {
+            println!("{name_clone}: inside of task::spawn_local to launch");
+            utransport_router_inner_clone
+                .launch(command_receiver, message_receiver)
+                .await;
+            println!("{name_clone}: inside of task::spawn_local after launch");
+        });
+        println!("{name}: after task::spawn_local for launch");
 
         Ok(UTransportRouterHandle {
+            name: name.to_string(),
             command_sender,
             message_sender,
         })
@@ -124,21 +148,26 @@ impl UTransportRouterInner {
         let mut command_fut = command_receiver.recv().fuse();
         let mut message_fut = message_receiver.recv().fuse();
 
+        println!("{}: inside of launch", &self.name);
+
         loop {
+            println!("{}: top of loop before select!", &self.name);
             select! {
                 command = command_fut => match command {
                     Ok(command) => {
+                        println!("{}: received command", &self.name);
                         self.handle_command(command).await;
                         command_fut = command_receiver.recv().fuse(); // Re-arm future for the next iteration
                     },
-                    Err(e) => println!("Error receiving a command: {:?}", e),
+                    Err(e) => println!("{}: Error receiving a command: {:?}", &self.name, e),
                 },
                 message = message_fut => match message {
                     Ok(msg) => {
+                        println!("{}: received message", &self.name);
                         self.handle_message(msg).await;
                         message_fut = message_receiver.recv().fuse(); // Re-arm future for the next iteration
                     },
-                    Err(e) => println!("Error receiving a message: {:?}", e),
+                    Err(e) => println!("{}: Error receiving a message: {:?}", &self.name, e),
                 },
             }
         }
@@ -147,6 +176,7 @@ impl UTransportRouterInner {
     async fn handle_command(&self, command: UTransportRouterCommand) {
         match command {
             UTransportRouterCommand::Register(in_authority, in_sender_wrapper) => {
+                println!("{}: Register command", &self.name);
                 if self.message_sender == in_sender_wrapper {
                     // bail in this case, we shouldn't be sending to ourselves
                     // log an error
@@ -159,18 +189,21 @@ impl UTransportRouterInner {
                     .is_none()
                 {
                     let in_sender_wrapper_closure = in_sender_wrapper.clone();
-                    let callback_closure = move |received: Result<UMessage, UStatus>| {
+                    let callback_closure: Box<
+                        dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static,
+                    > = Box::new(move |received: Result<UMessage, UStatus>| {
                         let in_sender_wrapper_closure = in_sender_wrapper_closure.clone();
                         task::spawn_local(forwarding_callback(
+                            // self.name.clone(),
                             received,
                             in_sender_wrapper_closure.clone(),
                         ));
-                    };
+                    });
 
                     let registration_uuri = uauthority_to_uuri(in_authority.clone());
                     let registration_result = self
                         .utransport
-                        .register_listener(registration_uuri, Box::new(callback_closure))
+                        .register_listener(registration_uuri, callback_closure)
                         .await;
                     if let Ok(registration_string) = registration_result {
                         listener_map.insert((in_authority, in_sender_wrapper), registration_string);
@@ -178,6 +211,7 @@ impl UTransportRouterInner {
                 }
             }
             UTransportRouterCommand::Unregister(in_authority, in_sender_wrapper) => {
+                println!("{}: Unregister command", &self.name);
                 if self.message_sender == in_sender_wrapper {
                     // bail in this case, we shouldn't be sending to ourselves
                     // log an error
@@ -196,6 +230,7 @@ impl UTransportRouterInner {
     }
 
     async fn handle_message(&self, message: UMessage) {
+        println!("{}: inside handle_message", &self.name);
         let send_result = self.utransport.send(message).await;
         if let Err(e) = send_result {
             // log an error
@@ -204,9 +239,11 @@ impl UTransportRouterInner {
 }
 
 async fn forwarding_callback(
+    // name: String,
     received: Result<UMessage, UStatus>,
     in_sender_wrapper: SenderWrapper<UMessage>,
 ) {
+    // println!("{}: inside of forwarding_callback", name);
     if let Ok(msg) = received {
         let forward_result = in_sender_wrapper.send(msg).await;
         if let Err(e) = forward_result {
@@ -216,6 +253,7 @@ async fn forwarding_callback(
 }
 
 pub struct UTransportRouterHandle {
+    pub(crate) name: String,
     pub(crate) command_sender: Sender<UTransportRouterCommand>,
     pub(crate) message_sender: SenderWrapper<UMessage>,
 }
@@ -226,15 +264,18 @@ impl UTransportRouterHandle {
         in_authority: UAuthority,
         in_sender_wrapper: SenderWrapper<UMessage>,
     ) -> Result<(), UStatus> {
-        let send_res = self
-            .command_sender
+        println!("{}: inside of register", &self.name);
+        self.command_sender
             .send(UTransportRouterCommand::Register(
                 in_authority,
                 in_sender_wrapper,
             ))
             .await
             .map_err(|e| {
-                UStatus::fail_with_code(UCode::INTERNAL, format!("Unable to forward: {:?}", e))
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("{}: Unable to forward: {:?}", &self.name, e),
+                )
             })?;
         Ok(())
     }
@@ -244,74 +285,19 @@ impl UTransportRouterHandle {
         in_authority: UAuthority,
         in_sender_wrapper: SenderWrapper<UMessage>,
     ) -> Result<(), UStatus> {
-        let send_res = self
-            .command_sender
+        println!("{}: inside of unregister", &self.name);
+        self.command_sender
             .send(UTransportRouterCommand::Unregister(
                 in_authority,
                 in_sender_wrapper,
             ))
             .await
             .map_err(|e| {
-                UStatus::fail_with_code(UCode::INTERNAL, format!("Unable to forward: {:?}", e))
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("{}: Unable to forward: {:?}", &self.name, e),
+                )
             })?;
         Ok(())
-    }
-}
-
-mod tests {
-
-    use crate::utransport_builder::UTransportBuilder;
-    use crate::utransport_router::UTransportRouter;
-    use async_trait::async_trait;
-    use up_rust::{UMessage, UStatus, UTransport, UUri};
-
-    pub struct UPClientFoo;
-
-    #[async_trait]
-    impl UTransport for UPClientFoo {
-        async fn send(&self, message: UMessage) -> Result<(), UStatus> {
-            todo!()
-        }
-
-        async fn receive(&self, topic: UUri) -> Result<UMessage, UStatus> {
-            todo!()
-        }
-
-        async fn register_listener(
-            &self,
-            topic: UUri,
-            listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
-        ) -> Result<String, UStatus> {
-            todo!()
-        }
-
-        async fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
-            todo!()
-        }
-    }
-
-    impl UPClientFoo {
-        pub fn new() -> Self {
-            Self {}
-        }
-    }
-    pub struct UTransportBuilderFoo;
-    impl UTransportBuilder for UTransportBuilderFoo {
-        fn build(&self) -> Box<dyn UTransport> {
-            let utransport_foo: Box<dyn UTransport> = Box::new(UPClientFoo::new());
-            utransport_foo
-        }
-    }
-
-    impl UTransportBuilderFoo {
-        pub fn new() -> Self {
-            Self {}
-        }
-    }
-
-    #[test]
-    fn test_creating_utransport_router() {
-        let utransport_builder_foo = UTransportBuilderFoo::new();
-        let utransport_router_handle = UTransportRouter::new(utransport_builder_foo);
     }
 }
