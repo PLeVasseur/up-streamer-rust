@@ -1,4 +1,4 @@
-use up_rust::UTransport;
+use up_rust::{UStatus, UTransport};
 
 /// [`UTransportBuilder`] is required to allow us to carefully instantiate the `Box<dyn UTransport`
 /// on a separate OS thread since [`UTransport`][up_rust::UTransport] is not thread-safe
@@ -69,7 +69,7 @@ use up_rust::UTransport;
 ///
 /// use std::sync::Arc;
 /// use up_streamer::{Route, UTransportBuilder, UTransportRouter};
-/// use up_rust::{Number, UAuthority, UTransport};
+/// use up_rust::{Number, UAuthority, UStatus, UTransport};
 ///
 /// // -- implementing `UTransportBuilder` for `UPClientFoo` --
 /// pub struct UTransportBuilderFoo {
@@ -77,9 +77,9 @@ use up_rust::UTransport;
 /// }
 ///
 /// impl UTransportBuilder for UTransportBuilderFoo {
-///     fn build(&self) -> Box<dyn UTransport> {
+///     fn build(&self) -> Result<Box<dyn UTransport>, UStatus> {
 ///         let utransport_foo: Box<dyn UTransport> = Box::new(up_client_foo::UPClientFoo::new());
-///         utransport_foo
+///         Ok(utransport_foo)
 ///     }
 /// }
 ///
@@ -92,5 +92,5 @@ use up_rust::UTransport;
 /// }
 /// ```
 pub trait UTransportBuilder: Send + Sync {
-    fn build(&self) -> Box<dyn UTransport>;
+    fn build(&self) -> Result<Box<dyn UTransport>, UStatus>;
 }

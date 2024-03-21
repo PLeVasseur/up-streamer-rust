@@ -250,9 +250,9 @@ pub(crate) struct UTransportChannels {
 /// #     }
 /// #     pub struct UTransportBuilderFoo;
 /// #     impl UTransportBuilder for UTransportBuilderFoo {
-/// #         fn build(&self) -> Box<dyn UTransport> {
+/// #         fn build(&self) -> Result<Box<dyn UTransport>, UStatus> {
 /// #             let utransport_foo: Box<dyn UTransport> = Box::new(UPClientFoo::new());
-/// #             utransport_foo
+/// #             Ok(utransport_foo)
 /// #         }
 /// #     }
 /// #
@@ -384,38 +384,52 @@ impl UTransportRouterInner {
         let name = name.clone();
         println!("{name}: inside UTransportRouterInner");
 
+        let (tx, rx) = mpsc::channel::<Result<(), UStatus>>();
+
         // Move the clone into the async block.
         thread::spawn(move || {
-            let utransport = utransport_builder.build(); // TODO: May want to allow this to fail
+            let mut result = Ok(());
+            match utransport_builder.build() {
+                Ok(utransport) => {
+                    println!("{name}: before creating UTransportRouterInner");
+                    let utransport_router_inner = Rc::new(UTransportRouterInner {
+                        name: Arc::new(name.to_string()),
+                        utransport,
+                        listener_map: Arc::new(Mutex::new(HashMap::new())),
+                        command_sender: utransport_channels.command_sender.clone(),
+                        command_receiver: utransport_channels.command_receiver.clone(),
+                        message_sender: utransport_channels.message_sender.clone(),
+                        message_receiver: utransport_channels.message_receiver.clone(),
+                    });
 
-            println!("{name}: before creating UTransportRouterInner");
+                    println!("{name}: after creating UTransportRouterInner");
 
-            let utransport_router_inner = Rc::new(UTransportRouterInner {
-                name: Arc::new(name.to_string()),
-                utransport,
-                listener_map: Arc::new(Mutex::new(HashMap::new())),
-                command_sender: utransport_channels.command_sender.clone(),
-                command_receiver: utransport_channels.command_receiver.clone(),
-                message_sender: utransport_channels.message_sender.clone(),
-                message_receiver: utransport_channels.message_receiver.clone(),
-            });
-
-            println!("{name}: after creating UTransportRouterInner");
-
-            let utransport_router_inner_clone = utransport_router_inner.clone();
-            let name_clone = name.clone();
-            task::block_on(async move {
-                println!("{name_clone}: inside of task::spawn_local to launch");
-                utransport_router_inner_clone
-                    .launch(
-                        utransport_channels.command_receiver,
-                        utransport_channels.message_receiver,
-                    )
-                    .await;
-            });
+                    let utransport_router_inner_clone = utransport_router_inner.clone();
+                    let name_clone = name.clone();
+                    tx.send(result).unwrap();
+                    task::block_on(async move {
+                        println!("{name_clone}: inside of task::spawn_local to launch");
+                        utransport_router_inner_clone
+                            .launch(
+                                utransport_channels.command_receiver,
+                                utransport_channels.message_receiver,
+                            )
+                            .await;
+                    });
+                }
+                Err(status) => {
+                    result = Err(UStatus::fail_with_code(
+                        UCode::INTERNAL,
+                        format!(
+                            "{}: Failed to build Box<dyn UTransport> from UTransportBuilder: {status:?}",
+                            &name
+                        ),
+                    ));
+                    tx.send(result).unwrap();
+                }
+            }
         });
-
-        Ok(())
+        rx.recv().unwrap()
     }
 
     async fn launch(

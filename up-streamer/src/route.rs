@@ -54,9 +54,9 @@ use up_rust::UAuthority;
 /// #     }
 /// #     pub struct UTransportBuilderFoo;
 /// #     impl UTransportBuilder for UTransportBuilderFoo {
-/// #         fn build(&self) -> Box<dyn UTransport> {
+/// #         fn build(&self) -> Result<Box<dyn UTransport>, UStatus> {
 /// #             let utransport_foo: Box<dyn UTransport> = Box::new(UPClientFoo::new());
-/// #             utransport_foo
+/// #             Ok(utransport_foo)
 /// #         }
 /// #     }
 /// #

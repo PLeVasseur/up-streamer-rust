@@ -59,9 +59,9 @@ use up_rust::UStatus;
 /// #     }
 /// #     pub struct UTransportBuilderFoo;
 /// #     impl UTransportBuilder for UTransportBuilderFoo {
-/// #         fn build(&self) -> Box<dyn UTransport> {
+/// #         fn build(&self) -> Result<Box<dyn UTransport>, UStatus> {
 /// #             let utransport_foo: Box<dyn UTransport> = Box::new(UPClientFoo::new());
-/// #             utransport_foo
+/// #             Ok(utransport_foo)
 /// #         }
 /// #     }
 /// #
@@ -113,9 +113,9 @@ use up_rust::UStatus;
 /// #
 /// #     pub struct UTransportBuilderBar;
 /// #     impl UTransportBuilder for UTransportBuilderBar {
-/// #         fn build(&self) -> Box<dyn UTransport> {
+/// #         fn build(&self) -> Result<Box<dyn UTransport>, UStatus> {
 /// #             let utransport_foo: Box<dyn UTransport> = Box::new(UPClientBar::new());
-/// #             utransport_foo
+/// #             Ok(utransport_foo)
 /// #         }
 /// #     }
 /// #
@@ -299,6 +299,7 @@ mod tests {
     use async_trait::async_trait;
     #[allow(unused_imports)]
     use std::sync::Arc;
+    use up_rust::UCode;
     #[allow(unused_imports)]
     use up_rust::{Number, UAuthority, UMessage, UStatus, UTransport, UUIDBuilder, UUri};
 
@@ -337,17 +338,26 @@ mod tests {
             Self {}
         }
     }
-    pub struct UTransportBuilderFoo;
+    pub struct UTransportBuilderFoo {
+        succeed: bool,
+    }
     impl UTransportBuilder for UTransportBuilderFoo {
-        fn build(&self) -> Box<dyn UTransport> {
-            let utransport_foo: Box<dyn UTransport> = Box::new(UPClientFoo::new());
-            utransport_foo
+        fn build(&self) -> Result<Box<dyn UTransport>, UStatus> {
+            if self.succeed {
+                let utransport_foo: Box<dyn UTransport> = Box::new(UPClientFoo::new());
+                Ok(utransport_foo)
+            } else {
+                Err(UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    "Failed to build UPClientFoo",
+                ))
+            }
         }
     }
 
     impl UTransportBuilderFoo {
-        pub fn new() -> Self {
-            Self {}
+        pub fn new(succeed: bool) -> Self {
+            Self { succeed }
         }
     }
 
@@ -388,9 +398,9 @@ mod tests {
     }
     pub struct UTransportBuilderBar;
     impl UTransportBuilder for UTransportBuilderBar {
-        fn build(&self) -> Box<dyn UTransport> {
+        fn build(&self) -> Result<Box<dyn UTransport>, UStatus> {
             let utransport_foo: Box<dyn UTransport> = Box::new(UPClientBar::new());
-            utransport_foo
+            Ok(utransport_foo)
         }
     }
 
@@ -406,7 +416,7 @@ mod tests {
     async fn test_simple_with_a_single_input_and_output_route() {
         // Local transport router
         let local_transport_router =
-            UTransportRouter::start("FOO".to_string(), UTransportBuilderFoo::new(), 100, 200);
+            UTransportRouter::start("FOO".to_string(), UTransportBuilderFoo::new(true), 100, 200);
         assert!(local_transport_router.is_ok());
         let local_transport_router_handle = Arc::new(local_transport_router.unwrap());
 
@@ -492,7 +502,7 @@ mod tests {
     async fn test_advanced_where_there_is_a_local_route_and_two_remote_routes() {
         // Local transport router
         let local_transport_router =
-            UTransportRouter::start("FOO".to_string(), UTransportBuilderFoo::new(), 100, 200);
+            UTransportRouter::start("FOO".to_string(), UTransportBuilderFoo::new(true), 100, 200);
         assert!(local_transport_router.is_ok());
         let local_transport_router_handle = Arc::new(local_transport_router.unwrap());
 
@@ -570,7 +580,7 @@ mod tests {
     ) {
         // Local transport router
         let local_transport_router =
-            UTransportRouter::start("FOO".to_string(), UTransportBuilderFoo::new(), 100, 200);
+            UTransportRouter::start("FOO".to_string(), UTransportBuilderFoo::new(true), 100, 200);
         assert!(local_transport_router.is_ok());
         let local_transport_router_handle = Arc::new(local_transport_router.unwrap());
 
