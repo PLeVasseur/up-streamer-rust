@@ -215,6 +215,22 @@ use up_rust::UStatus;
 pub struct UStreamer;
 
 impl UStreamer {
+    /// Adds a forwarding rule to the [`UStreamer`] based on an in [`Route`][crate::Route] and an
+    /// out [`Route`][crate::Route]
+    ///
+    /// # Parameters
+    ///
+    /// * `in` - [`Route`][crate::Route] we will bridge _from_
+    /// * `out` - [`Route`][crate::Route] we will bridge _onto_
+    ///
+    /// # Errors
+    ///
+    /// If unable to add this forwarding rule, we return a [`UStatus`][up_rust::UStatus] noting
+    /// the error.
+    ///
+    /// Typical errors include
+    /// * already have this forwarding rule registered
+    /// * attempting to forward onto the same [`Route`][crate::Route]
     pub async fn add_forwarding_rule(&self, r#in: Route, out: Route) -> Result<(), UStatus> {
         println!("UStreamer::add_forwarding_rule()");
         let in_message_sender = &r#in.get_transport_router_handle().clone().message_sender;
@@ -241,6 +257,22 @@ impl UStreamer {
             .await
     }
 
+    /// Deletes a forwarding rule from the [`UStreamer`] based on an in [`Route`][crate::Route] and an
+    /// out [`Route`][crate::Route]
+    ///
+    /// # Parameters
+    ///
+    /// * `in` - [`Route`][crate::Route] we will bridge _from_
+    /// * `out` - [`Route`][crate::Route] we will bridge _onto_
+    ///
+    /// # Errors
+    ///
+    /// If unable to delete this forwarding rule, we return a [`UStatus`][up_rust::UStatus] noting
+    /// the error.
+    ///
+    /// Typical errors include
+    /// * No such route has been added
+    /// * attempting to delete a forwarding rule where we would forward onto the same [`Route`][crate::Route]
     pub async fn delete_forwarding_rule(&self, r#in: Route, out: Route) -> Result<(), UStatus> {
         let in_message_sender = &r#in.get_transport_router_handle().clone().message_sender;
         out.get_transport_router_handle()

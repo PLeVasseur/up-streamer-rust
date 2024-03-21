@@ -274,6 +274,8 @@ pub struct UTransportRouter {}
 impl UTransportRouter {
     /// Starts the [`UTransportRouter`]
     ///
+    /// # Parameters
+    ///
     /// * `name` - Used for debugging and trace statements to disambiguate which [`UTransportRouter`]
     ///            is logging.
     /// * `utransport_builder` - A struct which implements [`UTransportBuilder`][crate::UTransportBuilder]

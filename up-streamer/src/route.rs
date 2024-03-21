@@ -88,10 +88,15 @@ pub struct Route {
 }
 
 impl Route {
-    /// Builds a [`Route`] based on [`UAuthority`] and [`UTransportRouterHandle`]
+    /// Builds a [`Route`] based on [`UAuthority`][up_rust::UAuthority] and [`UTransportRouterHandle`]
     ///
-    /// You will obtain a [`UTransportRouterHandle`] by calling
-    /// [`UTransport::start()`][crate::UTransportRouter::start] with the appropriate arguments.
+    /// # Parameters
+    ///
+    /// * `authority` - The [`UAuthority`][up_rust::UAuthority] to associate with this [`Route`]
+    /// * `transport_router_handle` - a [`UTransportRouterHandle`][crate::UTransportRouterHandle]
+    ///                               obtained by calling
+    ///                               [`UTransport::start()`][crate::UTransportRouter::start]
+    ///                               with the appropriate arguments.
     ///
     /// For more information see the example under [`Route`]
     pub fn new(
