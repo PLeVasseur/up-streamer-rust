@@ -645,6 +645,21 @@ mod tests {
         );
     }
 
+    #[async_std::test]
+    async fn test_fails_to_build_utransport() {
+        // Local transport router
+        let local_transport_router = UTransportRouter::start(
+            "FOO".to_string(),
+            UTransportBuilderFoo::new(false),
+            100,
+            200,
+        );
+        if let Err(e) = &local_transport_router {
+            println!("local_transport_router failed: {e:?}");
+        }
+        assert!(local_transport_router.is_err());
+    }
+
     /*
     /// This is an example where we need to set up multiple routes to different destinations where one of the
     /// routes is the default route (ex. the cloud gateway)
