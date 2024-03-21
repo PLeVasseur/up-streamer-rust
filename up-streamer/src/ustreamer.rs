@@ -151,6 +151,8 @@ mod tests {
         }
     }
 
+    /// This is a simple test where we have a single input and output route.
+    /// We also test the add_forwarding_rule() and delete_forwarding_rule() methods.
     #[async_std::test]
     async fn test_simple_with_a_single_input_and_output_route() {
         // Local transport router
@@ -236,8 +238,87 @@ mod tests {
             .is_err());
     }
 
+    /// This is an example where we need to set up multiple routes to different destinations.
     #[async_std::test]
     async fn test_advanced_where_there_is_a_local_route_and_two_remote_routes() {
+        // Local transport router
+        let local_transport_router =
+            UTransportRouter::new("FOO".to_string(), UTransportBuilderFoo::new());
+        assert!(local_transport_router.is_ok());
+        let local_transport_router_handle = Arc::new(local_transport_router.unwrap());
+
+        // First remote transport router
+        let remote_transport_router_1 =
+            UTransportRouter::new("BAR".to_string(), UTransportBuilderBar::new());
+        assert!(remote_transport_router_1.is_ok());
+        let remote_transport_router_handle_1 = Arc::new(remote_transport_router_1.unwrap());
+
+        // Second remote transport router
+        let remote_transport_router_2 =
+            UTransportRouter::new("BAR".to_string(), UTransportBuilderBar::new());
+        assert!(remote_transport_router_2.is_ok());
+        let remote_transport_router_handle_2 = Arc::new(remote_transport_router_2.unwrap());
+
+        // Local route
+        let local_authority = UAuthority {
+            name: Some("local".to_string()),
+            number: Some(Number::Ip(vec![192, 168, 1, 100])),
+            ..Default::default()
+        };
+        let local_route = Route::new(&local_authority, &local_transport_router_handle);
+
+        // A first remote route
+        let remote_authority_1 = UAuthority {
+            name: Some("remote_1".to_string()),
+            number: Some(Number::Ip(vec![192, 168, 1, 200])),
+            ..Default::default()
+        };
+        let remote_route_1 = Route::new(&remote_authority_1, &remote_transport_router_handle_1);
+
+        // A second remote route
+        let remote_authority_2 = UAuthority {
+            name: Some("remote_2".to_string()),
+            number: Some(Number::Ip(vec![192, 168, 1, 201])),
+            ..Default::default()
+        };
+        let remote_route_2 = Route::new(&remote_authority_2, &remote_transport_router_handle_2);
+
+        let streamer = UStreamer;
+
+        // Add forwarding rules to route local_route<->remote_route_1
+        assert_eq!(
+            streamer
+                .add_forwarding_rule(local_route.clone(), remote_route_1.clone())
+                .await,
+            Ok(())
+        );
+        assert_eq!(
+            streamer
+                .add_forwarding_rule(remote_route_1.clone(), local_route.clone())
+                .await,
+            Ok(())
+        );
+
+        // Add forwarding rules to route local_route<->remote_route_2
+        assert_eq!(
+            streamer
+                .add_forwarding_rule(local_route.clone(), remote_route_2.clone())
+                .await,
+            Ok(())
+        );
+        assert_eq!(
+            streamer
+                .add_forwarding_rule(remote_route_2.clone(), local_route.clone())
+                .await,
+            Ok(())
+        );
+    }
+
+    /// This is an example where we need to set up multiple routes to different destinations but using the same
+    /// remote UTransport (i.e. connecting to multiple remote servers using the same UTransport instance).
+    #[async_std::test]
+    async fn test_advanced_where_there_is_an_local_route_and_two_remote_routes_but_the_remote_routes_have_the_same_instance_of_utransport(
+    ) {
         // Local transport router
         let local_transport_router =
             UTransportRouter::new("FOO".to_string(), UTransportBuilderFoo::new());
@@ -304,4 +385,12 @@ mod tests {
             Ok(())
         );
     }
+
+    /*
+    /// This is an example where we need to set up multiple routes to different destinations where one of the
+    /// routes is the default route (ex. the cloud gateway)
+    ///
+    /// TODO: Visit with Steven on this point
+    ///  We'd have to have another ability within register_listener to register on wildcard authority
+     */
 }
