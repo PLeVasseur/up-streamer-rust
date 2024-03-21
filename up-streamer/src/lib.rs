@@ -1,3 +1,8 @@
+//! # up-streamer
+//!
+//! `up-streamer` implements the `UStreamer` spec to allow bridging between different
+//! transports.
+
 mod route;
 mod ustreamer;
 mod utransport_builder;
