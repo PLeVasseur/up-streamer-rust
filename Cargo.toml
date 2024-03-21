@@ -28,19 +28,15 @@ keywords = ["uProtocol", "SDK"]
 license = "Apache-2.0"
 
 [workspace.dependencies]
-async-std = "1.12.0"
+async-std = { version = "1.12.0", features = ["unstable"] } # unstable feature needed for task::spawn_local()
 async-trait = "0.1"
-clap = "4.4.16"
 env_logger = "0.10.1"
 futures = "0.3.30"
 log = "0.4.20"
-lru = "0.12.1"
 prost = "0.12"
 prost-types = "0.12"
 serde_json = "1.0.111"
-strum = { version = "0.25", features = ["derive"] }
 uuid = "1.7.0"
-zenoh = { version = "0.10.1-rc", features = ["unstable"] }
 # pete version with hashable uuris
 up-rust = { git = "https://github.com/PLeVasseur/uprotocol-rust_fork", branch = "feature/hashable_uuris" }
 # upstream
