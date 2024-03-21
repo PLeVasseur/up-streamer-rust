@@ -1,5 +1,6 @@
 use crate::utransport_builder::UTransportBuilder;
 use async_std::channel::{bounded, Receiver, Sender};
+use async_std::sync::{Arc, Mutex};
 use async_std::future::timeout;
 use async_std::task;
 use futures::select;
@@ -7,7 +8,8 @@ use futures::FutureExt;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
-use std::sync::{mpsc, Arc, Mutex};
+use std::rc::Rc;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use up_rust::{UAuthority, UCode, UMessage, UStatus, UTransport, UUIDBuilder, UUri, UUID};
@@ -37,7 +39,7 @@ impl<T> Deref for SenderWrapper<T> {
     type Target = Sender<T>;
 
     fn deref(&self) -> &Self::Target {
-        &*self.sender
+        &self.sender
     }
 }
 
@@ -77,7 +79,7 @@ pub(crate) struct UTransportChannels {
 pub struct UTransportRouter {}
 
 impl UTransportRouter {
-    pub fn new<T>(name: String, utransport_builder: T) -> Result<UTransportRouterHandle, UStatus>
+    pub fn start<T>(name: String, utransport_builder: T) -> Result<UTransportRouterHandle, UStatus>
     where
         T: UTransportBuilder + 'static,
     {
@@ -101,7 +103,7 @@ impl UTransportRouter {
         let name_clone_clone = name_clone.clone();
         task::block_on(async move {
             println!("{name_clone_clone}: inside task::block_on()");
-            let result = UTransportRouterInner::new(
+            let result = UTransportRouterInner::start(
                 name_clone_clone.clone(),
                 utransport_builder,
                 utransport_channels,
@@ -147,7 +149,7 @@ struct UTransportRouterInner {
 }
 
 impl UTransportRouterInner {
-    pub async fn new<T>(
+    pub async fn start<T>(
         name: String,
         utransport_builder: T,
         utransport_channels: UTransportChannels,
@@ -164,7 +166,7 @@ impl UTransportRouterInner {
 
             println!("{name}: before creating UTransportRouterInner");
 
-            let utransport_router_inner = Arc::new(UTransportRouterInner {
+            let utransport_router_inner = Rc::new(UTransportRouterInner {
                 name: Arc::new(name.to_string()),
                 utransport,
                 listener_map: Arc::new(Mutex::new(HashMap::new())),
@@ -253,7 +255,7 @@ impl UTransportRouterInner {
                     return;
                 }
 
-                let mut listener_map = self.listener_map.lock().unwrap();
+                let mut listener_map = self.listener_map.lock().await;
 
                 let lister_map_key = ListenerMapKey {
                     in_authority: in_authority.clone(),
@@ -334,7 +336,7 @@ impl UTransportRouterInner {
                     return;
                 }
 
-                let mut listener_map = self.listener_map.lock().unwrap();
+                let mut listener_map = self.listener_map.lock().await;
 
                 let lister_map_key = ListenerMapKey {
                     in_authority: in_authority.clone(),
@@ -439,26 +441,26 @@ impl UTransportRouterHandle {
         match timeout(timeout_duration, rx_result.recv()).await {
             Ok(result) => match result {
                 Ok(result) => match result {
-                    Ok(_) => return Ok(()),
-                    Err(e) => return Err(e),
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e),
                 },
                 Err(e) => {
                     // The channel was closed before a message was received.
-                    return Err(UStatus::fail_with_code(
+                    Err(UStatus::fail_with_code(
                         UCode::INTERNAL,
                         format!(
                             "{}: Channel closed before receiving a response: {e:?}",
                             &self.name
                         ),
-                    ));
+                    ))
                 }
             },
             Err(_) => {
                 // Timeout occurred
-                return Err(UStatus::fail_with_code(
+                Err(UStatus::fail_with_code(
                     UCode::INTERNAL,
                     format!("{}: Operation timed out", &self.name),
-                ));
+                ))
             }
         }
     }
@@ -492,26 +494,26 @@ impl UTransportRouterHandle {
         match timeout(timeout_duration, rx_result.recv()).await {
             Ok(result) => match result {
                 Ok(result) => match result {
-                    Ok(_) => return Ok(()),
-                    Err(e) => return Err(e),
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e),
                 },
                 Err(e) => {
                     // The channel was closed before a message was received.
-                    return Err(UStatus::fail_with_code(
+                    Err(UStatus::fail_with_code(
                         UCode::INTERNAL,
                         format!(
                             "{}: Channel closed before receiving a response: {e:?}",
                             &self.name
                         ),
-                    ));
+                    ))
                 }
             },
             Err(_) => {
                 // Timeout occurred
-                return Err(UStatus::fail_with_code(
+                Err(UStatus::fail_with_code(
                     UCode::INTERNAL,
                     format!("{}: Operation timed out", &self.name),
-                ));
+                ))
             }
         }
     }

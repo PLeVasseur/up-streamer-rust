@@ -166,13 +166,13 @@ mod tests {
     async fn test_simple_with_a_single_input_and_output_route() {
         // Local transport router
         let local_transport_router =
-            UTransportRouter::new("FOO".to_string(), UTransportBuilderFoo::new());
+            UTransportRouter::start("FOO".to_string(), UTransportBuilderFoo::new());
         assert!(local_transport_router.is_ok());
         let local_transport_router_handle = Arc::new(local_transport_router.unwrap());
 
         // Remote transport router
         let remote_transport_router =
-            UTransportRouter::new("BAR".to_string(), UTransportBuilderBar::new());
+            UTransportRouter::start("BAR".to_string(), UTransportBuilderBar::new());
         assert!(remote_transport_router.is_ok());
         let remote_transport_router_handle = Arc::new(remote_transport_router.unwrap());
 
@@ -252,19 +252,19 @@ mod tests {
     async fn test_advanced_where_there_is_a_local_route_and_two_remote_routes() {
         // Local transport router
         let local_transport_router =
-            UTransportRouter::new("FOO".to_string(), UTransportBuilderFoo::new());
+            UTransportRouter::start("FOO".to_string(), UTransportBuilderFoo::new());
         assert!(local_transport_router.is_ok());
         let local_transport_router_handle = Arc::new(local_transport_router.unwrap());
 
         // First remote transport router
         let remote_transport_router_1 =
-            UTransportRouter::new("BAR".to_string(), UTransportBuilderBar::new());
+            UTransportRouter::start("BAR".to_string(), UTransportBuilderBar::new());
         assert!(remote_transport_router_1.is_ok());
         let remote_transport_router_handle_1 = Arc::new(remote_transport_router_1.unwrap());
 
         // Second remote transport router
         let remote_transport_router_2 =
-            UTransportRouter::new("BAR".to_string(), UTransportBuilderBar::new());
+            UTransportRouter::start("BAR".to_string(), UTransportBuilderBar::new());
         assert!(remote_transport_router_2.is_ok());
         let remote_transport_router_handle_2 = Arc::new(remote_transport_router_2.unwrap());
 
@@ -330,13 +330,13 @@ mod tests {
     ) {
         // Local transport router
         let local_transport_router =
-            UTransportRouter::new("FOO".to_string(), UTransportBuilderFoo::new());
+            UTransportRouter::start("FOO".to_string(), UTransportBuilderFoo::new());
         assert!(local_transport_router.is_ok());
         let local_transport_router_handle = Arc::new(local_transport_router.unwrap());
 
         // Remote transport router
         let remote_transport_router =
-            UTransportRouter::new("BAR".to_string(), UTransportBuilderBar::new());
+            UTransportRouter::start("BAR".to_string(), UTransportBuilderBar::new());
         assert!(remote_transport_router.is_ok());
         let remote_transport_router_handle = Arc::new(remote_transport_router.unwrap());
 
