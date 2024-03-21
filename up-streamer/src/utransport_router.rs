@@ -14,6 +14,9 @@ use std::thread;
 use std::time::Duration;
 use up_rust::{UAuthority, UCode, UMessage, UStatus, UTransport, UUIDBuilder, UUri, UUID};
 
+/// A [`UTransportRouterHandle`] which is returned from starting a [`UTransportRouter`]
+///
+/// Used to build a [`Route`][crate::Route]
 pub struct UTransportRouterHandle {
     pub(crate) name: String,
     pub(crate) command_sender: Sender<UTransportRouterCommand>,
@@ -195,9 +198,100 @@ pub(crate) struct UTransportChannels {
     message_receiver: Receiver<UMessage>,
 }
 
+/// A [`UTransportRouter`] manages a `up-client-foo-rust`'s [`UTransport`][up_rust::UTransport]
+/// implementation and returns a [`UTransportRouterHandle`] which is used by the [`UStreamer`][crate::UStreamer]
+/// to communicate commands to the [`UTransportRouter`] for adding or removing routing rules.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Arc;
+/// use up_streamer::{Route, UTransportBuilder, UTransportRouter};
+/// use up_rust::{Number, UAuthority};
+///
+/// # pub mod foo_transport_builder {
+/// #     use up_rust::{UMessage, UTransport, UStatus, UUIDBuilder, UUri};
+/// #     use async_trait::async_trait;
+/// #     use up_streamer::UTransportBuilder;
+/// #     pub struct UPClientFoo;
+/// #
+/// #     #[async_trait]
+/// #     impl UTransport for UPClientFoo {
+/// #         async fn send(&self, _message: UMessage) -> Result<(), UStatus> {
+/// #             todo!()
+/// #         }
+/// #
+/// #         async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
+/// #             todo!()
+/// #         }
+/// #
+/// #         async fn register_listener(
+/// #             &self,
+/// #             topic: UUri,
+/// #             _listener: Box<dyn Fn(Result<UMessage, UStatus>) + Send + Sync + 'static>,
+/// #         ) -> Result<String, UStatus> {
+/// #             println!("UPClientFoo: registering topic: {:?}", topic);
+/// #             let uuid = UUIDBuilder::new().build();
+/// #             Ok(uuid.to_string())
+/// #         }
+/// #
+/// #         async fn unregister_listener(&self, topic: UUri, listener: &str) -> Result<(), UStatus> {
+/// #             println!(
+/// #                 "UPClientFoo: unregistering topic: {topic:?} with listener string: {listener}"
+/// #             );
+/// #             Ok(())
+/// #         }
+/// #     }
+/// #
+/// #     impl UPClientFoo {
+/// #         pub fn new() -> Self {
+/// #             Self {}
+/// #         }
+/// #     }
+/// #     pub struct UTransportBuilderFoo;
+/// #     impl UTransportBuilder for UTransportBuilderFoo {
+/// #         fn build(&self) -> Box<dyn UTransport> {
+/// #             let utransport_foo: Box<dyn UTransport> = Box::new(UPClientFoo::new());
+/// #             utransport_foo
+/// #         }
+/// #     }
+/// #
+/// #     impl UTransportBuilderFoo {
+/// #         pub fn new() -> Self {
+/// #             Self {}
+/// #         }
+/// #     }
+/// #
+/// # }
+///
+/// let local_transport_router =
+///             UTransportRouter::start("FOO".to_string(), foo_transport_builder::UTransportBuilderFoo::new());
+///         assert!(local_transport_router.is_ok());
+///         let local_transport_router_handle = Arc::new(local_transport_router.unwrap());
+/// ```
 pub struct UTransportRouter {}
 
 impl UTransportRouter {
+    /// Starts the [`UTransportRouter`]
+    ///
+    /// * `name` - Used for debugging and trace statements to disambiguate which [`UTransportRouter`]
+    ///            is logging.
+    /// * `utransport_builder` - A struct which implements [`UTransportBuilder`][crate::UTransportBuilder]
+    ///
+    /// # Rationale
+    ///
+    /// We consume a struct which implements [`UTransportBuilder`][crate::UTransportBuilder] because
+    /// [`UTransport`][up_rust::UTransport] is not thread-safe, meaning that we need to carefully
+    /// manage on which thread we create the [`UTransport`][up_rust::UTransport]
+    ///
+    /// # Returns
+    ///
+    /// Returns a [`UTransportRouterHandle`] used internally by the [`UStreamer`][crate::UStreamer]
+    /// to communicate commands to the [`UTransportRouter`] for adding or removing routing rules.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`UStatus`][up_rust::UStatus] if unsuccessful indicating the error which occurred.
     pub fn start<T>(name: String, utransport_builder: T) -> Result<UTransportRouterHandle, UStatus>
     where
         T: UTransportBuilder + 'static,
