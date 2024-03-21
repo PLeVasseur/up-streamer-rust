@@ -12,8 +12,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "example-utils/example-proto",
     "up-streamer",
+    # "example-utils/example-proto",
     # "ustreamer-example",
     # "ustreamer-previous-1",
     # "ustreamer-previous-2",

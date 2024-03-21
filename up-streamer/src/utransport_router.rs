@@ -1,7 +1,7 @@
 use crate::utransport_builder::UTransportBuilder;
 use async_std::channel::{bounded, Receiver, Sender};
-use async_std::sync::{Arc, Mutex};
 use async_std::future::timeout;
+use async_std::sync::{Arc, Mutex};
 use async_std::task;
 use futures::select;
 use futures::FutureExt;
@@ -13,6 +13,125 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use up_rust::{UAuthority, UCode, UMessage, UStatus, UTransport, UUIDBuilder, UUri, UUID};
+
+pub struct UTransportRouterHandle {
+    pub(crate) name: String,
+    pub(crate) command_sender: Sender<UTransportRouterCommand>,
+    pub(crate) message_sender: SenderWrapper<UMessage>,
+}
+
+impl UTransportRouterHandle {
+    pub(crate) async fn register(
+        &self,
+        in_authority: UAuthority,
+        out_authority: UAuthority,
+        in_sender_wrapper: SenderWrapper<UMessage>,
+    ) -> Result<(), UStatus> {
+        println!("{}: inside of register", &self.name);
+        let (tx_result, rx_result) = bounded(1);
+        match self
+            .command_sender
+            .send(UTransportRouterCommand::Register(
+                RegisterUnregisterControl {
+                    in_authority,
+                    out_authority,
+                    in_sender_wrapper,
+                    result_sender: tx_result,
+                },
+            ))
+            .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                eprintln!("Failed to send register command: {:?}", e);
+                return Err(UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("{}: Unable to forward: {:?}", &self.name, e),
+                ));
+            }
+        }
+
+        let timeout_duration = Duration::from_millis(1000); // Example: 5 seconds
+        match timeout(timeout_duration, rx_result.recv()).await {
+            Ok(result) => match result {
+                Ok(result) => match result {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e),
+                },
+                Err(e) => {
+                    // The channel was closed before a message was received.
+                    Err(UStatus::fail_with_code(
+                        UCode::INTERNAL,
+                        format!(
+                            "{}: Channel closed before receiving a response: {e:?}",
+                            &self.name
+                        ),
+                    ))
+                }
+            },
+            Err(_) => {
+                // Timeout occurred
+                Err(UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("{}: Operation timed out", &self.name),
+                ))
+            }
+        }
+    }
+
+    pub(crate) async fn unregister(
+        &self,
+        in_authority: UAuthority,
+        out_authority: UAuthority,
+        in_sender_wrapper: SenderWrapper<UMessage>,
+    ) -> Result<(), UStatus> {
+        println!("{}: inside of unregister", &self.name);
+        let (tx_result, rx_result) = bounded(1);
+        self.command_sender
+            .send(UTransportRouterCommand::Unregister(
+                RegisterUnregisterControl {
+                    in_authority,
+                    out_authority,
+                    in_sender_wrapper,
+                    result_sender: tx_result,
+                },
+            ))
+            .await
+            .map_err(|e| {
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("{}: Unable to forward: {:?}", &self.name, e),
+                )
+            })?;
+
+        let timeout_duration = Duration::from_millis(1000); // Example: 5 seconds
+        match timeout(timeout_duration, rx_result.recv()).await {
+            Ok(result) => match result {
+                Ok(result) => match result {
+                    Ok(_) => Ok(()),
+                    Err(e) => Err(e),
+                },
+                Err(e) => {
+                    // The channel was closed before a message was received.
+                    Err(UStatus::fail_with_code(
+                        UCode::INTERNAL,
+                        format!(
+                            "{}: Channel closed before receiving a response: {e:?}",
+                            &self.name
+                        ),
+                    ))
+                }
+            },
+            Err(_) => {
+                // Timeout occurred
+                Err(UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("{}: Operation timed out", &self.name),
+                ))
+            }
+        }
+    }
+}
 
 fn uauthority_to_uuri(authority: UAuthority) -> UUri {
     UUri {
@@ -396,125 +515,6 @@ async fn forwarding_callback(
                 "{}: unable to forwarding_callback(), with error: {:?}",
                 name, e
             );
-        }
-    }
-}
-
-pub struct UTransportRouterHandle {
-    pub(crate) name: String,
-    pub(crate) command_sender: Sender<UTransportRouterCommand>,
-    pub(crate) message_sender: SenderWrapper<UMessage>,
-}
-
-impl UTransportRouterHandle {
-    pub(crate) async fn register(
-        &self,
-        in_authority: UAuthority,
-        out_authority: UAuthority,
-        in_sender_wrapper: SenderWrapper<UMessage>,
-    ) -> Result<(), UStatus> {
-        println!("{}: inside of register", &self.name);
-        let (tx_result, rx_result) = bounded(1);
-        match self
-            .command_sender
-            .send(UTransportRouterCommand::Register(
-                RegisterUnregisterControl {
-                    in_authority,
-                    out_authority,
-                    in_sender_wrapper,
-                    result_sender: tx_result,
-                },
-            ))
-            .await
-        {
-            Ok(_) => {}
-            Err(e) => {
-                eprintln!("Failed to send register command: {:?}", e);
-                return Err(UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("{}: Unable to forward: {:?}", &self.name, e),
-                ));
-            }
-        }
-
-        let timeout_duration = Duration::from_millis(1000); // Example: 5 seconds
-        match timeout(timeout_duration, rx_result.recv()).await {
-            Ok(result) => match result {
-                Ok(result) => match result {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e),
-                },
-                Err(e) => {
-                    // The channel was closed before a message was received.
-                    Err(UStatus::fail_with_code(
-                        UCode::INTERNAL,
-                        format!(
-                            "{}: Channel closed before receiving a response: {e:?}",
-                            &self.name
-                        ),
-                    ))
-                }
-            },
-            Err(_) => {
-                // Timeout occurred
-                Err(UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("{}: Operation timed out", &self.name),
-                ))
-            }
-        }
-    }
-
-    pub(crate) async fn unregister(
-        &self,
-        in_authority: UAuthority,
-        out_authority: UAuthority,
-        in_sender_wrapper: SenderWrapper<UMessage>,
-    ) -> Result<(), UStatus> {
-        println!("{}: inside of unregister", &self.name);
-        let (tx_result, rx_result) = bounded(1);
-        self.command_sender
-            .send(UTransportRouterCommand::Unregister(
-                RegisterUnregisterControl {
-                    in_authority,
-                    out_authority,
-                    in_sender_wrapper,
-                    result_sender: tx_result,
-                },
-            ))
-            .await
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("{}: Unable to forward: {:?}", &self.name, e),
-                )
-            })?;
-
-        let timeout_duration = Duration::from_millis(1000); // Example: 5 seconds
-        match timeout(timeout_duration, rx_result.recv()).await {
-            Ok(result) => match result {
-                Ok(result) => match result {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e),
-                },
-                Err(e) => {
-                    // The channel was closed before a message was received.
-                    Err(UStatus::fail_with_code(
-                        UCode::INTERNAL,
-                        format!(
-                            "{}: Channel closed before receiving a response: {e:?}",
-                            &self.name
-                        ),
-                    ))
-                }
-            },
-            Err(_) => {
-                // Timeout occurred
-                Err(UStatus::fail_with_code(
-                    UCode::INTERNAL,
-                    format!("{}: Operation timed out", &self.name),
-                ))
-            }
         }
     }
 }
