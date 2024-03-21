@@ -241,6 +241,25 @@ impl UTransportRouterInner {
 
                 if listener_map
                     .get(&(in_authority.clone(), in_sender_wrapper.clone()))
+                    .is_some()
+                {
+                    let result_send_res = result_sender
+                        .send(Err(UStatus::fail_with_code(
+                            UCode::ALREADY_EXISTS,
+                            "Already registered!",
+                        )))
+                        .await;
+                    if let Err(e) = result_send_res {
+                        println!(
+                            "{}: Unable to return result from handle_command: {:?}",
+                            &self.name, e
+                        );
+                    }
+                    return;
+                }
+
+                if listener_map
+                    .get(&(in_authority.clone(), in_sender_wrapper.clone()))
                     .is_none()
                 {
                     let in_sender_wrapper_closure = in_sender_wrapper.clone();
@@ -297,7 +316,19 @@ impl UTransportRouterInner {
                     .remove(&(in_authority.clone(), in_sender_wrapper.clone()))
                     .is_none()
                 {
-                    // log an error
+                    let result_send_res = result_sender
+                        .send(Err(UStatus::fail_with_code(
+                            UCode::NOT_FOUND,
+                            "Cannot find this one to remove!",
+                        )))
+                        .await;
+                    if let Err(e) = result_send_res {
+                        println!(
+                            "{}: Unable to return result from handle_command: {:?}",
+                            &self.name, e
+                        );
+                    }
+                    return;
                 }
 
                 let result_send_res = result_sender.send(Ok(())).await;
