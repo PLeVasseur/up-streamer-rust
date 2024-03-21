@@ -28,7 +28,7 @@ keywords = ["uProtocol", "SDK"]
 license = "Apache-2.0"
 
 [workspace.dependencies]
-async-std = { version = "1.12.0", features = ["unstable"] } # unstable feature needed for task::spawn_local()
+async-std = { version = "1.12.0", features = ["unstable", "attributes"] } # unstable feature needed for task::spawn_local()
 async-trait = "0.1"
 env_logger = "0.10.1"
 futures = "0.3.30"
