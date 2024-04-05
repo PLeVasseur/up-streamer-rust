@@ -40,6 +40,7 @@ type RegisteredForwardingRules = Arc<
         >,
     >,
 >;
+type TransportForwarderCount = Arc<Mutex<HashMap<ComparableTransport, usize>>>;
 type TransportForwarderMap =
     Arc<Mutex<HashMap<ComparableTransport, (TransportForwarder, Sender<Arc<UMessage>>)>>>;
 
@@ -224,6 +225,7 @@ pub struct UStreamer {
     name: String,
     registered_forwarding_rules: RegisteredForwardingRules,
     transport_forwarders: TransportForwarderMap,
+    transport_forwarder_count: TransportForwarderCount,
     message_queue_size: usize,
 }
 
@@ -250,6 +252,7 @@ impl UStreamer {
             name: name.to_string(),
             registered_forwarding_rules: Arc::new(Mutex::new(HashMap::new())),
             transport_forwarders: Arc::new(Mutex::new(HashMap::new())),
+            transport_forwarder_count: Arc::new(Mutex::new(HashMap::new())),
             message_queue_size,
         }
     }
@@ -356,6 +359,15 @@ impl UStreamer {
             );
             err
         } else {
+            // we keep track of how many entries are using this TransportForwarder so we can
+            // remove it later
+            {
+                let mut transport_forwarder_count = self.transport_forwarder_count.lock().await;
+                let count = transport_forwarder_count
+                    .entry(in_comparable_transport.clone())
+                    .or_insert(0);
+                *count += 1;
+            }
             let registration_result = r#in
                 .transport
                 .lock()
@@ -425,9 +437,33 @@ impl UStreamer {
             in_comparable_transport.clone(),
             out_comparable_transport.clone(),
         )) {
-            // TODO: We should keep track of how many are using the a given TransportForwarder
-            //  and when that number hits zero, then also remove that TransportForwarder from the
-            //  container
+            // check if all users of this TransportForwarder have been unregistered and if so
+            // remove it
+            {
+                let mut transport_forwarder_count = self.transport_forwarder_count.lock().await;
+                let count = transport_forwarder_count
+                    .entry(in_comparable_transport.clone())
+                    .or_insert(0);
+                *count -= 1;
+
+                if *count == 0 {
+                    let mut transport_forwarders = self.transport_forwarders.lock().await;
+
+                    if let Some(_exists) =
+                        transport_forwarders.remove(&out_comparable_transport.clone())
+                    {
+                        debug!(
+                            "{}:{}:{} Removing TransportForwarder succeeded",
+                            self.name, USTREAMER_TAG, USTREAMER_FN_DELETE_FORWARDING_RULE_TAG,
+                        );
+                    } else {
+                        debug!(
+                            "{}:{}:{} Removing TransportForwarder failed. Not found.",
+                            self.name, USTREAMER_TAG, USTREAMER_FN_DELETE_FORWARDING_RULE_TAG,
+                        );
+                    }
+                }
+            }
 
             let unregister_res = r#in
                 .transport
