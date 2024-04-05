@@ -11,7 +11,6 @@ Implementation of the uProtocol's uStreamer specification in Rust.
 
 ```mermaid
 sequenceDiagram 
-sequenceDiagram 
     participant main thread
     participant ForwardingListener - Task Pool - Foo
     participant ForwardingListener - Task Pool - Bar
