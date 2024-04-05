@@ -11,9 +11,12 @@ Implementation of the uProtocol's uStreamer specification in Rust.
 
 ```mermaid
 sequenceDiagram 
+sequenceDiagram 
     participant main thread
-    participant UPClientFoo thread / task
-    participant UPClientBar thread / task
+    participant ForwardingListener - Task Pool - Foo
+    participant ForwardingListener - Task Pool - Bar
+    participant UPClientFoo owned thread / task
+    participant UPClientBar owned thread / task
 
     main thread->>main thread: let utransport_foo: Arc<Mutex<Box<dyn UTransport>>> = Arc::new(Mutex::new(Box::new(UPClientFoo::new())))
     main thread->>main thread: let local_authority = ...
@@ -24,30 +27,43 @@ sequenceDiagram
     main thread->>main thread: let remote_route = Route::new(remote_authority.clone(), utransport_bar.clone())
   
     main thread->>main thread: let ustreamer = UStreamer::new()
+
     main thread->>main thread: ustreamer.add_forwarding_rule(local_route, remote_route)
-    main thread->>UPClientFoo thread / task: (within ustreamer.add_forwarding_rule()) <br> local_route.transport.lock().await.register_listener <br> (uauthority_to_uuri(remote_route.authority), forwarding_listener).await
-    activate UPClientFoo thread / task
+    main thread->>ForwardingListener - Task Pool - Foo: launch ForwardingListener - Task Pool - Foo
+    activate ForwardingListener - Task Pool - Foo
+    main thread->>UPClientFoo owned thread / task: (within ustreamer.add_forwarding_rule()) <br> local_route.transport.lock().await.register_listener <br> (uauthority_to_uuri(remote_route.authority), forwarding_listener).await
+    activate UPClientFoo owned thread / task
 
     main thread->>main thread: ustreamer.add_forwarding_rule(remote_route, local_route)
-    main thread->>UPClientBar thread / task: (within ustreamer.add_forwarding_rule()) <br> remote_route.transport.lock().await.register_listener <br> (uauthority_to_uuri(local_route.authority), forwarding_listener).await
-    activate UPClientBar thread / task
+    main thread->>ForwardingListener - Task Pool - Bar: launch ForwardingListener - Task Pool - Bar
+    activate ForwardingListener - Task Pool - Bar
+    main thread->>UPClientBar owned thread / task: (within ustreamer.add_forwarding_rule()) <br> remote_route.transport.lock().await.register_listener <br> (uauthority_to_uuri(local_route.authority), forwarding_listener).await
+    activate UPClientBar owned thread / task
 
-    par UPClientFoo thread / task pings forwarding listener
+    loop Park the main thread, let background tasks run until closing UStreamer app
 
-        UPClientFoo thread / task->>UPClientFoo thread / task: forwarding_listener.on_receive(UMessage)
-        UPClientFoo thread / task->>UPClientFoo thread / task: out_transport.send(UMessage) <br> (out_transport => utransport_bar in this case)
+        par UPClientFoo thread / task calls ForwardingListener.on_receive()
+
+            UPClientFoo owned thread / task->>UPClientFoo owned thread / task: forwarding_listener.on_receive(UMessage)
+            UPClientFoo owned thread / task-->>ForwardingListener - Task Pool - Foo: Send UMesssage over channel
+            ForwardingListener - Task Pool - Foo->>ForwardingListener - Task Pool - Foo: out_transport.send(UMessage) <br> (out_transport => utransport_bar in this case)
+
+        end
+
+        par UPClientBar thread / task calls ForwardingListener.on_receive()
+
+            UPClientBar owned thread / task->>UPClientBar owned thread / task: forwarding_listener.on_receive(UMessage)
+            UPClientBar owned thread / task-->>ForwardingListener - Task Pool - Bar: Send UMesssage over channel
+            ForwardingListener - Task Pool - Bar->>ForwardingListener - Task Pool - Bar: out_transport.send(UMessage) <br> (out_transport => utransport_foo in this case)
+
+        end
+
+        deactivate UPClientFoo owned thread / task
+        deactivate UPClientBar owned thread / task
+        deactivate ForwardingListener - Task Pool - Foo
+        deactivate ForwardingListener - Task Pool - Bar
 
     end
-
-    par UPClientBar thread / task pings forwarding listener
-
-        UPClientBar thread / task->>UPClientBar thread / task: forwarding_listener.on_receive(UMessage)
-        UPClientBar thread / task->>UPClientBar thread / task: out_transport.send(UMessage) <br> (out_transport => utransport_foo in this case)
-
-    end
-
-    deactivate UPClientFoo thread / task
-    deactivate UPClientBar thread / task
 ```
 
 ### Generating cargo docs locally
