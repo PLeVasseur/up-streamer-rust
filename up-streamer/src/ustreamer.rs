@@ -27,7 +27,7 @@ const USTREAMER_FN_NEW_TAG: &str = "new():";
 const USTREAMER_FN_ADD_FORWARDING_RULE_TAG: &str = "add_forwarding_rule():";
 const USTREAMER_FN_DELETE_FORWARDING_RULE_TAG: &str = "delete_forwarding_rule():";
 
-type RegisteredForwardingRules = Arc<
+type ForwardingRules = Arc<
     Mutex<
         HashMap<
             (
@@ -41,7 +41,7 @@ type RegisteredForwardingRules = Arc<
     >,
 >;
 type TransportForwarderCount = Arc<Mutex<HashMap<ComparableTransport, usize>>>;
-type TransportForwarderMap =
+type TransportForwarders =
     Arc<Mutex<HashMap<ComparableTransport, (TransportForwarder, Sender<Arc<UMessage>>)>>>;
 
 /// A [`UStreamer`] is used to coordinate the addition and deletion of forwarding rules between
@@ -223,8 +223,8 @@ type TransportForwarderMap =
 pub struct UStreamer {
     #[allow(dead_code)]
     name: String,
-    registered_forwarding_rules: RegisteredForwardingRules,
-    transport_forwarders: TransportForwarderMap,
+    registered_forwarding_rules: ForwardingRules,
+    transport_forwarders: TransportForwarders,
     transport_forwarder_count: TransportForwarderCount,
     message_queue_size: usize,
 }
