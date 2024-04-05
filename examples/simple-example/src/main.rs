@@ -18,7 +18,7 @@ use async_std::task;
 use async_trait::async_trait;
 use example_up_client_foo::UPClientFoo;
 use log::{debug, error};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -32,13 +32,11 @@ use up_rust::{
 };
 use up_streamer::{Route, UStreamer};
 
-static FINISH_CLIENTS: AtomicBool = AtomicBool::new(false);
-
 #[async_std::main]
 async fn main() {
     // using async_broadcast to simulate communication protocol
-    let (tx_1, rx_1) = broadcast(8000);
-    let (tx_2, rx_2) = broadcast(8000);
+    let (tx_1, rx_1) = broadcast(10000);
+    let (tx_2, rx_2) = broadcast(10000);
 
     let utransport_foo: Arc<Mutex<Box<dyn UTransport>>> = Arc::new(Mutex::new(Box::new(
         UPClientFoo::new("upclient_foo", rx_1.clone(), tx_1.clone()).await,
@@ -48,7 +46,7 @@ async fn main() {
     )));
 
     // setting up streamer to bridge between "foo" and "bar"
-    let ustreamer = UStreamer::new("foo_bar_streamer", 100, 2);
+    let ustreamer = UStreamer::new("foo_bar_streamer", 1000, 4);
 
     // setting up routes between authorities and protocols
     let local_route = Route::new("local_route", local_authority(), utransport_foo.clone());
@@ -111,6 +109,8 @@ async fn main() {
 
     println!("recv_1: {recv_1}");
     println!("recv_2: {recv_2}");
+
+    println!("total messages: {}", recv_1 + recv_2);
 
     debug!("All clients finished.");
 }
@@ -324,12 +324,12 @@ pub async fn run_client(
             let start = Instant::now();
 
             loop {
-                println!("top of loop");
+                debug!("top of loop");
 
                 let current = Instant::now();
                 let ellapsed = current - start;
 
-                println!("ellapsed: {}", ellapsed.as_millis());
+                debug!("ellapsed: {}", ellapsed.as_millis());
 
                 if ellapsed.as_millis() > 1000 {
                     let times: u64 = client.times_received.load(Ordering::Relaxed);
