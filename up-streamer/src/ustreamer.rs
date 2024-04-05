@@ -429,6 +429,7 @@ impl ForwardingListener {
             let out_transport = out_transport.clone();
             let forwarding_id_clone = forwarding_id.to_string();
 
+            // TODO: Need to update to have only a single async task here
             task::spawn(async move {
                 while let Ok(msg) = receiver.recv().await {
                     let Some(attr) = msg.attributes.as_ref() else {
