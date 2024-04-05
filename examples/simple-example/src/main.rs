@@ -46,7 +46,7 @@ async fn main() {
     )));
 
     // setting up streamer to bridge between "foo" and "bar"
-    let ustreamer = UStreamer::new("foo_bar_streamer", 1000, 1);
+    let ustreamer = UStreamer::new("foo_bar_streamer", 1000);
 
     // setting up routes between authorities and protocols
     let local_route = Route::new("local_route", local_authority(), utransport_foo.clone());
