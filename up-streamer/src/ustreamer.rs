@@ -212,6 +212,16 @@ pub struct UStreamer {
 }
 
 impl UStreamer {
+    /// Creates a new UStreamer which can be used to add forwarding rules.
+    ///
+    /// # Parameters
+    ///
+    /// * name - Used to uniquely identify this UStreamer in logs
+    /// * message_queue_size - Determines size of channel used to communicate between `ForwardingListener`
+    ///                        and the pool of worker tasks for each one upon each `add_forwarding_rule()`
+    ///                        call
+    /// * worker_pool_size - Determines size of pool of worker tasks for each `ForwardingListener`
+    ///                      created per `add_forwarding_rule()`
     pub fn new(name: &str, message_queue_size: usize, worker_pool_size: usize) -> Self {
         let name = format!("{USTREAMER_TAG}:{name}:");
         // Try to initiate logging.
