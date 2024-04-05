@@ -98,11 +98,7 @@ async fn main() {
     )
     .await;
 
-    debug!("waiting for a bit to let clients run");
-
-    task::sleep(Duration::from_millis(1000)).await;
-
-    debug!("Finished!");
+    debug!("waiting for a to let clients finish");
 
     let recv_1 = handle_1.join().expect("Unable to join on handle_1");
     let recv_2 = handle_2.join().expect("Unable to join on handle_2");
