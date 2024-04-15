@@ -16,13 +16,10 @@ members = [
 ]
 
 [workspace.package]
-rust-version = "1.66.1"
+rust-version = "1.76.0"
 version = "0.1.5-dev" # uProtocol version
 repository = "https://github.com/eclipse-uprotocol/up-streamer-rust"
 homepage = "https://github.com/eclipse-uprotocol"
-authors = [
-    "Pete LeVasseur <plevasseur@gmail.com>",
-]
 edition = "2021"
 keywords = ["uProtocol", "SDV", "routing", "streamer"]
 license = "Apache-2.0"
@@ -37,7 +34,7 @@ prost = { version = "0.12" }
 prost-types = { version = "0.12" }
 serde_json = { version = "1.0.111" }
 uuid = { version = "1.7.0" }
-up-rust = { git = "https://github.com/eclipse-uprotocol/up-rust", rev = "c705ac97602ad6917a93d23651e8a504ec7bb718" }
+up-rust = { default-features = false, git = "https://github.com/eclipse-uprotocol/up-rust", rev = "c705ac97602ad6917a93d23651e8a504ec7bb718" }
 
 
 [profile.dev]
