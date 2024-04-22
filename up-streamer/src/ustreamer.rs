@@ -152,10 +152,10 @@ type InTransportOutAuthorities = Arc<Mutex<HashMap<(ComparableTransport, UAuthor
 /// # async fn async_main() {
 ///
 /// // Local transport
-/// let local_transport: Arc<Mutex<Box<dyn UTransport>>> = Arc::new(Mutex::new(Box::new(up_client_foo::UPClientFoo::new())));
+/// let local_transport: Arc<Box<dyn UTransport>> = Arc::new(Box::new(up_client_foo::UPClientFoo::new()));
 ///
 /// // Remote transport router
-/// let remote_transport: Arc<Mutex<Box<dyn UTransport>>> = Arc::new(Mutex::new(Box::new(up_client_bar::UPClientBar::new())));
+/// let remote_transport: Arc<Box<dyn UTransport>> = Arc::new(Box::new(up_client_bar::UPClientBar::new()));
 ///
 /// // Local route
 /// let local_authority = UAuthority {
@@ -403,8 +403,6 @@ impl UStreamer {
                 );
                 let registration_result = r#in
                     .transport
-                    .lock()
-                    .await
                     .register_listener(
                         Self::uauthority_to_uuri(out.authority.clone()),
                         forwarding_listener,
@@ -519,8 +517,6 @@ impl UStreamer {
                 if *count == 0 {
                     let unregister_res = r#in
                         .transport
-                        .lock()
-                        .await
                         .unregister_listener(Self::uauthority_to_uuri(out.authority), exists)
                         .await;
 
@@ -572,11 +568,11 @@ impl UStreamer {
 
 #[derive(Clone)]
 pub(crate) struct ComparableTransport {
-    transport: Arc<Mutex<Box<dyn UTransport>>>,
+    transport: Arc<Box<dyn UTransport>>,
 }
 
 impl ComparableTransport {
-    pub fn new(transport: Arc<Mutex<Box<dyn UTransport>>>) -> Self {
+    pub fn new(transport: Arc<Box<dyn UTransport>>) -> Self {
         Self { transport }
     }
 }
@@ -601,7 +597,7 @@ pub(crate) struct TransportForwarder {}
 
 impl TransportForwarder {
     async fn new(
-        out_transport: Arc<Mutex<Box<dyn UTransport>>>,
+        out_transport: Arc<Box<dyn UTransport>>,
         message_receiver: Receiver<Arc<UMessage>>,
     ) -> Self {
         let out_transport_clone = out_transport.clone();
@@ -617,7 +613,7 @@ impl TransportForwarder {
 
     async fn message_forwarding_loop(
         id: String,
-        out_transport: Arc<Mutex<Box<dyn UTransport>>>,
+        out_transport: Arc<Box<dyn UTransport>>,
         message_receiver: Receiver<Arc<UMessage>>,
     ) {
         while let Ok(msg) = message_receiver.recv().await {
@@ -629,7 +625,6 @@ impl TransportForwarder {
                 msg
             );
 
-            let out_transport = out_transport.lock().await;
             let send_res = out_transport.send(msg.deref().clone()).await;
             if let Err(err) = send_res {
                 error!(
@@ -697,7 +692,6 @@ impl UListener for ForwardingListener {
 #[cfg(test)]
 mod tests {
     use crate::{Route, UStreamer};
-    use async_std::sync::Mutex;
     use async_trait::async_trait;
     use std::sync::Arc;
     use up_rust::{Number, UAuthority, UListener, UMessage, UStatus, UTransport, UUri};
@@ -772,8 +766,7 @@ mod tests {
             number: Some(Number::Ip(vec![192, 168, 1, 100])),
             ..Default::default()
         };
-        let local_transport: Arc<Mutex<Box<dyn UTransport>>> =
-            Arc::new(Mutex::new(Box::new(UPClientFoo)));
+        let local_transport: Arc<Box<dyn UTransport>> = Arc::new(Box::new(UPClientFoo));
         let local_route = Route::new(
             "local_route",
             local_authority.clone(),
@@ -786,8 +779,7 @@ mod tests {
             number: Some(Number::Ip(vec![192, 168, 1, 200])),
             ..Default::default()
         };
-        let remote_transport: Arc<Mutex<Box<dyn UTransport>>> =
-            Arc::new(Mutex::new(Box::new(UPClientBar)));
+        let remote_transport: Arc<Box<dyn UTransport>> = Arc::new(Box::new(UPClientBar));
         let remote_route = Route::new(
             "remote_route",
             remote_authority.clone(),
@@ -848,8 +840,7 @@ mod tests {
             number: Some(Number::Ip(vec![192, 168, 1, 100])),
             ..Default::default()
         };
-        let local_transport: Arc<Mutex<Box<dyn UTransport>>> =
-            Arc::new(Mutex::new(Box::new(UPClientFoo)));
+        let local_transport: Arc<Box<dyn UTransport>> = Arc::new(Box::new(UPClientFoo));
         let local_route = Route::new(
             "local_route",
             local_authority.clone(),
@@ -862,8 +853,7 @@ mod tests {
             number: Some(Number::Ip(vec![192, 168, 1, 200])),
             ..Default::default()
         };
-        let remote_transport_a: Arc<Mutex<Box<dyn UTransport>>> =
-            Arc::new(Mutex::new(Box::new(UPClientBar)));
+        let remote_transport_a: Arc<Box<dyn UTransport>> = Arc::new(Box::new(UPClientBar));
         let remote_route_a = Route::new(
             "remote_route_a",
             remote_authority_a.clone(),
@@ -876,8 +866,7 @@ mod tests {
             number: Some(Number::Ip(vec![192, 168, 1, 201])),
             ..Default::default()
         };
-        let remote_transport_b: Arc<Mutex<Box<dyn UTransport>>> =
-            Arc::new(Mutex::new(Box::new(UPClientBar)));
+        let remote_transport_b: Arc<Box<dyn UTransport>> = Arc::new(Box::new(UPClientBar));
         let remote_route_b = Route::new(
             "remote_route_b",
             remote_authority_b.clone(),
@@ -926,16 +915,14 @@ mod tests {
             number: Some(Number::Ip(vec![192, 168, 1, 100])),
             ..Default::default()
         };
-        let local_transport: Arc<Mutex<Box<dyn UTransport>>> =
-            Arc::new(Mutex::new(Box::new(UPClientFoo)));
+        let local_transport: Arc<Box<dyn UTransport>> = Arc::new(Box::new(UPClientFoo));
         let local_route = Route::new(
             "local_route",
             local_authority.clone(),
             local_transport.clone(),
         );
 
-        let remote_transport: Arc<Mutex<Box<dyn UTransport>>> =
-            Arc::new(Mutex::new(Box::new(UPClientBar)));
+        let remote_transport: Arc<Box<dyn UTransport>> = Arc::new(Box::new(UPClientBar));
 
         // Remote route - A
         let remote_authority_a = UAuthority {

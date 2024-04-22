@@ -43,15 +43,15 @@ async fn single_local_two_remote_authorities_different_remote_transport() {
     let (tx_2, rx_2) = broadcast(20000);
     let (tx_3, rx_3) = broadcast(20000);
 
-    let utransport_foo: Arc<Mutex<Box<dyn UTransport>>> = Arc::new(Mutex::new(Box::new(
+    let utransport_foo: Arc<Box<dyn UTransport>> = Arc::new(Box::new(
         UPClientFoo::new("upclient_foo", rx_1.clone(), tx_1.clone()).await,
-    )));
-    let utransport_bar_1: Arc<Mutex<Box<dyn UTransport>>> = Arc::new(Mutex::new(Box::new(
+    ));
+    let utransport_bar_1: Arc<Box<dyn UTransport>> = Arc::new(Box::new(
         UPClientFoo::new("upclient_bar_1", rx_2.clone(), tx_2.clone()).await,
-    )));
-    let utransport_bar_2: Arc<Mutex<Box<dyn UTransport>>> = Arc::new(Mutex::new(Box::new(
+    ));
+    let utransport_bar_2: Arc<Box<dyn UTransport>> = Arc::new(Box::new(
         UPClientFoo::new("upclient_bar_2", rx_3.clone(), tx_3.clone()).await,
-    )));
+    ));
 
     // setting up streamer to bridge between "foo" and "bar"
     let ustreamer = UStreamer::new("foo_bar_streamer", 3000);

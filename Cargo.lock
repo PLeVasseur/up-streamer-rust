@@ -1879,7 +1879,7 @@ dependencies = [
 [[package]]
 name = "up-rust"
 version = "0.1.5"
-source = "git+https://github.com/eclipse-uprotocol/up-rust?rev=c705ac97602ad6917a93d23651e8a504ec7bb718#c705ac97602ad6917a93d23651e8a504ec7bb718"
+source = "git+https://github.com/eclipse-uprotocol/up-rust?rev=1bb08ba7a3666e58c316489fbcf3da3e29dee611#1bb08ba7a3666e58c316489fbcf3da3e29dee611"
 dependencies = [
  "async-trait",
  "bytes",

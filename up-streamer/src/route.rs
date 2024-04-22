@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use async_std::sync::{Arc, Mutex};
+use async_std::sync::Arc;
 use log::*;
 use up_rust::{UAuthority, UTransport};
 
@@ -70,7 +70,7 @@ const ROUTEFN_NEW_TAG: &str = "new():";
 /// #     }
 /// # }
 ///
-/// let local_transport: Arc<Mutex<Box<dyn UTransport>>> = Arc::new(Mutex::new(Box::new(up_client_foo::UPClientFoo::new())));
+/// let local_transport: Arc<Box<dyn UTransport>> = Arc::new(Box::new(up_client_foo::UPClientFoo::new()));
 ///
 /// let authority_foo = UAuthority {
 ///     name: Some("foo_name".to_string()).into(),
@@ -84,15 +84,11 @@ const ROUTEFN_NEW_TAG: &str = "new():";
 pub struct Route {
     pub(crate) name: String,
     pub(crate) authority: UAuthority,
-    pub(crate) transport: Arc<Mutex<Box<dyn UTransport>>>,
+    pub(crate) transport: Arc<Box<dyn UTransport>>,
 }
 
 impl Route {
-    pub fn new(
-        name: &str,
-        authority: UAuthority,
-        transport: Arc<Mutex<Box<dyn UTransport>>>,
-    ) -> Self {
+    pub fn new(name: &str, authority: UAuthority, transport: Arc<Box<dyn UTransport>>) -> Self {
         // Try to initiate logging.
         // Required in case of dynamic lib, otherwise no logs.
         // But cannot be done twice in case of static link.
