@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use up_rust::{UListener, UTransport};
-use up_streamer::{Route, UStreamer};
+use up_streamer::{Endpoint, UStreamer};
 
 const DURATION_TO_RUN_CLIENTS: u128 = 1_000;
 const SENT_MESSAGE_VEC_CAPACITY: usize = 10_000;
@@ -41,29 +41,31 @@ async fn single_local_single_remote() {
     let (tx_1, rx_1) = broadcast(10000);
     let (tx_2, rx_2) = broadcast(10000);
 
-    let utransport_foo: Arc<Box<dyn UTransport>> = Arc::new(Box::new(
-        UPClientFoo::new("upclient_foo", rx_1.clone(), tx_1.clone()).await,
-    ));
-    let utransport_bar: Arc<Box<dyn UTransport>> = Arc::new(Box::new(
-        UPClientFoo::new("upclient_bar", rx_2.clone(), tx_2.clone()).await,
-    ));
+    let utransport_foo: Arc<dyn UTransport> =
+        Arc::new(UPClientFoo::new("upclient_foo", rx_1.clone(), tx_1.clone()).await);
+    let utransport_bar: Arc<dyn UTransport> =
+        Arc::new(UPClientFoo::new("upclient_bar", rx_2.clone(), tx_2.clone()).await);
 
     // setting up streamer to bridge between "foo" and "bar"
     let ustreamer = UStreamer::new("foo_bar_streamer", 3000);
 
-    // setting up routes between authorities and protocols
-    let local_route = Route::new("local_route", local_authority(), utransport_foo.clone());
-    let remote_route = Route::new("remote_route", remote_authority_a(), utransport_bar.clone());
+    // setting up endpoints between authorities and protocols
+    let local_endpoint = Endpoint::new("local_endpoint", local_authority(), utransport_foo.clone());
+    let remote_endpoint = Endpoint::new(
+        "remote_endpoint",
+        remote_authority_a(),
+        utransport_bar.clone(),
+    );
 
     // adding local to remote routing
     let add_forwarding_rule_res = ustreamer
-        .add_forwarding_rule(local_route.clone(), remote_route.clone())
+        .add_forwarding_rule(local_endpoint.clone(), remote_endpoint.clone())
         .await;
     assert!(add_forwarding_rule_res.is_ok());
 
     // adding remote to local routing
     let add_forwarding_rule_res = ustreamer
-        .add_forwarding_rule(remote_route.clone(), local_route.clone())
+        .add_forwarding_rule(remote_endpoint.clone(), local_endpoint.clone())
         .await;
     assert!(add_forwarding_rule_res.is_ok());
 

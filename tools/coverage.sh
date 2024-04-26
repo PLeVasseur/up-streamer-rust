@@ -3,7 +3,7 @@
 # Run this in the project root, and cargo2junit and grcov binaries (do `cargo install cargo2junit grcov`)
 # Result files will be placed in ./reports
 
-PROJECT_NAME_UNDERSCORE="uprotocol_sdk"
+PROJECT_NAME_UNDERSCORE="up_streamer_rust"
 RUSTFLAGS="--cfg uuid_unstable -Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort"
 RUSTDOCFLAGS="-Cpanic=abort"
 TEMP=`mktemp --directory`

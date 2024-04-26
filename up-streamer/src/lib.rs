@@ -16,8 +16,8 @@
 //! `up-streamer` implements the `UStreamer` spec to allow bridging between different
 //! transports.
 
-mod route;
-pub use route::Route;
+mod endpoint;
+pub use endpoint::Endpoint;
 
 mod ustreamer;
 pub use ustreamer::UStreamer;

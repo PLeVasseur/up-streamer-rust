@@ -15,12 +15,12 @@ use async_std::sync::Arc;
 use log::*;
 use up_rust::{UAuthority, UTransport};
 
-const ROUTE_TAG: &str = "Route:";
-const ROUTEFN_NEW_TAG: &str = "new():";
+const ENDPOINT_TAG: &str = "Endpoint:";
+const ENDPOINT_FN_NEW_TAG: &str = "new():";
 
 ///
-/// [`Route`] is defined as a combination of [`UAuthority`][up_rust::UAuthority] and
-/// [`Arc<Mutex<Box<dyn UTransport>>>`][up_rust::UTransport] as routes are at the [`UAuthority`][up_rust::UAuthority] level.
+/// [`Endpoint`] is defined as a combination of [`UAuthority`][up_rust::UAuthority] and
+/// [`Arc<Mutex<Box<dyn UTransport>>>`][up_rust::UTransport] as endpoints are at the [`UAuthority`][up_rust::UAuthority] level.
 ///
 /// # Examples
 ///
@@ -28,7 +28,7 @@ const ROUTEFN_NEW_TAG: &str = "new():";
 /// use std::sync::Arc;
 /// use async_std::sync::Mutex;
 /// use up_rust::{Number, UAuthority, UTransport};
-/// use up_streamer::Route;
+/// use up_streamer::Endpoint;
 ///
 /// # pub mod up_client_foo {
 /// #     use std::sync::Arc;
@@ -70,7 +70,7 @@ const ROUTEFN_NEW_TAG: &str = "new():";
 /// #     }
 /// # }
 ///
-/// let local_transport: Arc<Box<dyn UTransport>> = Arc::new(Box::new(up_client_foo::UPClientFoo::new()));
+/// let local_transport: Arc<dyn UTransport> = Arc::new(up_client_foo::UPClientFoo::new());
 ///
 /// let authority_foo = UAuthority {
 ///     name: Some("foo_name".to_string()).into(),
@@ -78,24 +78,24 @@ const ROUTEFN_NEW_TAG: &str = "new():";
 ///     ..Default::default()
 /// };
 ///
-/// let local_route = Route::new("local_route", authority_foo, local_transport);
+/// let local_endpoint = Endpoint::new("local_endpoint", authority_foo, local_transport);
 /// ```
 #[derive(Clone)]
-pub struct Route {
+pub struct Endpoint {
     pub(crate) name: String,
     pub(crate) authority: UAuthority,
-    pub(crate) transport: Arc<Box<dyn UTransport>>,
+    pub(crate) transport: Arc<dyn UTransport>,
 }
 
-impl Route {
-    pub fn new(name: &str, authority: UAuthority, transport: Arc<Box<dyn UTransport>>) -> Self {
+impl Endpoint {
+    pub fn new(name: &str, authority: UAuthority, transport: Arc<dyn UTransport>) -> Self {
         // Try to initiate logging.
         // Required in case of dynamic lib, otherwise no logs.
         // But cannot be done twice in case of static link.
         let _ = env_logger::try_init();
         debug!(
-            "{}:{} Creating Route from: ({:?})",
-            &ROUTE_TAG, &ROUTEFN_NEW_TAG, &authority,
+            "{}:{} Creating Endpoint from: ({:?})",
+            &ENDPOINT_TAG, &ENDPOINT_FN_NEW_TAG, &authority,
         );
         Self {
             name: name.to_string(),

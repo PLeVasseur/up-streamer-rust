@@ -17,26 +17,26 @@ sequenceDiagram
     participant UPClientFoo owned thread / task
     participant UPClientBar owned thread / task
 
-    main thread->>main thread: let utransport_foo: Arc<Mutex<Box<dyn UTransport>>> = Arc::new(Mutex::new(Box::new(UPClientFoo::new())))
+    main thread->>main thread: let utransport_foo: Arc<dyn UTransport> = Arc::new(UPClientFoo::new())
     main thread->>main thread: let local_authority = ...
-    main thread->>main thread: let local_route = Route::new(local_authority.clone(), utransport_foo.clone())
+    main thread->>main thread: let local_endpoint = Endpoint::new(local_authority.clone(), utransport_foo.clone())
 
-    main thread->>main thread: let utransport_bar: Arc<Mutex<Box<dyn UTransport>>> = Arc::new(Mutex::new(Box::new(UPClientBar::new())))
+    main thread->>main thread: let utransport_bar: Arc<dyn UTransport> = Arc::new(UPClientBar::new())
     main thread->>main thread: let remote_authority = ...
-    main thread->>main thread: let remote_route = Route::new(remote_authority.clone(), utransport_bar.clone())
+    main thread->>main thread: let remote_endpoint = Endpoint::new(remote_authority.clone(), utransport_bar.clone())
   
     main thread->>main thread: let ustreamer = UStreamer::new()
 
-    main thread->>main thread: ustreamer.add_forwarding_rule(local_route, remote_route)
+    main thread->>main thread: ustreamer.add_forwarding_rule(local_endpoint, remote_endpoint)
     main thread->>TransportForwarder - Foo: launch TransportForwarder - Foo
     activate TransportForwarder - Foo
-    main thread->>UPClientFoo owned thread / task: (within ustreamer.add_forwarding_rule()) <br> local_route.transport.lock().await.register_listener <br> (uauthority_to_uuri(remote_route.authority), forwarding_listener).await
+    main thread->>UPClientFoo owned thread / task: (within ustreamer.add_forwarding_rule()) <br> local_endpoint.transport.lock().await.register_listener <br> (uauthority_to_uuri(remote_endpoint.authority), forwarding_listener).await
     activate UPClientFoo owned thread / task
 
-    main thread->>main thread: ustreamer.add_forwarding_rule(remote_route, local_route)
+    main thread->>main thread: ustreamer.add_forwarding_rule(remote_endpoint, local_endpoint)
     main thread->>TransportForwarder - Bar: launch TransportForwarder - Bar
     activate TransportForwarder - Bar
-    main thread->>UPClientBar owned thread / task: (within ustreamer.add_forwarding_rule()) <br> remote_route.transport.lock().await.register_listener <br> (uauthority_to_uuri(local_route.authority), forwarding_listener).await
+    main thread->>UPClientBar owned thread / task: (within ustreamer.add_forwarding_rule()) <br> remote_endpoint.transport.lock().await.register_listener <br> (uauthority_to_uuri(local_endpoint.authority), forwarding_listener).await
     activate UPClientBar owned thread / task
 
     loop Park the main thread, let background tasks run until closing UStreamer app
@@ -78,15 +78,12 @@ which will open your browser to view the docs.
 ### Working with the library
 
 `up-streamer-rust` is generic and pluggable and can serve your needs so long as
-1. Each transport you want to bridge over has a `up-client-foo-rust` library
+* Each transport you want to bridge over has a `up-client-foo-rust` library
    and UPClientFoo struct which has `impl`ed `UTransport`
-2. `UTransportBuilder` has been `impl`ed on a struct so that a 
-   `Box<dyn UTransport>` can be safely created by the `UTransportRouter`
-   in the proper thread's context
 
 ### Usage
 
-After following along with the [cargo docs](#generating-cargo-docs-locally) generated to add all your forwarding routes, you'll then need to keep the instantiated `UStreamer`, `UTransportRouter`, and `UTransportRouterHandle` around and then pause the main thread, so it will not exit, while the routing happens in the background threads spun up.
+After following along with the [cargo docs](#generating-cargo-docs-locally) generated to add all your forwarding endpoints, you'll then need to keep the instantiated `UStreamer` around and then pause the main thread, so it will not exit, while the routing happens in the background threads spun up.
 
 ## Implementation Status
 
