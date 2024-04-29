@@ -41,13 +41,10 @@ type ForwardingRules = Mutex<
         Arc<dyn UListener>,
     >,
 >;
-// for keeping track of how many users there are of the TransportForwarder so that we can remove
-// from the TransportForwarders later when no longer needed
-type TransportForwarderCount = Mutex<HashMap<ComparableTransport, usize>>;
 // we only need one TransportForwarder per out `UTransport`, so we keep track of that one here
 // and the Sender necessary to hand off to the listener for the in `UTransport`
 type TransportForwarders =
-    Mutex<HashMap<ComparableTransport, (TransportForwarder, Sender<Arc<UMessage>>)>>;
+    Mutex<HashMap<ComparableTransport, (Arc<TransportForwarder>, Sender<Arc<UMessage>>)>>;
 // we need to keep track of in `UTransport` and out `UAuthority` since in the case of the same
 // in `UTransport` and out `UAuthority` we should not register more than once
 type InTransportOutAuthorities = Mutex<HashMap<(ComparableTransport, UAuthority), usize>>;
@@ -232,7 +229,6 @@ pub struct UStreamer {
     name: String,
     registered_forwarding_rules: ForwardingRules,
     transport_forwarders: TransportForwarders,
-    transport_forwarder_count: TransportForwarderCount,
     in_transport_out_authorities: InTransportOutAuthorities,
     message_queue_size: usize,
 }
@@ -260,7 +256,6 @@ impl UStreamer {
             name: name.to_string(),
             registered_forwarding_rules: Mutex::new(HashMap::new()),
             transport_forwarders: Mutex::new(HashMap::new()),
-            transport_forwarder_count: Mutex::new(HashMap::new()),
             in_transport_out_authorities: Mutex::new(HashMap::new()),
             message_queue_size,
         }
@@ -342,7 +337,10 @@ impl UStreamer {
                 .entry(out_comparable_transport.clone())
                 .or_insert_with(|| {
                     let (tx, rx) = channel::bounded(self.message_queue_size);
-                    (TransportForwarder::new(out.transport.clone(), rx), tx)
+                    (
+                        Arc::new(TransportForwarder::new(out.transport.clone(), rx)),
+                        tx,
+                    )
                 });
             sender.clone()
         };
@@ -375,16 +373,6 @@ impl UStreamer {
             );
             err
         } else {
-            // we keep track of how many entries are using this TransportForwarder so that we can
-            // remove it later
-            {
-                let mut transport_forwarder_count = self.transport_forwarder_count.lock().await;
-                let count = transport_forwarder_count
-                    .entry(in_comparable_transport.clone())
-                    .or_default();
-                *count += 1;
-            }
-
             let mut in_transport_out_authorities = self.in_transport_out_authorities.lock().await;
             if let Some(count) = in_transport_out_authorities
                 .get_mut(&(in_comparable_transport.clone(), out.authority.clone()))
@@ -477,40 +465,6 @@ impl UStreamer {
             ))
         };
         if let Some(exists) = remove_res {
-            // check if all users of this TransportForwarder have been unregistered and if so
-            // remove it
-            {
-                let count = {
-                    let mut transport_forwarder_count = self.transport_forwarder_count.lock().await;
-                    let count = transport_forwarder_count
-                        .entry(in_comparable_transport.clone())
-                        .or_default();
-                    *count -= 1;
-                    *count
-                };
-                if count == 0 {
-                    let mut transport_forwarders = self.transport_forwarders.lock().await;
-
-                    if let Some(_) = transport_forwarders.remove(&out_comparable_transport.clone())
-                    {
-                        debug!(
-                            "{}:{}:{} Removing TransportForwarder succeeded",
-                            self.name, USTREAMER_TAG, USTREAMER_FN_DELETE_FORWARDING_RULE_TAG,
-                        );
-                    } else {
-                        let err = UStatus::fail_with_code(
-                            UCode::NOT_FOUND,
-                            "TrnasportForwarder not found",
-                        );
-                        error!(
-                            "{}:{}:{} Removing TransportForwarder failed. {:?}",
-                            self.name, USTREAMER_TAG, USTREAMER_FN_DELETE_FORWARDING_RULE_TAG, err,
-                        );
-                        return Err(err);
-                    }
-                }
-            }
-
             let mut in_transport_out_authorities = self.in_transport_out_authorities.lock().await;
             if let Some(count) = in_transport_out_authorities
                 .get_mut(&(in_comparable_transport.clone(), out.authority.clone()))
