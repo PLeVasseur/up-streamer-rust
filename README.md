@@ -83,7 +83,7 @@ which will open your browser to view the docs.
 
 ### Usage
 
-After following along with the [cargo docs](#generating-cargo-docs-locally) generated to add all your forwarding endpoints, you'll then need to keep the instantiated `UStreamer` around and then pause the main thread, so it will not exit, while the routing happens in the background threads spun up.
+After following along with the [cargo docs](#generating-cargo-docs-locally) generated to add all your forwarding rules, you'll then need to keep the instantiated `UStreamer` around and then pause the main thread, so it will not exit, while the routing happens in the background threads spun up.
 
 ## Implementation Status
 

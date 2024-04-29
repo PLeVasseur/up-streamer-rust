@@ -20,6 +20,7 @@ use log::*;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
+use std::thread;
 use up_rust::{UAuthority, UCode, UListener, UMessage, UStatus, UTransport, UUIDBuilder, UUri};
 
 const USTREAMER_TAG: &str = "UStreamer:";
@@ -337,15 +338,16 @@ impl UStreamer {
         let sender = {
             let mut transport_forwarders = self.transport_forwarders.lock().await;
 
-            let (tx, rx) = channel::bounded(self.message_queue_size);
             let (_, sender) = transport_forwarders
                 .entry(out_comparable_transport.clone())
-                .or_insert((TransportForwarder::new(out.transport.clone(), rx).await, tx));
+                .or_insert_with(|| {
+                    let (tx, rx) = channel::bounded(self.message_queue_size);
+                    (TransportForwarder::new(out.transport.clone(), rx), tx)
+                });
             sender.clone()
         };
-        let forwarding_listener: Arc<dyn UListener> = Arc::new(
-            ForwardingListener::new(&Self::forwarding_id(&r#in, &out), sender.clone()).await,
-        );
+        let forwarding_listener: Arc<dyn UListener> =
+            Arc::new(ForwardingListener::new(&Self::forwarding_id(&r#in, &out), sender).await);
 
         let insertion_result = {
             let mut registered_forwarding_rules = self.registered_forwarding_rules.lock().await;
@@ -597,17 +599,16 @@ const TRANSPORT_FORWARDER_FN_MESSAGE_FORWARDING_LOOP_TAG: &str = "message_forwar
 pub(crate) struct TransportForwarder {}
 
 impl TransportForwarder {
-    async fn new(
-        out_transport: Arc<dyn UTransport>,
-        message_receiver: Receiver<Arc<UMessage>>,
-    ) -> Self {
+    fn new(out_transport: Arc<dyn UTransport>, message_receiver: Receiver<Arc<UMessage>>) -> Self {
         let out_transport_clone = out_transport.clone();
         let message_receiver_clone = message_receiver.clone();
-        task::spawn(Self::message_forwarding_loop(
-            UUIDBuilder::build().to_hyphenated_string(),
-            out_transport_clone,
-            message_receiver_clone,
-        ));
+        thread::spawn(|| {
+            task::block_on(Self::message_forwarding_loop(
+                UUIDBuilder::build().to_hyphenated_string(),
+                out_transport_clone,
+                message_receiver_clone,
+            ))
+        });
 
         Self {}
     }
