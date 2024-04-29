@@ -18,8 +18,7 @@ use futures::future::join;
 use integration_test_utils::{
     check_messages_in_order, check_send_receive_message_discrepancy, local_authority,
     local_client_uuri, notification_from_local_client_for_remote_client,
-    notification_from_remote_client_for_local_client, publish_from_local_client_for_remote_client,
-    publish_from_remote_client_for_local_client, remote_authority_a, remote_authority_b,
+    notification_from_remote_client_for_local_client, remote_authority_a, remote_authority_b,
     remote_client_uuri, request_from_local_client_for_remote_client,
     request_from_remote_client_for_local_client, reset_pause,
     response_from_local_client_for_remote_client, response_from_remote_client_for_local_client,
@@ -98,11 +97,9 @@ async fn single_local_two_remote_add_remove_rules() {
     let local_handle = run_client(
         "local_foo_client".to_string(),
         local_client_uuri(10),
-        remote_client_uuri(remote_authority_a(), 200),
         local_client_listener_trait_obj,
         tx_1.clone(),
         rx_1.clone(),
-        vec![publish_from_local_client_for_remote_client(10)],
         vec![
             notification_from_local_client_for_remote_client(
                 10,
@@ -144,13 +141,9 @@ async fn single_local_two_remote_add_remove_rules() {
     let remote_a_handle = run_client(
         "remote_a_bar_client".to_string(),
         remote_client_uuri(remote_authority_a(), 200),
-        local_client_uuri(10),
         remote_a_client_listener_trait_obj,
         tx_2.clone(),
         rx_2.clone(),
-        vec![publish_from_remote_client_for_local_client(
-            remote_client_uuri(remote_authority_a(), 200),
-        )],
         vec![notification_from_remote_client_for_local_client(
             remote_client_uuri(remote_authority_a(), 200),
             10,
@@ -219,13 +212,9 @@ async fn single_local_two_remote_add_remove_rules() {
     let remote_b_handle = run_client(
         "remote_b_bar_client".to_string(),
         remote_client_uuri(remote_authority_b(), 200),
-        local_client_uuri(10),
         remote_b_client_listener_trait_obj,
         tx_3.clone(),
         rx_3.clone(),
-        vec![publish_from_remote_client_for_local_client(
-            remote_client_uuri(remote_authority_b(), 200),
-        )],
         vec![notification_from_remote_client_for_local_client(
             remote_client_uuri(remote_authority_b(), 200),
             10,

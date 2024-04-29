@@ -118,11 +118,9 @@ pub async fn reset_pause(signal: Signal) {
 pub async fn run_client(
     name: String,
     my_client_uuri: UUri,
-    _other_client_uuri: UUri,
     listener: Arc<dyn UListener>,
     tx: Sender<Result<UMessage, UStatus>>,
     rx: Receiver<Result<UMessage, UStatus>>,
-    _publish_msgs: Vec<UMessage>,
     mut notification_msgs: Vec<UMessage>,
     mut request_msgs: Vec<UMessage>,
     mut response_msgs: Vec<UMessage>,
@@ -149,13 +147,6 @@ pub async fn run_client(
             };
 
             let mut active_connection_listing = Vec::new();
-
-            // let register_res = client
-            //     .register_listener(other_client_uuri.clone(), listener)
-            //     .await;
-            // let Ok(_registration_string) = register_res else {
-            //     panic!("Unable to register!");
-            // };
 
             let start = Instant::now();
 
@@ -226,13 +217,6 @@ pub async fn run_client(
                 if !send {
                     continue;
                 }
-
-                // TODO: Doesn't work currently
-                //  Requires use of uSubscription
-                // let send_res = client.send(publish_msg.clone()).await;
-                // if send_res.is_err() {
-                //     panic!("Unable to send from client: {}", &name);
-                // }
 
                 for (index, notification_msg) in &mut notification_msgs.iter_mut().enumerate() {
                     if let Some(attributes) = notification_msg.attributes.as_mut() {
