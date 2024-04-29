@@ -361,7 +361,7 @@ impl UStreamer {
                 forwarding_listener.clone(),
             )
         };
-        if let Some(_exists) = insertion_result {
+        if let Some(_) = insertion_result {
             let err = Err(UStatus::fail_with_code(
                 UCode::ALREADY_EXISTS,
                 format!(
@@ -491,8 +491,7 @@ impl UStreamer {
                 if count == 0 {
                     let mut transport_forwarders = self.transport_forwarders.lock().await;
 
-                    if let Some(_exists) =
-                        transport_forwarders.remove(&out_comparable_transport.clone())
+                    if let Some(_) = transport_forwarders.remove(&out_comparable_transport.clone())
                     {
                         debug!(
                             "{}:{}:{} Removing TransportForwarder succeeded",

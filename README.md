@@ -68,9 +68,11 @@ sequenceDiagram
 ### Generating cargo docs locally
 
 Documentation can be generated locally with:
+
 ```bash
 cargo doc --package up-streamer --open
 ```
+
 which will open your browser to view the docs.
 
 ## Getting Started
