@@ -20,14 +20,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use up_rust::{
-    ComparableListener, UAuthority, UCode, UListener, UMessage, UMessageType, UStatus, UTransport,
-    UUri,
+    ComparableListener, UAttributes, UAuthority, UCode, UListener, UMessage, UMessageType, UStatus,
+    UTransport, UUri,
 };
 
 pub struct UPClientFoo {
-    #[allow(dead_code)]
     name: Arc<String>,
-    #[allow(dead_code)]
     protocol_receiver: Receiver<Result<UMessage, UStatus>>,
     protocol_sender: Sender<Result<UMessage, UStatus>>,
     listeners: Arc<Mutex<HashMap<UUri, HashSet<ComparableListener>>>>,
@@ -47,221 +45,79 @@ impl UPClientFoo {
         let authority_listeners: Arc<Mutex<HashMap<UAuthority, HashSet<ComparableListener>>>> =
             Arc::new(Mutex::new(HashMap::new()));
 
-        let name_clone = name.clone();
-        let authority_listeners_clone = authority_listeners.clone();
-        let listeners_clone = listeners.clone();
-        let protocol_receiver_clone = protocol_receiver.clone();
-
         let times_received = Arc::new(AtomicU64::new(0));
-        let times_received_task = times_received.clone();
-        task::spawn(async move {
-            let name_clone = name_clone.clone();
-            let mut protocol_receiver_clone = protocol_receiver_clone.clone();
-            let listeners_clone = listeners_clone.clone();
 
-            while let Ok(received) = protocol_receiver_clone.recv().await {
+        let me = Self {
+            name,
+            protocol_sender,
+            protocol_receiver,
+            listeners,
+            authority_listeners,
+            times_received,
+        };
+
+        me.listen_loop().await;
+
+        me
+    }
+
+    async fn listen_loop(&self) {
+        let name = self.name.clone();
+        let mut protocol_receiver = self.protocol_receiver.clone();
+        let listeners = self.listeners.clone();
+        let authority_listeners = self.authority_listeners.clone();
+        let times_received = self.times_received.clone();
+        task::spawn(async move {
+            while let Ok(received) = protocol_receiver.recv().await {
                 match &received {
                     Ok(msg) => {
                         let UMessage { attributes, .. } = &msg;
                         let Some(attr) = attributes.as_ref() else {
-                            debug!("{}: No UAttributes!", &name_clone);
+                            debug!("{}: No UAttributes!", &name);
                             continue;
                         };
 
-                        match attr.type_.enum_value() {
-                            Ok(enum_value) => match enum_value {
-                                UMessageType::UMESSAGE_TYPE_UNSPECIFIED => {
-                                    debug!("{}: Type unspecified! Fail!", &name_clone);
-                                }
-                                UMessageType::UMESSAGE_TYPE_NOTIFICATION => {
-                                    let sink_uuri = attr.sink.as_ref();
-                                    debug!("{}: Request sink uuri: {sink_uuri:?}", &name_clone);
-                                    match sink_uuri {
-                                        None => {
-                                            debug!("{}: No sink uuri!", &name_clone);
-                                        }
-                                        Some(topic) => {
-                                            let authority_listeners =
-                                                authority_listeners_clone.lock().await;
-                                            if let Some(authority) = topic.authority.as_ref() {
-                                                debug!(
-                                                    "{}: Notification: authority: {authority:?}",
-                                                    &name_clone
-                                                );
-
-                                                let authority_listeners =
-                                                    authority_listeners.get(authority);
-
-                                                if let Some(authority_listeners) =
-                                                    authority_listeners
-                                                {
-                                                    debug!(
-                                                        "{}: Notification: authority listeners found: {authority:?}",
-                                                        &name_clone
-                                                    );
-
-                                                    for (authority_listener_num, al) in
-                                                        authority_listeners.iter().enumerate()
-                                                    {
-                                                        debug!("{}: Notification: Authority listener num: {}", &name_clone, authority_listener_num);
-                                                        al.on_receive(msg.clone()).await;
-                                                    }
-                                                } else {
-                                                    debug!(
-                                                        "{}: Notification: authority no listeners: {authority:?}",
-                                                        &name_clone
-                                                    );
-                                                }
-                                            }
-
-                                            let listeners = listeners_clone.lock().await;
-                                            let topic_listeners = listeners.get(topic);
-
-                                            if let Some(topic_listeners) = topic_listeners {
-                                                debug!(
-                                                    "{}: Notification: topic: {topic:?} -- listeners found",
-                                                    &name_clone
-                                                );
-                                                times_received_task.fetch_add(1, Ordering::SeqCst);
-                                                for tl in topic_listeners.iter() {
-                                                    tl.on_receive(msg.clone()).await;
-                                                }
-                                            } else {
-                                                debug!(
-                                                    "{}: Notification: topic: {topic:?} -- listeners not found",
-                                                    &name_clone
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                UMessageType::UMESSAGE_TYPE_PUBLISH => {
-                                    unimplemented!("Still need to handle Publish messages");
-                                }
-                                UMessageType::UMESSAGE_TYPE_REQUEST => {
-                                    let sink_uuri = attr.sink.as_ref();
-                                    debug!("{}: Request sink uuri: {sink_uuri:?}", &name_clone);
-                                    match sink_uuri {
-                                        None => {
-                                            debug!("{}: No sink uuri!", &name_clone);
-                                        }
-                                        Some(topic) => {
-                                            let authority_listeners =
-                                                authority_listeners_clone.lock().await;
-                                            if let Some(authority) = topic.authority.as_ref() {
-                                                debug!(
-                                                    "{}: Request: authority: {authority:?}",
-                                                    &name_clone
-                                                );
-
-                                                let authority_listeners =
-                                                    authority_listeners.get(authority);
-
-                                                if let Some(authority_listeners) =
-                                                    authority_listeners
-                                                {
-                                                    debug!(
-                                                        "{}: Request: authority listeners found: {authority:?}",
-                                                        &name_clone
-                                                    );
-                                                    for (authority_listener_num, al) in
-                                                        authority_listeners.iter().enumerate()
-                                                    {
-                                                        debug!("{}: Request: Authority listener num: {}", &name_clone, authority_listener_num);
-                                                        al.on_receive(msg.clone()).await;
-                                                    }
-                                                } else {
-                                                    debug!(
-                                                        "{}: Request: authority no listeners: {authority:?}",
-                                                        &name_clone
-                                                    );
-                                                }
-                                            }
-
-                                            let listeners = listeners_clone.lock().await;
-                                            let topic_listeners = listeners.get(topic);
-
-                                            if let Some(topic_listeners) = topic_listeners {
-                                                debug!(
-                                                    "{}: Request: topic: {topic:?} -- listeners found",
-                                                    &name_clone
-                                                );
-                                                times_received_task.fetch_add(1, Ordering::SeqCst);
-                                                for tl in topic_listeners.iter() {
-                                                    tl.on_receive(msg.clone()).await;
-                                                }
-                                            } else {
-                                                debug!(
-                                                    "{}: Request: topic: {topic:?} -- listeners not found",
-                                                    &name_clone
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                UMessageType::UMESSAGE_TYPE_RESPONSE => {
-                                    let sink_uuri = attr.sink.as_ref();
-                                    debug!("{}: Response sink uuri: {sink_uuri:?}", &name_clone);
-                                    match sink_uuri {
-                                        None => {
-                                            debug!("{}: No sink uuri!", &name_clone);
-                                        }
-                                        Some(topic) => {
-                                            let authority_listeners =
-                                                authority_listeners_clone.lock().await;
-                                            if let Some(authority) = topic.authority.as_ref() {
-                                                debug!(
-                                                    "{}: Response: authority: {authority:?}",
-                                                    &name_clone
-                                                );
-
-                                                let authority_listeners =
-                                                    authority_listeners.get(authority);
-
-                                                if let Some(authority_listeners) =
-                                                    authority_listeners
-                                                {
-                                                    debug!(
-                                                        "{}: Response: authority listeners found: {authority:?}",
-                                                        &name_clone
-                                                    );
-                                                    for (authority_listener_num, al) in
-                                                        authority_listeners.iter().enumerate()
-                                                    {
-                                                        debug!("{}: Response: Authority listener num: {}", &name_clone, authority_listener_num);
-                                                        al.on_receive(msg.clone()).await;
-                                                    }
-                                                } else {
-                                                    debug!(
-                                                        "{}: Response: authority no listeners: {authority:?}",
-                                                        &name_clone
-                                                    );
-                                                }
-                                            }
-
-                                            let listeners = listeners_clone.lock().await;
-                                            let topic_listeners = listeners.get(topic);
-
-                                            if let Some(topic_listeners) = topic_listeners {
-                                                debug!(
-                                                    "{}: Response: topic: {topic:?} -- listeners found",
-                                                    &name_clone
-                                                );
-                                                times_received_task.fetch_add(1, Ordering::SeqCst);
-                                                for tl in topic_listeners.iter() {
-                                                    tl.on_receive(msg.clone()).await;
-                                                }
-                                            } else {
-                                                debug!(
-                                                    "{}: Response: topic: {topic:?} -- listeners not found",
-                                                    &name_clone
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            },
-                            Err(_) => {
+                        match attr.type_.enum_value().unwrap_or_default() {
+                            UMessageType::UMESSAGE_TYPE_NOTIFICATION => {
+                                UPClientFoo::process_message(
+                                    &name,
+                                    msg,
+                                    attr,
+                                    "Notification",
+                                    listeners.clone(),
+                                    authority_listeners.clone(),
+                                    times_received.clone(),
+                                )
+                                .await;
+                            }
+                            UMessageType::UMESSAGE_TYPE_PUBLISH => {
+                                unimplemented!("Still need to handle Publish messages");
+                            }
+                            UMessageType::UMESSAGE_TYPE_REQUEST => {
+                                UPClientFoo::process_message(
+                                    &name,
+                                    msg,
+                                    attr,
+                                    "Request",
+                                    listeners.clone(),
+                                    authority_listeners.clone(),
+                                    times_received.clone(),
+                                )
+                                .await;
+                            }
+                            UMessageType::UMESSAGE_TYPE_RESPONSE => {
+                                UPClientFoo::process_message(
+                                    &name,
+                                    msg,
+                                    attr,
+                                    "Response",
+                                    listeners.clone(),
+                                    authority_listeners.clone(),
+                                    times_received.clone(),
+                                )
+                                .await;
+                            }
+                            _ => {
                                 debug!("No matching type or an error occurred!");
                             }
                         }
@@ -272,14 +128,67 @@ impl UPClientFoo {
                 }
             }
         });
+    }
 
-        Self {
-            name,
-            protocol_sender,
-            protocol_receiver,
-            listeners,
-            authority_listeners,
-            times_received,
+    async fn process_message(
+        name: &str,
+        msg: &UMessage,
+        attr: &UAttributes,
+        msg_type: &str,
+        listeners: Arc<Mutex<HashMap<UUri, HashSet<ComparableListener>>>>,
+        authority_listeners: Arc<Mutex<HashMap<UAuthority, HashSet<ComparableListener>>>>,
+        times_received: Arc<AtomicU64>,
+    ) {
+        let sink_uuri = attr.sink.as_ref();
+        debug!("{}: {msg_type} sink uuri: {sink_uuri:?}", name);
+        match sink_uuri {
+            None => {
+                debug!("{}: No sink uuri!", name);
+            }
+            Some(topic) => {
+                let authority_listeners = authority_listeners.lock().await;
+                if let Some(authority) = topic.authority.as_ref() {
+                    debug!("{}: {msg_type}: authority: {authority:?}", name);
+
+                    let authority_listeners = authority_listeners.get(authority);
+
+                    if let Some(authority_listeners) = authority_listeners {
+                        debug!(
+                            "{}: {msg_type}: authority listeners found: {authority:?}",
+                            name
+                        );
+
+                        for (authority_listener_num, al) in authority_listeners.iter().enumerate() {
+                            debug!(
+                                "{}: {msg_type}: Authority listener num: {}",
+                                name, authority_listener_num
+                            );
+                            al.on_receive(msg.clone()).await;
+                        }
+                    } else {
+                        debug!(
+                            "{}: {msg_type}: authority no listeners: {authority:?}",
+                            name
+                        );
+                    }
+                }
+
+                let listeners = listeners.lock().await;
+                let topic_listeners = listeners.get(topic);
+
+                if let Some(topic_listeners) = topic_listeners {
+                    debug!("{}: {msg_type}: topic: {topic:?} -- listeners found", name);
+                    times_received.fetch_add(1, Ordering::SeqCst);
+                    for tl in topic_listeners.iter() {
+                        tl.on_receive(msg.clone()).await;
+                    }
+                } else {
+                    debug!(
+                        "{}: {msg_type}: topic: {topic:?} -- listeners not found",
+                        name
+                    );
+                }
+            }
         }
     }
 }
