@@ -50,13 +50,14 @@ const TRANSPORT_FORWARDERS_TAG: &str = "TransportForwarders:";
 const TRANSPORT_FORWARDERS_FN_INSERT_TAG: &str = "insert:";
 const TRANSPORT_FORWARDERS_FN_REMOVE_TAG: &str = "remove:";
 
+type TransportForwardersContainer =
+    Mutex<HashMap<ComparableTransport, (usize, Arc<TransportForwarder>, Sender<Arc<UMessage>>)>>;
+
 // we only need one TransportForwarder per out `UTransport`, so we keep track of that one here
 // and the Sender necessary to hand off to the listener for the in `UTransport`
 struct TransportForwarders {
     message_queue_size: usize,
-    forwarders: Mutex<
-        HashMap<ComparableTransport, (usize, Arc<TransportForwarder>, Sender<Arc<UMessage>>)>,
-    >,
+    forwarders: TransportForwardersContainer,
 }
 
 impl TransportForwarders {
@@ -98,7 +99,7 @@ impl TransportForwarders {
             };
 
             *active -= 1;
-            active.clone()
+            *active
         };
 
         if active_num == 0 {
@@ -117,9 +118,12 @@ const FORWARDING_LISTENERS_TAG: &str = "ForwardingListeners:";
 const FORWARDING_LISTENERS_FN_INSERT_TAG: &str = "insert:";
 const FORWARDING_LISTENERS_FN_REMOVE_TAG: &str = "remove:";
 
+type ForwardingListenersContainer =
+    Mutex<HashMap<(ComparableTransport, UAuthority), (usize, Arc<ForwardingListener>)>>;
+
 // we must have only a single listener per in UTransport and out UAuthority
 struct ForwardingListeners {
-    listeners: Mutex<HashMap<(ComparableTransport, UAuthority), (usize, Arc<ForwardingListener>)>>,
+    listeners: ForwardingListenersContainer,
 }
 
 impl ForwardingListeners {
@@ -181,7 +185,7 @@ impl ForwardingListeners {
                 return;
             };
             *active -= 1;
-            active.clone()
+            *active
         };
 
         if active_num == 0 {
@@ -383,7 +387,6 @@ impl ForwardingListeners {
 /// # }
 /// ```
 pub struct UStreamer {
-    #[allow(dead_code)]
     name: String,
     registered_forwarding_rules: ForwardingRules,
     transport_forwarders: TransportForwarders,
@@ -485,7 +488,7 @@ impl UStreamer {
 
         {
             let mut registered_forwarding_rules = self.registered_forwarding_rules.lock().await;
-            return match registered_forwarding_rules.insert((
+            match registered_forwarding_rules.insert((
                 r#in.authority.clone(),
                 out.authority.clone(),
                 in_comparable_transport,
@@ -513,7 +516,7 @@ impl UStreamer {
                         "already exists",
                     ))
                 }
-            };
+            }
         }
     }
 
@@ -569,7 +572,7 @@ impl UStreamer {
             ))
         };
 
-        return match remove_res {
+        match remove_res {
             true => {
                 self.transport_forwarders
                     .remove(out.transport.clone())
@@ -580,7 +583,7 @@ impl UStreamer {
                 Ok(())
             }
             false => Err(UStatus::fail_with_code(UCode::NOT_FOUND, "not found")),
-        };
+        }
     }
 }
 
