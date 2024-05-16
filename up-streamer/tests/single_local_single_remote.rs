@@ -46,7 +46,7 @@ async fn single_local_single_remote() {
         Arc::new(UPClientFoo::new("upclient_bar", rx_2.clone(), tx_2.clone()).await);
 
     // setting up streamer to bridge between "foo" and "bar"
-    let ustreamer = UStreamer::new("foo_bar_streamer", 3000);
+    let mut ustreamer = UStreamer::new("foo_bar_streamer", 3000);
 
     // setting up endpoints between authorities and protocols
     let local_endpoint = Endpoint::new("local_endpoint", local_authority(), utransport_foo);
