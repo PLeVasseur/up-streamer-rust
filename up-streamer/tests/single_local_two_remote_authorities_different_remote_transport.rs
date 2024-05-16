@@ -23,7 +23,8 @@ use integration_test_utils::{
     request_from_remote_client_for_local_client, reset_pause,
     response_from_local_client_for_remote_client, response_from_remote_client_for_local_client,
     run_client, signal_to_pause, signal_to_resume, wait_for_pause, ClientCommand,
-    LocalClientListener, RemoteClientListener, UPClientFoo,
+    ClientConfiguration, ClientControl, ClientHistory, ClientMessages, LocalClientListener,
+    RemoteClientListener, UPClientFoo,
 };
 use log::debug;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -108,99 +109,120 @@ async fn single_local_two_remote_authorities_different_remote_transport() {
     // kicking off a "local_foo_client" and "remote_bar_client" in order to keep exercising
     // the streamer periodically
     let local_handle = run_client(
-        "local_foo_client".to_string(),
-        local_client_uuri(10),
-        local_client_listener_trait_obj,
-        tx_1.clone(),
-        rx_1.clone(),
-        vec![
-            notification_from_local_client_for_remote_client(
-                10,
-                remote_client_uuri(remote_authority_a(), 200),
-            ),
-            notification_from_local_client_for_remote_client(
-                10,
-                remote_client_uuri(remote_authority_b(), 200),
-            ),
-        ],
-        vec![
-            request_from_local_client_for_remote_client(
-                10,
-                remote_client_uuri(remote_authority_a(), 200),
-            ),
-            request_from_local_client_for_remote_client(
-                10,
-                remote_client_uuri(remote_authority_b(), 200),
-            ),
-        ],
-        vec![
-            response_from_local_client_for_remote_client(
-                10,
-                remote_client_uuri(remote_authority_a(), 200),
-            ),
-            response_from_local_client_for_remote_client(
-                10,
-                remote_client_uuri(remote_authority_b(), 200),
-            ),
-        ],
-        true,
-        all_signal_should_pause.clone(),
-        local_signal_has_paused.clone(),
-        local_command.clone(),
-        local_sends.clone(),
-        SENT_MESSAGE_VEC_CAPACITY,
+        ClientConfiguration {
+            name: "local_foo_client".to_string(),
+            my_client_uuri: local_client_uuri(10),
+            listener: local_client_listener_trait_obj,
+            tx: tx_1.clone(),
+            rx: rx_1.clone(),
+        },
+        ClientMessages {
+            notification_msgs: vec![
+                notification_from_local_client_for_remote_client(
+                    10,
+                    remote_client_uuri(remote_authority_a(), 200),
+                ),
+                notification_from_local_client_for_remote_client(
+                    10,
+                    remote_client_uuri(remote_authority_b(), 200),
+                ),
+            ],
+            request_msgs: vec![
+                request_from_local_client_for_remote_client(
+                    10,
+                    remote_client_uuri(remote_authority_a(), 200),
+                ),
+                request_from_local_client_for_remote_client(
+                    10,
+                    remote_client_uuri(remote_authority_b(), 200),
+                ),
+            ],
+            response_msgs: vec![
+                response_from_local_client_for_remote_client(
+                    10,
+                    remote_client_uuri(remote_authority_a(), 200),
+                ),
+                response_from_local_client_for_remote_client(
+                    10,
+                    remote_client_uuri(remote_authority_b(), 200),
+                ),
+            ],
+        },
+        ClientControl {
+            pause_execution: all_signal_should_pause.clone(),
+            execution_paused: local_signal_has_paused.clone(),
+            client_command: local_command.clone(),
+        },
+        ClientHistory {
+            number_of_sends: local_sends.clone(),
+            sent_message_vec_capacity: SENT_MESSAGE_VEC_CAPACITY,
+        },
     )
     .await;
     let remote_a_handle = run_client(
-        "remote_a_bar_client".to_string(),
-        remote_client_uuri(remote_authority_a(), 200),
-        remote_a_client_listener_trait_obj,
-        tx_2.clone(),
-        rx_2.clone(),
-        vec![notification_from_remote_client_for_local_client(
-            remote_client_uuri(remote_authority_a(), 200),
-            10,
-        )],
-        vec![request_from_remote_client_for_local_client(
-            remote_client_uuri(remote_authority_a(), 200),
-            10,
-        )],
-        vec![response_from_remote_client_for_local_client(
-            remote_client_uuri(remote_authority_a(), 200),
-            10,
-        )],
-        true,
-        all_signal_should_pause.clone(),
-        remote_a_signal_has_paused.clone(),
-        remote_a_command.clone(),
-        remote_a_sends.clone(),
-        SENT_MESSAGE_VEC_CAPACITY,
+        ClientConfiguration {
+            name: "remote_a_bar_client".to_string(),
+            my_client_uuri: remote_client_uuri(remote_authority_a(), 200),
+            listener: remote_a_client_listener_trait_obj,
+            tx: tx_2.clone(),
+            rx: rx_2.clone(),
+        },
+        ClientMessages {
+            notification_msgs: vec![notification_from_remote_client_for_local_client(
+                remote_client_uuri(remote_authority_a(), 200),
+                10,
+            )],
+            request_msgs: vec![request_from_remote_client_for_local_client(
+                remote_client_uuri(remote_authority_a(), 200),
+                10,
+            )],
+            response_msgs: vec![response_from_remote_client_for_local_client(
+                remote_client_uuri(remote_authority_a(), 200),
+                10,
+            )],
+        },
+        ClientControl {
+            pause_execution: all_signal_should_pause.clone(),
+            execution_paused: remote_a_signal_has_paused.clone(),
+            client_command: remote_a_command.clone(),
+        },
+        ClientHistory {
+            number_of_sends: remote_a_sends.clone(),
+            sent_message_vec_capacity: SENT_MESSAGE_VEC_CAPACITY,
+        },
     )
     .await;
     let remote_b_handle = run_client(
-        "remote_b_bar_client".to_string(),
-        remote_client_uuri(remote_authority_b(), 200),
-        remote_b_client_listener_trait_obj,
-        tx_3.clone(),
-        rx_3.clone(),
-        vec![notification_from_remote_client_for_local_client(
-            remote_client_uuri(remote_authority_b(), 200),
-            10,
-        )],
-        vec![request_from_remote_client_for_local_client(
-            remote_client_uuri(remote_authority_b(), 200),
-            10,
-        )],
-        vec![response_from_remote_client_for_local_client(
-            remote_client_uuri(remote_authority_b(), 200),
-            10,
-        )],
-        true,
-        all_signal_should_pause.clone(),
-        remote_b_signal_has_paused.clone(),
-        remote_b_command.clone(),
-        remote_b_sends.clone(),
-        SENT_MESSAGE_VEC_CAPACITY,
+        ClientConfiguration {
+            name: "remote_b_bar_client".to_string(),
+            my_client_uuri: remote_client_uuri(remote_authority_b(), 200),
+            listener: remote_b_client_listener_trait_obj,
+            tx: tx_3.clone(),
+            rx: rx_3.clone(),
+        },
+        ClientMessages {
+            notification_msgs: vec![notification_from_remote_client_for_local_client(
+                remote_client_uuri(remote_authority_b(), 200),
+                10,
+            )],
+            request_msgs: vec![request_from_remote_client_for_local_client(
+                remote_client_uuri(remote_authority_b(), 200),
+                10,
+            )],
+            response_msgs: vec![response_from_remote_client_for_local_client(
+                remote_client_uuri(remote_authority_b(), 200),
+                10,
+            )],
+        },
+        ClientControl {
+            pause_execution: all_signal_should_pause.clone(),
+            execution_paused: remote_b_signal_has_paused.clone(),
+            client_command: remote_b_command.clone(),
+        },
+        ClientHistory {
+            number_of_sends: remote_b_sends.clone(),
+            sent_message_vec_capacity: SENT_MESSAGE_VEC_CAPACITY,
+        },
     )
     .await;
 

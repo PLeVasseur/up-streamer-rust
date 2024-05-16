@@ -17,7 +17,8 @@ mod integration_test_utils;
 
 pub use integration_test_utils::{
     check_messages_in_order, check_send_receive_message_discrepancy, reset_pause, run_client,
-    signal_to_pause, signal_to_resume, wait_for_pause, ClientCommand, Signal,
+    signal_to_pause, signal_to_resume, wait_for_pause, ClientCommand, ClientConfiguration,
+    ClientControl, ClientHistory, ClientMessages, Signal,
 };
 mod integration_test_listeners;
 pub use integration_test_listeners::{LocalClientListener, RemoteClientListener};

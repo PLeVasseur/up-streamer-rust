@@ -114,97 +114,186 @@ pub async fn reset_pause(signal: Signal) {
     }
 }
 
+pub struct ClientConfiguration {
+    pub name: String,
+    pub my_client_uuri: UUri,
+    pub listener: Arc<dyn UListener>,
+    pub tx: Sender<Result<UMessage, UStatus>>,
+    pub rx: Receiver<Result<UMessage, UStatus>>,
+}
+
+pub struct ClientMessages {
+    pub notification_msgs: Vec<UMessage>,
+    pub request_msgs: Vec<UMessage>,
+    pub response_msgs: Vec<UMessage>,
+}
+
+pub struct ClientHistory {
+    pub number_of_sends: Arc<AtomicU64>,
+    pub sent_message_vec_capacity: usize,
+}
+
+pub struct ClientControl {
+    pub pause_execution: Signal,
+    pub execution_paused: Signal,
+    pub client_command: Arc<Mutex<ClientCommand>>,
+}
+
+async fn configure_client(client_configuration: &ClientConfiguration) -> UPClientFoo {
+    let name = client_configuration.name.clone();
+    let rx = client_configuration.rx.clone();
+    let tx = client_configuration.tx.clone();
+    let my_client_uuri = client_configuration.my_client_uuri.clone();
+    let listener = client_configuration.listener.clone();
+
+    let client = UPClientFoo::new(&name, rx, tx).await;
+
+    let register_res = client
+        .register_listener(my_client_uuri.clone(), listener)
+        .await;
+    let Ok(_registration_string) = register_res else {
+        panic!("Unable to register!");
+    };
+
+    client
+}
+
+// allows us to pause execution upon command and then signal back when we've done so
+async fn poll_for_new_command(
+    client: &UPClientFoo,
+    name: &str,
+    client_control: &ClientControl,
+    active_connection_listing: &mut ActiveConnections,
+) -> bool {
+    {
+        let pause_execution = client_control.pause_execution.clone();
+        let client_command = client_control.client_command.clone();
+        let execution_paused = client_control.execution_paused.clone();
+        let (lock, cvar) = &*pause_execution;
+        let mut should_pause = lock.lock().await;
+        while *should_pause {
+            task::sleep(Duration::from_millis(100)).await;
+
+            let command = client_command.lock().await;
+            if *command == ClientCommand::Stop {
+                let times: u64 = client.times_received.load(Ordering::SeqCst);
+                println!("{name} had rx of: {times}");
+                task::sleep(Duration::from_millis(1000)).await;
+                return true;
+            } else {
+                match &*command {
+                    ClientCommand::NoOp => {}
+                    ClientCommand::ConnectedToStreamer(active_connections) => {
+                        debug!("{} commmand: ConnectedToStreamer", &name);
+                        *active_connection_listing = active_connections.clone();
+                        debug!(
+                            "{} set connected_to_streamer to: {:?}",
+                            &name, active_connection_listing
+                        );
+                    }
+                    ClientCommand::DisconnectedFromStreamer(active_connections) => {
+                        debug!("{} commmand: DisconnectedFromStreamer", &name);
+                        *active_connection_listing = active_connections.clone();
+                        debug!(
+                            "{} set connected_to_streamer to: {:?}",
+                            &name, active_connection_listing
+                        );
+                    }
+                    _ => {
+                        error!(
+                            "{} ClientCommand::Stop should have been handled earlier",
+                            &name
+                        )
+                    }
+                }
+                {
+                    let (lock_exec_pause, cvar_exec_pause) = &*execution_paused;
+                    let mut has_paused = lock_exec_pause.lock().await;
+                    *has_paused = true;
+                    debug!("{} has_paused set to true", &name);
+                    cvar_exec_pause.notify_one();
+                    debug!("{} cvar_exec_pause.notify_one()", &name);
+                }
+                debug!("{} Loop paused. Waiting...", &name);
+                should_pause = cvar.wait(should_pause).await;
+                debug!("{} Got signal to pause", &name);
+            }
+        }
+
+        false
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
-pub async fn run_client(
-    name: String,
-    my_client_uuri: UUri,
-    listener: Arc<dyn UListener>,
-    tx: Sender<Result<UMessage, UStatus>>,
-    rx: Receiver<Result<UMessage, UStatus>>,
-    mut notification_msgs: Vec<UMessage>,
-    mut request_msgs: Vec<UMessage>,
-    mut response_msgs: Vec<UMessage>,
-    send: bool,
-    pause_execution: Signal,
-    execution_paused: Signal,
-    client_command: Arc<Mutex<ClientCommand>>,
+async fn send_message_set(
+    client: &UPClientFoo,
+    name: &str,
+    client_rand_b: u64,
+    msg_type: &str,
+    msg_set: &mut [UMessage],
+    active_connection_listing: &ActiveConnections,
+    sent_messages: &mut Vec<UMessage>,
     number_of_sends: Arc<AtomicU64>,
-    sent_message_vec_capacity: usize,
+) {
+    for (index, msg) in &mut msg_set.iter_mut().enumerate() {
+        if let Some(attributes) = msg.attributes.as_mut() {
+            let new_id = UUIDBuilder::build();
+            attributes.id.0 = Some(Box::new(new_id));
+            let uuid = attributes.id.as_mut().unwrap();
+            let lsb = &mut uuid.lsb;
+            *lsb = override_lsb_rand_b(*lsb, client_rand_b);
+        }
+
+        debug!(
+            "prior to sending from client {}, the {msg_type} message: {:?}",
+            &name, &msg
+        );
+
+        let send_res = client.send(msg.clone()).await;
+        if send_res.is_err() {
+            error!("Unable to send from client: {}", &name);
+        } else if !active_connection_listing.is_empty() && active_connection_listing[index] {
+            sent_messages.push(msg.clone());
+            number_of_sends.fetch_add(1, Ordering::SeqCst);
+            debug!(
+                "{} after {msg_type} send, we have sent: {}",
+                &name,
+                number_of_sends.load(Ordering::SeqCst)
+            );
+        }
+    }
+}
+
+pub async fn run_client(
+    client_configuration: ClientConfiguration,
+    mut client_messages: ClientMessages,
+    client_control: ClientControl,
+    client_history: ClientHistory,
 ) -> JoinHandle<Vec<UMessage>> {
     std::thread::spawn(move || {
         task::block_on(async move {
-            let client = UPClientFoo::new(&name, rx, tx).await;
-
-            let client_rand_b = random::<u64>() >> 2;
-
-            let mut sent_messages = Vec::with_capacity(sent_message_vec_capacity);
-
-            let register_res = client
-                .register_listener(my_client_uuri.clone(), listener)
-                .await;
-            let Ok(_registration_string) = register_res else {
-                panic!("Unable to register!");
-            };
+            let client = configure_client(&client_configuration).await;
 
             let mut active_connection_listing = Vec::new();
 
             let start = Instant::now();
 
+            let mut sent_messages = Vec::with_capacity(client_history.sent_message_vec_capacity);
+
+            let client_rand_b = random::<u64>() >> 2;
+
             loop {
                 debug!("top of loop");
 
+                if poll_for_new_command(
+                    &client,
+                    &client_configuration.name,
+                    &client_control,
+                    &mut active_connection_listing,
+                )
+                .await
                 {
-                    // allows us to pause execution upon command and then signal back when we've done so
-                    let (lock, cvar) = &*pause_execution;
-                    let mut should_pause = lock.lock().await;
-                    while *should_pause {
-                        task::sleep(Duration::from_millis(100)).await;
-
-                        let command = client_command.lock().await;
-                        if *command == ClientCommand::Stop {
-                            let times: u64 = client.times_received.load(Ordering::SeqCst);
-                            println!("{name} had rx of: {times}");
-                            task::sleep(Duration::from_millis(1000)).await;
-                            return sent_messages;
-                        } else {
-                            match &*command {
-                                ClientCommand::NoOp => {}
-                                ClientCommand::ConnectedToStreamer(active_connections) => {
-                                    debug!("{} commmand: ConnectedToStreamer", &name);
-                                    active_connection_listing = active_connections.clone();
-                                    debug!(
-                                        "{} set connected_to_streamer to: {:?}",
-                                        &name, active_connection_listing
-                                    );
-                                }
-                                ClientCommand::DisconnectedFromStreamer(active_connections) => {
-                                    debug!("{} commmand: DisconnectedFromStreamer", &name);
-                                    active_connection_listing = active_connections.clone();
-                                    debug!(
-                                        "{} set connected_to_streamer to: {:?}",
-                                        &name, active_connection_listing
-                                    );
-                                }
-                                _ => {
-                                    error!(
-                                        "{} ClientCommand::Stop should have been handled earlier",
-                                        &name
-                                    )
-                                }
-                            }
-                            {
-                                let (lock_exec_pause, cvar_exec_pause) = &*execution_paused;
-                                let mut has_paused = lock_exec_pause.lock().await;
-                                *has_paused = true;
-                                debug!("{} has_paused set to true", &name);
-                                cvar_exec_pause.notify_one();
-                                debug!("{} cvar_exec_pause.notify_one()", &name);
-                            }
-                            debug!("{} Loop paused. Waiting...", &name);
-                            should_pause = cvar.wait(should_pause).await;
-                            debug!("{} Got signal to pause", &name);
-                        }
-                    }
+                    return sent_messages;
                 }
 
                 let current = Instant::now();
@@ -214,103 +303,39 @@ pub async fn run_client(
 
                 debug!("-----------------------------------------------------------------------");
 
-                if !send {
-                    continue;
-                }
-
-                for (index, notification_msg) in &mut notification_msgs.iter_mut().enumerate() {
-                    if let Some(attributes) = notification_msg.attributes.as_mut() {
-                        let new_id = UUIDBuilder::build();
-                        attributes.id.0 = Some(Box::new(new_id));
-                        let uuid = attributes.id.as_mut().unwrap();
-                        let lsb = &mut uuid.lsb;
-                        *lsb = override_lsb_rand_b(*lsb, client_rand_b);
-                    }
-
-                    debug!(
-                        "prior to sending from client {}, the request message: {:?}",
-                        &name, &notification_msg
-                    );
-
-                    let send_res = client.send(notification_msg.clone()).await;
-                    if send_res.is_err() {
-                        error!("Unable to send from client: {}", &name);
-                    } else if !active_connection_listing.is_empty()
-                        && active_connection_listing[index]
-                    {
-                        sent_messages.push(notification_msg.clone());
-                        number_of_sends.fetch_add(1, Ordering::SeqCst);
-                        debug!(
-                            "{} after Notification send, we have sent: {}",
-                            &name,
-                            number_of_sends.load(Ordering::SeqCst)
-                        );
-                    }
-                }
-
-                for (index, request_msg) in &mut request_msgs.iter_mut().enumerate() {
-                    if let Some(attributes) = request_msg.attributes.as_mut() {
-                        let new_id = UUIDBuilder::build();
-                        attributes.id.0 = Some(Box::new(new_id));
-                        let uuid = attributes.id.as_mut().unwrap();
-                        let lsb = &mut uuid.lsb;
-                        *lsb = override_lsb_rand_b(*lsb, client_rand_b);
-                    }
-
-                    debug!(
-                        "prior to sending from client {}, the request message: {:?}",
-                        &name, &request_msg
-                    );
-
-                    sent_messages.push(request_msg.clone());
-
-                    let send_res = client.send(request_msg.clone()).await;
-                    if send_res.is_err() {
-                        error!("Unable to send from client: {}", &name);
-                    } else if !active_connection_listing.is_empty()
-                        && active_connection_listing[index]
-                    {
-                        sent_messages.push(request_msg.clone());
-                        number_of_sends.fetch_add(1, Ordering::SeqCst);
-                        debug!(
-                            "{} after Request send, we have sent: {}",
-                            &name,
-                            number_of_sends.load(Ordering::SeqCst)
-                        );
-                    }
-                }
-
-                for (index, response_msg) in &mut response_msgs.iter_mut().enumerate() {
-                    if let Some(attributes) = response_msg.attributes.as_mut() {
-                        let new_id = UUIDBuilder::build();
-                        attributes.id.0 = Some(Box::new(new_id));
-                        let uuid = attributes.id.as_mut().unwrap();
-                        let lsb = &mut uuid.lsb;
-                        *lsb = override_lsb_rand_b(*lsb, client_rand_b);
-                    }
-
-                    debug!(
-                        "prior to sending from client {}, the response message: {:?}",
-                        &name, &response_msg
-                    );
-
-                    sent_messages.push(response_msg.clone());
-
-                    let send_res = client.send(response_msg.clone()).await;
-                    if send_res.is_err() {
-                        error!("Unable to send from client: {}", &name);
-                    } else if !active_connection_listing.is_empty()
-                        && active_connection_listing[index]
-                    {
-                        sent_messages.push(response_msg.clone());
-                        number_of_sends.fetch_add(1, Ordering::SeqCst);
-                        debug!(
-                            "{} after Response send, we have sent: {}",
-                            &name,
-                            number_of_sends.load(Ordering::SeqCst)
-                        );
-                    }
-                }
+                send_message_set(
+                    &client,
+                    &client_configuration.name,
+                    client_rand_b,
+                    "Notification",
+                    &mut client_messages.notification_msgs,
+                    &active_connection_listing,
+                    &mut sent_messages,
+                    client_history.number_of_sends.clone(),
+                )
+                .await;
+                send_message_set(
+                    &client,
+                    &client_configuration.name,
+                    client_rand_b,
+                    "Request",
+                    &mut client_messages.request_msgs,
+                    &active_connection_listing,
+                    &mut sent_messages,
+                    client_history.number_of_sends.clone(),
+                )
+                .await;
+                send_message_set(
+                    &client,
+                    &client_configuration.name,
+                    client_rand_b,
+                    "Response",
+                    &mut client_messages.response_msgs,
+                    &active_connection_listing,
+                    &mut sent_messages,
+                    client_history.number_of_sends.clone(),
+                )
+                .await;
 
                 task::sleep(Duration::from_millis(1)).await;
             }
