@@ -28,6 +28,13 @@ const USTREAMER_FN_NEW_TAG: &str = "new():";
 const USTREAMER_FN_ADD_FORWARDING_RULE_TAG: &str = "add_forwarding_rule():";
 const USTREAMER_FN_DELETE_FORWARDING_RULE_TAG: &str = "delete_forwarding_rule():";
 
+fn uauthority_to_uuri(authority: UAuthority) -> UUri {
+    UUri {
+        authority: Some(authority).into(),
+        ..Default::default()
+    }
+}
+
 // the 'gatekeeper' which will prevent us from erroneously being able to add duplicate
 // forwarding rules or delete those rules which don't exist
 type ForwardingRules = Mutex<
@@ -38,6 +45,10 @@ type ForwardingRules = Mutex<
         ComparableTransport,
     )>,
 >;
+
+const TRANSPORT_FORWARDERS_TAG: &str = "TransportForwarders:";
+const TRANSPORT_FORWARDERS_FN_INSERT_TAG: &str = "insert:";
+const TRANSPORT_FORWARDERS_FN_REMOVE_TAG: &str = "remove:";
 
 // we only need one TransportForwarder per out `UTransport`, so we keep track of that one here
 // and the Sender necessary to hand off to the listener for the in `UTransport`
@@ -64,6 +75,9 @@ impl TransportForwarders {
         let (active, _, sender) = transport_forwarders
             .entry(out_comparable_transport)
             .or_insert_with(|| {
+                debug!(
+                    "{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_INSERT_TAG} Inserting..."
+                );
                 let (tx, rx) = channel::bounded(self.message_queue_size);
                 (0, Arc::new(TransportForwarder::new(out_transport, rx)), tx)
             });
@@ -79,34 +93,38 @@ impl TransportForwarders {
         let active_num = {
             let Some((active, _, _)) = transport_forwarders.get_mut(&out_comparable_transport)
             else {
-                // TODO: Add debug logging
+                warn!("{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} no such out_comparable_transport");
                 return;
             };
 
             *active -= 1;
             active.clone()
         };
+
         if active_num == 0 {
             let removed = transport_forwarders.remove(&out_comparable_transport);
+            debug!("{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} went to remove TransportForwarder for this transport");
             if removed.is_none() {
-                // TODO: Add debug logging
+                warn!("{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} was none to remove");
             } else {
-                // TODO: Add debug logging
+                debug!("{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} had one to remove");
             }
         }
     }
 }
 
+const FORWARDING_LISTENERS_TAG: &str = "ForwardingListeners:";
+const FORWARDING_LISTENERS_FN_INSERT_TAG: &str = "insert:";
+const FORWARDING_LISTENERS_FN_REMOVE_TAG: &str = "remove:";
+
 // we must have only a single listener per in UTransport and out UAuthority
 struct ForwardingListeners {
-    message_queue_size: usize,
     listeners: Mutex<HashMap<(ComparableTransport, UAuthority), (usize, Arc<ForwardingListener>)>>,
 }
 
 impl ForwardingListeners {
-    pub fn new(message_queue_size: usize) -> Self {
+    pub fn new() -> Self {
         Self {
-            message_queue_size,
             listeners: Mutex::new(HashMap::new()),
         }
     }
@@ -118,16 +136,27 @@ impl ForwardingListeners {
         forwarding_id: &str,
         out_sender: Sender<Arc<UMessage>>,
     ) -> Option<Arc<ForwardingListener>> {
-        let in_comparable_transport = ComparableTransport::new(in_transport);
+        let in_comparable_transport = ComparableTransport::new(in_transport.clone());
 
         let mut forwarding_listeners = self.listeners.lock().await;
 
         let (active, forwarding_listener) = forwarding_listeners
-            .entry((in_comparable_transport.clone(), out_authority))
+            .entry((in_comparable_transport.clone(), out_authority.clone()))
             .or_insert_with(|| {
+                let forwarding_listener = Arc::new(ForwardingListener::new(forwarding_id, out_sender));
+
+                let reg_res = task::block_on(in_transport
+                    .register_listener(uauthority_to_uuri(out_authority), forwarding_listener.clone()));
+
+                if let Err(err) = reg_res {
+                    warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_INSERT_TAG} unable to register listener, error: {err}");
+                } else {
+                    debug!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_INSERT_TAG} able to register listener");
+                }
+
                 (
                     0,
-                    Arc::new(ForwardingListener::new(forwarding_id, out_sender)),
+                    forwarding_listener,
                 )
             });
         *active += 1;
@@ -140,7 +169,7 @@ impl ForwardingListeners {
     }
 
     pub async fn remove(&self, in_transport: Arc<dyn UTransport>, out_authority: UAuthority) {
-        let in_comparable_transport = ComparableTransport::new(in_transport);
+        let in_comparable_transport = ComparableTransport::new(in_transport.clone());
 
         let mut forwarding_listeners = self.listeners.lock().await;
 
@@ -148,7 +177,7 @@ impl ForwardingListeners {
             let Some((active, _)) = forwarding_listeners
                 .get_mut(&(in_comparable_transport.clone(), out_authority.clone()))
             else {
-                // TODO: Add debug logging
+                warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} no such out_comparable_transport, out_authority: {out_authority:?}");
                 return;
             };
             *active -= 1;
@@ -156,11 +185,23 @@ impl ForwardingListeners {
         };
 
         if active_num == 0 {
-            let removed = forwarding_listeners.remove(&(in_comparable_transport, out_authority));
-            if removed.is_none() {
-                // TODO: Add debug logging
+            let removed =
+                forwarding_listeners.remove(&(in_comparable_transport, out_authority.clone()));
+            warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} removing ForwardingListener, out_authority: {out_authority:?}");
+            if let Some((_, forwarding_listener)) = removed {
+                warn!("ForwardingListeners::remove: ForwardingListener found we can remove, out_authority: {out_authority:?}");
+                let unreg_res = task::block_on(in_transport.unregister_listener(
+                    uauthority_to_uuri(out_authority.clone()),
+                    forwarding_listener,
+                ));
+
+                if let Err(err) = unreg_res {
+                    warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} unable to unregister listener, error: {err}");
+                } else {
+                    debug!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} able to unregister listener");
+                }
             } else {
-                // TODO: Add debug logging
+                warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} none found we can remove, out_authority: {out_authority:?}");
             }
         }
     }
@@ -347,7 +388,6 @@ pub struct UStreamer {
     registered_forwarding_rules: ForwardingRules,
     transport_forwarders: TransportForwarders,
     forwarding_listeners: ForwardingListeners,
-    message_queue_size: usize,
 }
 
 impl UStreamer {
@@ -373,15 +413,7 @@ impl UStreamer {
             name: name.to_string(),
             registered_forwarding_rules: Mutex::new(HashSet::new()),
             transport_forwarders: TransportForwarders::new(message_queue_size),
-            forwarding_listeners: ForwardingListeners::new(message_queue_size),
-            message_queue_size,
-        }
-    }
-
-    fn uauthority_to_uuri(authority: UAuthority) -> UUri {
-        UUri {
-            authority: Some(authority).into(),
-            ..Default::default()
+            forwarding_listeners: ForwardingListeners::new(),
         }
     }
 
@@ -464,8 +496,7 @@ impl UStreamer {
                         .transport_forwarders
                         .insert(out.transport.clone())
                         .await;
-                    let listener = self
-                        .forwarding_listeners
+                    self.forwarding_listeners
                         .insert(
                             r#in.transport.clone(),
                             out.authority.clone(),
@@ -473,17 +504,6 @@ impl UStreamer {
                             out_sender,
                         )
                         .await;
-                    if let Some(listener) = listener {
-                        let reg_res = r#in
-                            .transport
-                            .register_listener(Self::uauthority_to_uuri(out.authority), listener)
-                            .await;
-                        if let Err(reg_res) = reg_res {
-                            // TODO: Add error logging
-                        } else {
-                            // TODO: Add debug logging
-                        }
-                    }
                     Ok(())
                 }
                 false => {
