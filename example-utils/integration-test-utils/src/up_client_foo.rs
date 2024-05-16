@@ -19,6 +19,7 @@ use log::{debug, error};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::thread;
 use up_rust::{
     ComparableListener, UAttributes, UAuthority, UCode, UListener, UMessage, UMessageType, UStatus,
     UTransport, UUri,
@@ -67,66 +68,68 @@ impl UPClientFoo {
         let listeners = self.listeners.clone();
         let authority_listeners = self.authority_listeners.clone();
         let times_received = self.times_received.clone();
-        task::spawn(async move {
-            while let Ok(received) = protocol_receiver.recv().await {
-                match &received {
-                    Ok(msg) => {
-                        let UMessage { attributes, .. } = &msg;
-                        let Some(attr) = attributes.as_ref() else {
-                            debug!("{}: No UAttributes!", &name);
-                            continue;
-                        };
+        thread::spawn(move || {
+            task::block_on(async {
+                while let Ok(received) = protocol_receiver.recv().await {
+                    match &received {
+                        Ok(msg) => {
+                            let UMessage { attributes, .. } = &msg;
+                            let Some(attr) = attributes.as_ref() else {
+                                debug!("{}: No UAttributes!", &name);
+                                continue;
+                            };
 
-                        match attr.type_.enum_value().unwrap_or_default() {
-                            UMessageType::UMESSAGE_TYPE_NOTIFICATION => {
-                                UPClientFoo::process_message(
-                                    &name,
-                                    msg,
-                                    attr,
-                                    "Notification",
-                                    listeners.clone(),
-                                    authority_listeners.clone(),
-                                    times_received.clone(),
-                                )
-                                .await;
-                            }
-                            UMessageType::UMESSAGE_TYPE_PUBLISH => {
-                                unimplemented!("Still need to handle Publish messages");
-                            }
-                            UMessageType::UMESSAGE_TYPE_REQUEST => {
-                                UPClientFoo::process_message(
-                                    &name,
-                                    msg,
-                                    attr,
-                                    "Request",
-                                    listeners.clone(),
-                                    authority_listeners.clone(),
-                                    times_received.clone(),
-                                )
-                                .await;
-                            }
-                            UMessageType::UMESSAGE_TYPE_RESPONSE => {
-                                UPClientFoo::process_message(
-                                    &name,
-                                    msg,
-                                    attr,
-                                    "Response",
-                                    listeners.clone(),
-                                    authority_listeners.clone(),
-                                    times_received.clone(),
-                                )
-                                .await;
-                            }
-                            _ => {
-                                debug!("No matching type or an error occurred!");
+                            match attr.type_.enum_value().unwrap_or_default() {
+                                UMessageType::UMESSAGE_TYPE_NOTIFICATION => {
+                                    UPClientFoo::process_message(
+                                        &name,
+                                        msg,
+                                        attr,
+                                        "Notification",
+                                        listeners.clone(),
+                                        authority_listeners.clone(),
+                                        times_received.clone(),
+                                    )
+                                        .await;
+                                }
+                                UMessageType::UMESSAGE_TYPE_PUBLISH => {
+                                    unimplemented!("Still need to handle Publish messages");
+                                }
+                                UMessageType::UMESSAGE_TYPE_REQUEST => {
+                                    UPClientFoo::process_message(
+                                        &name,
+                                        msg,
+                                        attr,
+                                        "Request",
+                                        listeners.clone(),
+                                        authority_listeners.clone(),
+                                        times_received.clone(),
+                                    )
+                                        .await;
+                                }
+                                UMessageType::UMESSAGE_TYPE_RESPONSE => {
+                                    UPClientFoo::process_message(
+                                        &name,
+                                        msg,
+                                        attr,
+                                        "Response",
+                                        listeners.clone(),
+                                        authority_listeners.clone(),
+                                        times_received.clone(),
+                                    )
+                                        .await;
+                                }
+                                _ => {
+                                    debug!("No matching type or an error occurred!");
+                                }
                             }
                         }
-                    }
-                    Err(status) => {
-                        debug!("Got an error! err: {status:?}");
+                        Err(status) => {
+                            debug!("Got an error! err: {status:?}");
+                        }
                     }
                 }
-            }
+            });
         });
     }
 
