@@ -139,6 +139,16 @@ pub struct ClientControl {
     pub client_command: Arc<Mutex<ClientCommand>>,
 }
 
+fn any_uuri() -> UUri {
+    UUri {
+        authority_name: "*".to_string(),
+        ue_id: 0x0000_FFFF,            // any instance, any service
+        ue_version_major: 0xFF,        // any
+        resource_id: 0xFFFF,           // any
+        ..Default::default()
+    }
+}
+
 async fn configure_client(client_configuration: &ClientConfiguration) -> UPClientFoo {
     let name = client_configuration.name.clone();
     let rx = client_configuration.rx.clone();
@@ -149,7 +159,7 @@ async fn configure_client(client_configuration: &ClientConfiguration) -> UPClien
     let client = UPClientFoo::new(&name, rx, tx).await;
 
     let register_res = client
-        .register_listener(my_client_uuri.clone(), listener)
+        .register_listener(&any_uuri(), Some(&my_client_uuri.clone()), listener)
         .await;
     let Ok(_registration_string) = register_res else {
         panic!("Unable to register!");

@@ -32,7 +32,8 @@ use std::time::Duration;
 use up_rust::{UListener, UTransport};
 use up_streamer::{Endpoint, UStreamer};
 
-const DURATION_TO_RUN_CLIENTS: u128 = 1_000;
+// const DURATION_TO_RUN_CLIENTS: u128 = 1_000;
+const DURATION_TO_RUN_CLIENTS: u128 = 3;
 const SENT_MESSAGE_VEC_CAPACITY: usize = 10_000;
 
 #[async_std::test]
@@ -50,8 +51,8 @@ async fn single_local_single_remote() {
     let mut ustreamer = UStreamer::new("foo_bar_streamer", 3000);
 
     // setting up endpoints between authorities and protocols
-    let local_endpoint = Endpoint::new("local_endpoint", local_authority(), utransport_foo);
-    let remote_endpoint = Endpoint::new("remote_endpoint", remote_authority_a(), utransport_bar);
+    let local_endpoint = Endpoint::new("local_endpoint", &local_authority(), utransport_foo);
+    let remote_endpoint = Endpoint::new("remote_endpoint", &remote_authority_a(), utransport_bar);
 
     // adding local to remote routing
     let add_forwarding_rule_res = ustreamer
@@ -125,15 +126,15 @@ async fn single_local_single_remote() {
         },
         ClientMessages {
             notification_msgs: vec![notification_from_remote_client_for_local_client(
-                remote_client_uuri(remote_authority_a(), 20),
+                remote_client_uuri(remote_authority_a(), 200),
                 10,
             )],
             request_msgs: vec![request_from_remote_client_for_local_client(
-                remote_client_uuri(remote_authority_a(), 20),
+                remote_client_uuri(remote_authority_a(), 200),
                 10,
             )],
             response_msgs: vec![response_from_remote_client_for_local_client(
-                remote_client_uuri(remote_authority_a(), 20),
+                remote_client_uuri(remote_authority_a(), 200),
                 10,
             )],
         },

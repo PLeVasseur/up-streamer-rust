@@ -13,21 +13,21 @@
 
 use async_std::sync::Arc;
 use log::*;
-use up_rust::{UAuthority, UTransport};
+use up_rust::UTransport;
 
 const ENDPOINT_TAG: &str = "Endpoint:";
 const ENDPOINT_FN_NEW_TAG: &str = "new():";
 
 ///
-/// [`Endpoint`] is defined as a combination of [`UAuthority`][up_rust::UAuthority] and
-/// [`Arc<Mutex<Box<dyn UTransport>>>`][up_rust::UTransport] as endpoints are at the [`UAuthority`][up_rust::UAuthority] level.
+/// [`Endpoint`] is defined as a combination of `authority_name` and
+/// [`Arc<Mutex<Box<dyn UTransport>>>`][up_rust::UTransport] as endpoints are at the authority level.
 ///
 /// # Examples
 ///
 /// ```
 /// use std::sync::Arc;
 /// use async_std::sync::Mutex;
-/// use up_rust::{Number, UAuthority, UTransport};
+/// use up_rust::UTransport;
 /// use up_streamer::Endpoint;
 ///
 /// # pub mod up_client_foo {
@@ -47,17 +47,23 @@ const ENDPOINT_FN_NEW_TAG: &str = "new():";
 /// #         }
 /// #
 /// #         async fn register_listener(
-/// #             &self,
-/// #             topic: UUri,
-/// #             _listener: Arc<dyn UListener>,
+/// #                     &self,
+/// #                     source_filter: &UUri,
+/// #                     sink_filter: Option<&UUri>,
+/// #                     listener: Arc<dyn UListener>,
 /// #         ) -> Result<(), UStatus> {
-/// #             println!("UPClientFoo: registering topic: {:?}", topic);
+/// #             println!("UPClientFoo: registering source_filter: {:?}", source_filter);
 /// #             Ok(())
 /// #         }
 /// #
-/// #         async fn unregister_listener(&self, topic: UUri, _listener: Arc<dyn UListener>) -> Result<(), UStatus> {
+/// #         async fn unregister_listener(
+/// #                     &self,
+/// #                     source_filter: &UUri,
+/// #                     sink_filter: Option<&UUri>,
+/// #                     listener: Arc<dyn UListener>,
+/// #         ) -> Result<(), UStatus> {
 /// #             println!(
-/// #                 "UPClientFoo: unregistering topic: {topic:?}"
+/// #                 "UPClientFoo: unregistering source_filter: {source_filter:?}"
 /// #             );
 /// #             Ok(())
 /// #         }
@@ -72,23 +78,19 @@ const ENDPOINT_FN_NEW_TAG: &str = "new():";
 ///
 /// let local_transport: Arc<dyn UTransport> = Arc::new(up_client_foo::UPClientFoo::new());
 ///
-/// let authority_foo = UAuthority {
-///     name: Some("foo_name".to_string()).into(),
-///     number: Some(Number::Ip(vec![192, 168, 1, 100])),
-///     ..Default::default()
-/// };
+/// let authority_foo = "foo_authority";
 ///
 /// let local_endpoint = Endpoint::new("local_endpoint", authority_foo, local_transport);
 /// ```
 #[derive(Clone)]
 pub struct Endpoint {
     pub(crate) name: String,
-    pub(crate) authority: UAuthority,
+    pub(crate) authority: String,
     pub(crate) transport: Arc<dyn UTransport>,
 }
 
 impl Endpoint {
-    pub fn new(name: &str, authority: UAuthority, transport: Arc<dyn UTransport>) -> Self {
+    pub fn new(name: &str, authority: &str, transport: Arc<dyn UTransport>) -> Self {
         // Try to initiate logging.
         // Required in case of dynamic lib, otherwise no logs.
         // But cannot be done twice in case of static link.
@@ -99,7 +101,7 @@ impl Endpoint {
         );
         Self {
             name: name.to_string(),
-            authority,
+            authority: authority.to_string(),
             transport,
         }
     }

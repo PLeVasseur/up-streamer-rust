@@ -21,16 +21,29 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
 use std::thread;
-use up_rust::{UAuthority, UCode, UListener, UMessage, UStatus, UTransport, UUIDBuilder, UUri};
+use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUIDBuilder, UUri};
 
 const USTREAMER_TAG: &str = "UStreamer:";
 const USTREAMER_FN_NEW_TAG: &str = "new():";
 const USTREAMER_FN_ADD_FORWARDING_RULE_TAG: &str = "add_forwarding_rule():";
 const USTREAMER_FN_DELETE_FORWARDING_RULE_TAG: &str = "delete_forwarding_rule():";
 
-fn uauthority_to_uuri(authority: UAuthority) -> UUri {
+fn uauthority_to_uuri(authority_name: &str) -> UUri {
     UUri {
-        authority: Some(authority).into(),
+        authority_name: authority_name.to_string(),
+        ue_id: 0x0000_FFFF,            // any instance, any service
+        ue_version_major: 0xFF,        // any
+        resource_id: 0xFFFF,           // any
+        ..Default::default()
+    }
+}
+
+fn any_uuri() -> UUri {
+    UUri {
+        authority_name: "*".to_string(),
+        ue_id: 0x0000_FFFF,            // any instance, any service
+        ue_version_major: 0xFF,        // any
+        resource_id: 0xFFFF,           // any
         ..Default::default()
     }
 }
@@ -39,8 +52,8 @@ fn uauthority_to_uuri(authority: UAuthority) -> UUri {
 // forwarding rules or delete those rules which don't exist
 type ForwardingRules = Mutex<
     HashSet<(
-        UAuthority,
-        UAuthority,
+        String,
+        String,
         ComparableTransport,
         ComparableTransport,
     )>,
@@ -119,7 +132,7 @@ const FORWARDING_LISTENERS_FN_INSERT_TAG: &str = "insert:";
 const FORWARDING_LISTENERS_FN_REMOVE_TAG: &str = "remove:";
 
 type ForwardingListenersContainer =
-    Mutex<HashMap<(ComparableTransport, UAuthority), (usize, Arc<ForwardingListener>)>>;
+    Mutex<HashMap<(ComparableTransport, String), (usize, Arc<ForwardingListener>)>>;
 
 // we must have only a single listener per in UTransport and out UAuthority
 struct ForwardingListeners {
@@ -136,7 +149,7 @@ impl ForwardingListeners {
     pub async fn insert(
         &self,
         in_transport: Arc<dyn UTransport>,
-        out_authority: UAuthority,
+        out_authority: &str,
         forwarding_id: &str,
         out_sender: Sender<Arc<UMessage>>,
     ) -> Option<Arc<ForwardingListener>> {
@@ -145,12 +158,12 @@ impl ForwardingListeners {
         let mut forwarding_listeners = self.listeners.lock().await;
 
         let (active, forwarding_listener) = forwarding_listeners
-            .entry((in_comparable_transport.clone(), out_authority.clone()))
+            .entry((in_comparable_transport.clone(), out_authority.to_string()))
             .or_insert_with(|| {
                 let forwarding_listener = Arc::new(ForwardingListener::new(forwarding_id, out_sender));
 
                 let reg_res = task::block_on(in_transport
-                    .register_listener(uauthority_to_uuri(out_authority), forwarding_listener.clone()));
+                    .register_listener(&uauthority_to_uuri(out_authority), Some(&any_uuri()), forwarding_listener.clone()));
 
                 if let Err(err) = reg_res {
                     warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_INSERT_TAG} unable to register listener, error: {err}");
@@ -172,14 +185,14 @@ impl ForwardingListeners {
         }
     }
 
-    pub async fn remove(&self, in_transport: Arc<dyn UTransport>, out_authority: UAuthority) {
+    pub async fn remove(&self, in_transport: Arc<dyn UTransport>, out_authority: &str) {
         let in_comparable_transport = ComparableTransport::new(in_transport.clone());
 
         let mut forwarding_listeners = self.listeners.lock().await;
 
         let active_num = {
             let Some((active, _)) = forwarding_listeners
-                .get_mut(&(in_comparable_transport.clone(), out_authority.clone()))
+                .get_mut(&(in_comparable_transport.clone(), out_authority.to_string()))
             else {
                 warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} no such out_comparable_transport, out_authority: {out_authority:?}");
                 return;
@@ -190,12 +203,13 @@ impl ForwardingListeners {
 
         if active_num == 0 {
             let removed =
-                forwarding_listeners.remove(&(in_comparable_transport, out_authority.clone()));
+                forwarding_listeners.remove(&(in_comparable_transport, out_authority.to_string()));
             warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} removing ForwardingListener, out_authority: {out_authority:?}");
             if let Some((_, forwarding_listener)) = removed {
                 warn!("ForwardingListeners::remove: ForwardingListener found we can remove, out_authority: {out_authority:?}");
                 let unreg_res = task::block_on(in_transport.unregister_listener(
-                    uauthority_to_uuri(out_authority.clone()),
+                    &uauthority_to_uuri(out_authority),
+                    Some(&any_uuri()),
                     forwarding_listener,
                 ));
 
@@ -223,7 +237,7 @@ impl ForwardingListeners {
 /// ```
 /// use std::sync::Arc;
 /// use async_std::sync::Mutex;
-/// use up_rust::{Number, UAuthority, UListener, UTransport};
+/// use up_rust::{UListener, UTransport};
 /// use up_streamer::{Endpoint, UStreamer};
 /// # pub mod up_client_foo {
 /// #     use std::sync::Arc;
@@ -244,17 +258,23 @@ impl ForwardingListeners {
 /// #         }
 /// #
 /// #         async fn register_listener(
-/// #             &self,
-/// #             topic: UUri,
-/// #             _listener: Arc<dyn UListener>,
+/// #                     &self,
+/// #                     source_filter: &UUri,
+/// #                     sink_filter: Option<&UUri>,
+/// #                     listener: Arc<dyn UListener>,
 /// #         ) -> Result<(), UStatus> {
-/// #             println!("UPClientFoo: registering topic: {:?}", topic);
+/// #             println!("UPClientFoo: registering source_filter: {:?}", source_filter);
 /// #             Ok(())
 /// #         }
 /// #
-/// #         async fn unregister_listener(&self, topic: UUri, _listener: Arc<dyn UListener>) -> Result<(), UStatus> {
+/// #         async fn unregister_listener(
+/// #                     &self,
+/// #                     source_filter: &UUri,
+/// #                     sink_filter: Option<&UUri>,
+/// #                     listener: Arc<dyn UListener>,
+/// #         ) -> Result<(), UStatus> {
 /// #             println!(
-/// #                 "UPClientFoo: unregistering topic: {topic:?}"
+/// #                 "UPClientFoo: unregistering source_filter: {source_filter:?}"
 /// #             );
 /// #             Ok(())
 /// #         }
@@ -316,20 +336,12 @@ impl ForwardingListeners {
 /// let remote_transport: Arc<dyn UTransport> = Arc::new(up_client_bar::UPClientBar::new());
 ///
 /// // Local endpoint
-/// let local_authority = UAuthority {
-///     name: Some("local".to_string()),
-///     number: Some(Number::Ip(vec![192, 168, 1, 100])),
-///     ..Default::default()
-/// };
-/// let local_endpoint = Endpoint::new("local_endpoint", local_authority, local_transport.clone());
+/// let local_authority = "local";
+/// let local_endpoint = Endpoint::new("local_endpoint", local_authority, local_transport);
 ///
 /// // A remote endpoint
-/// let remote_authority = UAuthority {
-///     name: Some("remote".to_string()),
-///     number: Some(Number::Ip(vec![192, 168, 1, 200])),
-///     ..Default::default()
-/// };
-/// let remote_endpoint = Endpoint::new("remote_endpoint", remote_authority, remote_transport.clone());
+/// let remote_authority = "remote";
+/// let remote_endpoint = Endpoint::new("remote_endpoint", remote_authority, remote_transport);
 ///
 /// let mut streamer = UStreamer::new("hoge", 100);
 ///
@@ -502,7 +514,7 @@ impl UStreamer {
                     self.forwarding_listeners
                         .insert(
                             r#in.transport.clone(),
-                            out.authority.clone(),
+                            &out.authority,
                             &Self::forwarding_id(&r#in, &out),
                             out_sender,
                         )
@@ -578,7 +590,7 @@ impl UStreamer {
                     .remove(out.transport.clone())
                     .await;
                 self.forwarding_listeners
-                    .remove(r#in.transport.clone(), out.authority.clone())
+                    .remove(r#in.transport.clone(), &out.authority)
                     .await;
                 Ok(())
             }
@@ -714,7 +726,7 @@ mod tests {
     use crate::{Endpoint, UStreamer};
     use async_trait::async_trait;
     use std::sync::Arc;
-    use up_rust::{Number, UAuthority, UListener, UMessage, UStatus, UTransport, UUri};
+    use up_rust::{UListener, UMessage, UStatus, UTransport, UUri};
 
     pub struct UPClientFoo;
 
@@ -724,25 +736,31 @@ mod tests {
             todo!()
         }
 
-        async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
+        async fn receive(
+            &self,
+            _source_filter: &UUri,
+            _sink_filter: Option<&UUri>,
+        ) -> Result<UMessage, UStatus> {
             todo!()
         }
 
         async fn register_listener(
             &self,
-            topic: UUri,
+            source_filter: &UUri,
+            _sink_filter: Option<&UUri>,
             _listener: Arc<dyn UListener>,
         ) -> Result<(), UStatus> {
-            println!("UPClientFoo: registering topic: {:?}", topic);
+            println!("UPClientFoo: registering source_filter: {:?}", source_filter);
             Ok(())
         }
 
         async fn unregister_listener(
             &self,
-            topic: UUri,
+            source_filter: &UUri,
+            _sink_filter: Option<&UUri>,
             _listener: Arc<dyn UListener>,
         ) -> Result<(), UStatus> {
-            println!("UPClientFoo: unregistering topic: {topic:?}");
+            println!("UPClientFoo: unregistering source_filter: {:?}", source_filter);
             Ok(())
         }
     }
@@ -755,25 +773,31 @@ mod tests {
             todo!()
         }
 
-        async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
+        async fn receive(
+            &self,
+            _source_filter: &UUri,
+            _sink_filter: Option<&UUri>,
+        ) -> Result<UMessage, UStatus> {
             todo!()
         }
 
         async fn register_listener(
             &self,
-            topic: UUri,
+            source_filter: &UUri,
+            _sink_filter: Option<&UUri>,
             _listener: Arc<dyn UListener>,
         ) -> Result<(), UStatus> {
-            println!("UPClientBar: registering topic: {:?}", topic);
+            println!("UPClientBar: registering source_filter: {:?}", source_filter);
             Ok(())
         }
 
         async fn unregister_listener(
             &self,
-            topic: UUri,
+            source_filter: &UUri,
+            _sink_filter: Option<&UUri>,
             _listener: Arc<dyn UListener>,
         ) -> Result<(), UStatus> {
-            println!("UPClientBar: unregistering topic: {topic:?}");
+            println!("UPClientBar: unregistering source_filter: {:?}", source_filter);
             Ok(())
         }
     }
@@ -781,28 +805,20 @@ mod tests {
     #[async_std::test]
     async fn test_simple_with_a_single_input_and_output_endpoint() {
         // Local endpoint
-        let local_authority = UAuthority {
-            name: Some("local".to_string()),
-            number: Some(Number::Ip(vec![192, 168, 1, 100])),
-            ..Default::default()
-        };
+        let local_authority = "local";
         let local_transport: Arc<dyn UTransport> = Arc::new(UPClientFoo);
         let local_endpoint = Endpoint::new(
             "local_endpoint",
-            local_authority.clone(),
+            local_authority,
             local_transport.clone(),
         );
 
         // A remote endpoint
-        let remote_authority = UAuthority {
-            name: Some("remote".to_string()),
-            number: Some(Number::Ip(vec![192, 168, 1, 200])),
-            ..Default::default()
-        };
+        let remote_authority = "remote";
         let remote_transport: Arc<dyn UTransport> = Arc::new(UPClientBar);
         let remote_endpoint = Endpoint::new(
             "remote_endpoint",
-            remote_authority.clone(),
+            remote_authority,
             remote_transport.clone(),
         );
 
@@ -855,41 +871,29 @@ mod tests {
     #[async_std::test]
     async fn test_advanced_where_there_is_a_local_endpoint_and_two_remote_endpoints() {
         // Local endpoint
-        let local_authority = UAuthority {
-            name: Some("local".to_string()),
-            number: Some(Number::Ip(vec![192, 168, 1, 100])),
-            ..Default::default()
-        };
+        let local_authority = "local";
         let local_transport: Arc<dyn UTransport> = Arc::new(UPClientFoo);
         let local_endpoint = Endpoint::new(
             "local_endpoint",
-            local_authority.clone(),
+            local_authority,
             local_transport.clone(),
         );
 
         // Remote endpoint - A
-        let remote_authority_a = UAuthority {
-            name: Some("remote_a".to_string()),
-            number: Some(Number::Ip(vec![192, 168, 1, 200])),
-            ..Default::default()
-        };
+        let remote_authority_a = "remote_a";
         let remote_transport_a: Arc<dyn UTransport> = Arc::new(UPClientBar);
         let remote_endpoint_a = Endpoint::new(
             "remote_endpoint_a",
-            remote_authority_a.clone(),
+            remote_authority_a,
             remote_transport_a.clone(),
         );
 
         // Remote endpoint - B
-        let remote_authority_b = UAuthority {
-            name: Some("remote_b".to_string()),
-            number: Some(Number::Ip(vec![192, 168, 1, 201])),
-            ..Default::default()
-        };
+        let remote_authority_b = "remote_b";
         let remote_transport_b: Arc<dyn UTransport> = Arc::new(UPClientBar);
         let remote_endpoint_b = Endpoint::new(
             "remote_endpoint_b",
-            remote_authority_b.clone(),
+            remote_authority_b,
             remote_transport_b.clone(),
         );
 
@@ -930,41 +934,29 @@ mod tests {
     async fn test_advanced_where_there_is_a_local_endpoint_and_two_remote_endpoints_but_the_remote_endpoints_have_the_same_instance_of_utransport(
     ) {
         // Local endpoint
-        let local_authority = UAuthority {
-            name: Some("local".to_string()),
-            number: Some(Number::Ip(vec![192, 168, 1, 100])),
-            ..Default::default()
-        };
+        let local_authority = "local";
         let local_transport: Arc<dyn UTransport> = Arc::new(UPClientFoo);
         let local_endpoint = Endpoint::new(
             "local_endpoint",
-            local_authority.clone(),
+            local_authority,
             local_transport.clone(),
         );
 
         let remote_transport: Arc<dyn UTransport> = Arc::new(UPClientBar);
 
         // Remote endpoint - A
-        let remote_authority_a = UAuthority {
-            name: Some("remote_a".to_string()),
-            number: Some(Number::Ip(vec![192, 168, 1, 200])),
-            ..Default::default()
-        };
+        let remote_authority_a = "remote_a";
         let remote_endpoint_a = Endpoint::new(
             "remote_endpoint_a",
-            remote_authority_a.clone(),
+            remote_authority_a,
             remote_transport.clone(),
         );
 
         // Remote endpoint - B
-        let remote_authority_b = UAuthority {
-            name: Some("remote_b".to_string()),
-            number: Some(Number::Ip(vec![192, 168, 1, 201])),
-            ..Default::default()
-        };
+        let remote_authority_b = "remote_b";
         let remote_endpoint_b = Endpoint::new(
             "remote_endpoint_b",
-            remote_authority_b.clone(),
+            remote_authority_b,
             remote_transport.clone(),
         );
 
