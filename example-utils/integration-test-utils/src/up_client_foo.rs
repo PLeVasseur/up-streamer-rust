@@ -21,16 +21,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use up_rust::{
-    ComparableListener, UAttributes, UAuthority, UCode, UListener, UMessage, UMessageType, UStatus,
-    UTransport, UUri,
+    ComparableListener, UAttributes, UCode, UListener, UMessage, UMessageType, UStatus, UTransport,
+    UUri,
 };
+
+type TopicListenerMap = Arc<Mutex<HashMap<(UUri, Option<UUri>), HashSet<ComparableListener>>>>;
+type AuthorityListenerMap = Arc<Mutex<HashMap<String, HashSet<ComparableListener>>>>;
 
 pub struct UPClientFoo {
     name: Arc<String>,
     protocol_receiver: Receiver<Result<UMessage, UStatus>>,
     protocol_sender: Sender<Result<UMessage, UStatus>>,
-    listeners: Arc<Mutex<HashMap<UUri, HashSet<ComparableListener>>>>,
-    authority_listeners: Arc<Mutex<HashMap<UAuthority, HashSet<ComparableListener>>>>,
+    listeners: TopicListenerMap,
+    authority_listeners: AuthorityListenerMap,
     pub times_received: Arc<AtomicU64>,
 }
 
@@ -41,10 +44,8 @@ impl UPClientFoo {
         protocol_sender: Sender<Result<UMessage, UStatus>>,
     ) -> Self {
         let name = Arc::new(name.to_string());
-        let listeners: Arc<Mutex<HashMap<UUri, HashSet<ComparableListener>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        let authority_listeners: Arc<Mutex<HashMap<UAuthority, HashSet<ComparableListener>>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let listeners = Arc::new(Mutex::new(HashMap::new()));
+        let authority_listeners = Arc::new(Mutex::new(HashMap::new()));
 
         let times_received = Arc::new(AtomicU64::new(0));
 
@@ -90,7 +91,7 @@ impl UPClientFoo {
                                         authority_listeners.clone(),
                                         times_received.clone(),
                                     )
-                                        .await;
+                                    .await;
                                 }
                                 UMessageType::UMESSAGE_TYPE_PUBLISH => {
                                     unimplemented!("Still need to handle Publish messages");
@@ -105,7 +106,7 @@ impl UPClientFoo {
                                         authority_listeners.clone(),
                                         times_received.clone(),
                                     )
-                                        .await;
+                                    .await;
                                 }
                                 UMessageType::UMESSAGE_TYPE_RESPONSE => {
                                     UPClientFoo::process_message(
@@ -117,7 +118,7 @@ impl UPClientFoo {
                                         authority_listeners.clone(),
                                         times_received.clone(),
                                     )
-                                        .await;
+                                    .await;
                                 }
                                 _ => {
                                     debug!("No matching type or an error occurred!");
@@ -138,57 +139,65 @@ impl UPClientFoo {
         msg: &UMessage,
         attr: &UAttributes,
         msg_type: &str,
-        listeners: Arc<Mutex<HashMap<UUri, HashSet<ComparableListener>>>>,
-        authority_listeners: Arc<Mutex<HashMap<UAuthority, HashSet<ComparableListener>>>>,
+        listeners: TopicListenerMap,
+        authority_listeners: AuthorityListenerMap,
         times_received: Arc<AtomicU64>,
     ) {
         let sink_uuri = attr.sink.as_ref();
         debug!("{}: {msg_type} sink uuri: {sink_uuri:?}", name);
         match sink_uuri {
             None => {
-                debug!("{}: No sink uuri!", name);
+                debug!("{}: No source uuri!", name);
             }
-            Some(topic) => {
+            Some(sink) => {
+                let authority_name = sink.authority_name.clone();
                 let authority_listeners = authority_listeners.lock().await;
-                if let Some(authority) = topic.authority.as_ref() {
-                    debug!("{}: {msg_type}: authority: {authority:?}", name);
+                debug!("{}: {msg_type}: authority_name: {authority_name}", name);
 
-                    let authority_listeners = authority_listeners.get(authority);
+                let authority_listeners = authority_listeners.get(&authority_name);
+                if let Some(authority_listeners) = authority_listeners {
+                    debug!(
+                        "{}: {msg_type}: authority listeners found: {authority_name:?}",
+                        name
+                    );
 
-                    if let Some(authority_listeners) = authority_listeners {
+                    for (authority_listener_num, al) in authority_listeners.iter().enumerate() {
                         debug!(
-                            "{}: {msg_type}: authority listeners found: {authority:?}",
-                            name
+                            "{}: {msg_type}: Authority listener num: {}",
+                            name, authority_listener_num
                         );
-
-                        for (authority_listener_num, al) in authority_listeners.iter().enumerate() {
-                            debug!(
-                                "{}: {msg_type}: Authority listener num: {}",
-                                name, authority_listener_num
-                            );
-                            al.on_receive(msg.clone()).await;
-                        }
-                    } else {
-                        debug!(
-                            "{}: {msg_type}: authority no listeners: {authority:?}",
-                            name
-                        );
+                        al.on_receive(msg.clone()).await;
                     }
+                } else {
+                    debug!(
+                        "{}: {msg_type}: authority no listeners: {authority_name:?}",
+                        name
+                    );
                 }
 
                 let listeners = listeners.lock().await;
-                let topic_listeners = listeners.get(topic);
+                let topic_listeners = listeners.get(&(
+                    attr.source.as_ref().cloned().unwrap(),
+                    attr.sink.as_ref().cloned(),
+                ));
 
                 if let Some(topic_listeners) = topic_listeners {
-                    debug!("{}: {msg_type}: topic: {topic:?} -- listeners found", name);
+                    debug!(
+                        "{}: {msg_type}: source: {:?} sink: {:?} -- topic listeners found",
+                        name,
+                        attr.source.as_ref(),
+                        attr.sink.as_ref()
+                    );
                     times_received.fetch_add(1, Ordering::SeqCst);
                     for tl in topic_listeners.iter() {
                         tl.on_receive(msg.clone()).await;
                     }
                 } else {
                     debug!(
-                        "{}: {msg_type}: topic: {topic:?} -- listeners not found",
-                        name
+                        "{}: {msg_type}: source: {:?} sink: {:?} -- listeners not found",
+                        name,
+                        attr.source.as_ref(),
+                        attr.sink.as_ref()
                     );
                 }
             }
@@ -209,48 +218,78 @@ impl UTransport for UPClientFoo {
         }
     }
 
-    async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
+    async fn receive(
+        &self,
+        _source_filter: &UUri,
+        _sink_filter: Option<&UUri>,
+    ) -> Result<UMessage, UStatus> {
         unimplemented!()
     }
 
     async fn register_listener(
         &self,
-        topic: UUri,
+        source_filter: &UUri,
+        sink_filter: Option<&UUri>,
         listener: Arc<dyn UListener>,
     ) -> Result<(), UStatus> {
-        debug!("{}: registering listener for: {topic:?}", &self.name);
+        debug!(
+            "{}: registering listener for: source: {:?} sink: {:?}",
+            self.name, source_filter, sink_filter
+        );
 
-        return if topic.resource.is_none() && topic.entity.is_none() {
-            debug!("{}: registering authority listener", &self.name);
+        let sink_for_specific = {
+            if let Some(sink) = sink_filter {
+                sink.authority_name != "*"
+            } else {
+                false
+            }
+        };
 
+        return if source_filter.authority_name == "*" && sink_for_specific {
+            let sink_authority = sink_filter.unwrap().clone().authority_name;
             let mut authority_listeners = self.authority_listeners.lock().await;
-            let Some(authority) = topic.authority.as_ref() else {
-                return Err(UStatus::fail_with_code(
-                    UCode::INVALID_ARGUMENT,
-                    "No authority provided!",
-                ));
-            };
+            let authority = sink_authority;
+            debug!(
+                "{}: registering authority listener on authority: {}",
+                &self.name, authority
+            );
             let authority_listeners = authority_listeners.entry(authority.clone()).or_default();
             let comparable_listener = ComparableListener::new(listener);
             let inserted = authority_listeners.insert(comparable_listener);
 
             match inserted {
-                true => Ok(()),
+                true => {
+                    debug!("{}: successfully registered authority listener for: authority: {}", &self.name, authority);
+
+                    Ok(())
+                },
                 false => Err(UStatus::fail_with_code(
                     UCode::ALREADY_EXISTS,
-                    "UUri and listener already registered!",
+                    format!("{}: UUri and listener already registered! failed to register authority listener for: authority: {}", &self.name, authority)
                 )),
             }
         } else {
-            debug!("{}: registering regular listener", &self.name);
+            debug!(
+                "{}: registering regular listener for: source: {:?} sink: {:?}",
+                &self.name, source_filter, sink_filter
+            );
 
             let mut listeners = self.listeners.lock().await;
-            let topic_listeners = listeners.entry(topic).or_default();
+            let topic_listeners = listeners
+                .entry((source_filter.clone(), sink_filter.cloned()))
+                .or_default();
             let comparable_listener = ComparableListener::new(listener);
             let inserted = topic_listeners.insert(comparable_listener);
 
             match inserted {
-                true => Ok(()),
+                true => {
+                    debug!(
+                        "{}: successfully registered regular listener for: source: {:?} sink: {:?}",
+                        &self.name, source_filter, sink_filter
+                    );
+
+                    Ok(())
+                }
                 false => Err(UStatus::fail_with_code(
                     UCode::ALREADY_EXISTS,
                     "UUri and listener already registered!",
@@ -261,29 +300,34 @@ impl UTransport for UPClientFoo {
 
     async fn unregister_listener(
         &self,
-        topic: UUri,
+        source_filter: &UUri,
+        sink_filter: Option<&UUri>,
         listener: Arc<dyn UListener>,
     ) -> Result<(), UStatus> {
-        debug!("{} unregistering listener for topic: {topic:?}", &self.name);
+        debug!(
+            "{} unregistering listener for source_filter: {source_filter:?}",
+            &self.name
+        );
 
-        return if topic.resource.is_none() && topic.entity.is_none() {
+        let sink_for_any = {
+            if let Some(sink) = sink_filter {
+                sink.authority_name == "*"
+            } else {
+                false
+            }
+        };
+
+        return if source_filter.authority_name != "*" && sink_for_any {
             debug!("{}: unregistering authority listener", &self.name);
 
             let mut authority_listeners = self.authority_listeners.lock().await;
 
-            let Some(authority) = topic.authority.as_ref() else {
-                let err = UStatus::fail_with_code(
-                    UCode::INVALID_ARGUMENT,
-                    format!("Missing authority portion of topic: {topic:?}"),
-                );
-                error!("{} {err:?}", &self.name);
-                return Err(err);
-            };
+            let authority = source_filter.authority_name.clone();
 
-            let Some(authority_listeners) = authority_listeners.get_mut(authority) else {
+            let Some(authority_listeners) = authority_listeners.get_mut(&authority) else {
                 let err = UStatus::fail_with_code(
                     UCode::NOT_FOUND,
-                    format!("No authority listeners for topic: {topic:?}"),
+                    format!("{} No authority listeners for: source: {:?} sink: {:?} -- unable to unregister", self.name, source_filter, sink_filter)
                 );
                 error!("{} {err:?}", &self.name);
                 return Err(err);
@@ -296,7 +340,7 @@ impl UTransport for UPClientFoo {
                 false => {
                     let err = UStatus::fail_with_code(
                         UCode::NOT_FOUND,
-                        format!("Unable to find authority listener for topic: {topic:?}"),
+                        format!("{} Unable to find authority listener for: source: {:?} sink: {:?} -- unable to unregister", self.name, source_filter, sink_filter)
                     );
                     error!("{} {err:?}", &self.name);
                     Err(err)
@@ -304,7 +348,9 @@ impl UTransport for UPClientFoo {
             }
         } else {
             let mut listeners = self.listeners.lock().await;
-            let Some(topic_listeners) = listeners.get_mut(&topic) else {
+            let Some(topic_listeners) =
+                listeners.get_mut(&(source_filter.clone(), sink_filter.cloned()))
+            else {
                 return Err(UStatus::fail_with_code(
                     UCode::NOT_FOUND,
                     "No listeners registered for topic!",

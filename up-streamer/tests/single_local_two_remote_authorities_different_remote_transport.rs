@@ -54,11 +54,11 @@ async fn single_local_two_remote_authorities_different_remote_transport() {
     let mut ustreamer = UStreamer::new("foo_bar_streamer", 3000);
 
     // setting up endpoints between authorities and protocols
-    let local_endpoint = Endpoint::new("local_endpoint", local_authority(), utransport_foo);
+    let local_endpoint = Endpoint::new("local_endpoint", &local_authority(), utransport_foo);
     let remote_endpoint_a =
-        Endpoint::new("remote_endpoint_a", remote_authority_a(), utransport_bar_1);
+        Endpoint::new("remote_endpoint_a", &remote_authority_a(), utransport_bar_1);
     let remote_endpoint_b =
-        Endpoint::new("remote_endpoint_b", remote_authority_b(), utransport_bar_2);
+        Endpoint::new("remote_endpoint_b", &remote_authority_b(), utransport_bar_2);
 
     // adding local to remote_a routing
     let add_forwarding_rule_res = ustreamer

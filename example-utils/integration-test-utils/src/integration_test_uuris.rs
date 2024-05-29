@@ -1,53 +1,33 @@
-use up_rust::{Number, UAuthority, UEntity, UUri};
+use up_rust::UUri;
 
-pub fn local_authority() -> UAuthority {
-    UAuthority {
-        name: Some("local_authority".to_string()),
-        number: Number::Ip(vec![192, 168, 1, 100]).into(),
-        ..Default::default()
-    }
+pub fn local_authority() -> String {
+    "local_authority".to_string()
 }
 
-pub fn remote_authority_a() -> UAuthority {
-    UAuthority {
-        name: Some("remote_authority_a".to_string()),
-        number: Number::Ip(vec![192, 168, 1, 200]).into(),
-        ..Default::default()
-    }
+pub fn remote_authority_a() -> String {
+    "remote_authority_a".to_string()
 }
 
-pub fn remote_authority_b() -> UAuthority {
-    UAuthority {
-        name: Some("remote_authority_b".to_string()),
-        number: Number::Ip(vec![192, 168, 1, 201]).into(),
-        ..Default::default()
-    }
+pub fn remote_authority_b() -> String {
+    "remote_authority_b".to_string()
 }
 
 pub fn local_client_uuri(id: u32) -> UUri {
     UUri {
-        authority: Some(local_authority()).into(),
-        entity: Some(UEntity {
-            name: format!("local_entity_{id}").to_string(),
-            id: Some(id),
-            version_major: Some(1),
-            ..Default::default()
-        })
-        .into(),
+        authority_name: local_authority(),
+        ue_id: id,
+        ue_version_major: 1,
+        resource_id: 2,
         ..Default::default()
     }
 }
 
-pub fn remote_client_uuri(authority: UAuthority, id: u32) -> UUri {
+pub fn remote_client_uuri(authority: String, id: u32) -> UUri {
     UUri {
-        authority: Some(authority).into(),
-        entity: Some(UEntity {
-            name: format!("remote_entity_{id}").to_string(),
-            id: Some(id),
-            version_major: Some(1),
-            ..Default::default()
-        })
-        .into(),
+        authority_name: authority,
+        ue_id: id,
+        ue_version_major: 1,
+        resource_id: 2,
         ..Default::default()
     }
 }
