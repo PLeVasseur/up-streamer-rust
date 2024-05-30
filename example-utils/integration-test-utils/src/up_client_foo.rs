@@ -142,14 +142,14 @@ impl UPClientFoo {
         authority_listeners: Arc<Mutex<HashMap<String, HashSet<ComparableListener>>>>,
         times_received: Arc<AtomicU64>,
     ) {
-        let source_uuri = attr.source.as_ref();
-        debug!("{}: {msg_type} source uuri: {source_uuri:?}", name);
-        match source_uuri {
+        let sink_uuri = attr.sink.as_ref();
+        debug!("{}: {msg_type} sink uuri: {sink_uuri:?}", name);
+        match sink_uuri {
             None => {
                 debug!("{}: No source uuri!", name);
             }
-            Some(source) => {
-                let authority_name = source.authority_name.clone();
+            Some(sink) => {
+                let authority_name = sink.authority_name.clone();
                 let authority_listeners = authority_listeners.lock().await;
                 debug!("{}: {msg_type}: authority_name: {authority_name}", name);
 
@@ -175,7 +175,7 @@ impl UPClientFoo {
                 }
 
                 let listeners = listeners.lock().await;
-                let topic_listeners = listeners.get(&(source.clone(), attr.sink.as_ref().cloned()));
+                let topic_listeners = listeners.get(&(attr.source.as_ref().cloned().unwrap(), attr.sink.as_ref().cloned()));
 
                 if let Some(topic_listeners) = topic_listeners {
                     debug!("{}: {msg_type}: source: {:?} sink: {:?} -- topic listeners found", name, attr.source.as_ref(), attr.sink.as_ref());
@@ -236,21 +236,23 @@ impl UTransport for UPClientFoo {
         };
 
         return if source_filter.authority_name == "*" && sink_for_specific {
-            debug!("{}: registering authority listener", &self.name);
-
             let sink_authority = sink_filter.unwrap().clone().authority_name;
-
             let mut authority_listeners = self.authority_listeners.lock().await;
             let authority = sink_authority;
-            let authority_listeners = authority_listeners.entry(authority).or_default();
+            debug!("{}: registering authority listener on authority: {}", &self.name, authority);
+            let authority_listeners = authority_listeners.entry(authority.clone()).or_default();
             let comparable_listener = ComparableListener::new(listener);
             let inserted = authority_listeners.insert(comparable_listener);
 
             match inserted {
-                true => Ok(()),
+                true => {
+                    debug!("{}: successfully registered authority listener for: authority: {}", &self.name, authority);
+
+                    Ok(())
+                },
                 false => Err(UStatus::fail_with_code(
                     UCode::ALREADY_EXISTS,
-                    "UUri and listener already registered!",
+                    format!("{}: UUri and listener already registered! failed to register authority listener for: authority: {}", &self.name, authority)
                 )),
             }
         } else {
