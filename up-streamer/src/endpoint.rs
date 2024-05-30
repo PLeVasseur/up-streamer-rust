@@ -42,7 +42,11 @@ const ENDPOINT_FN_NEW_TAG: &str = "new():";
 /// #             todo!()
 /// #         }
 /// #
-/// #         async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
+/// #         async fn receive(
+/// #             &self,
+/// #            _source_filter: &UUri,
+/// #            _sink_filter: Option<&UUri>,
+/// #         ) -> Result<UMessage, UStatus> {
 /// #             todo!()
 /// #         }
 /// #

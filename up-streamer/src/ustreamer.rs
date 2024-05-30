@@ -253,7 +253,11 @@ impl ForwardingListeners {
 /// #             todo!()
 /// #         }
 /// #
-/// #         async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
+/// #         async fn receive(
+/// #             &self,
+/// #            _source_filter: &UUri,
+/// #            _sink_filter: Option<&UUri>,
+/// #         ) -> Result<UMessage, UStatus> {
 /// #             todo!()
 /// #         }
 /// #
@@ -299,22 +303,32 @@ impl ForwardingListeners {
 /// #             todo!()
 /// #         }
 /// #
-/// #         async fn receive(&self, _topic: UUri) -> Result<UMessage, UStatus> {
+/// #         async fn receive(
+/// #             &self,
+/// #            _source_filter: &UUri,
+/// #            _sink_filter: Option<&UUri>,
+/// #         ) -> Result<UMessage, UStatus> {
 /// #             todo!()
 /// #         }
 /// #
 /// #         async fn register_listener(
-/// #             &self,
-/// #             topic: UUri,
-/// #             _listener: Arc<dyn UListener>,
+/// #                     &self,
+/// #                     source_filter: &UUri,
+/// #                     sink_filter: Option<&UUri>,
+/// #                     listener: Arc<dyn UListener>,
 /// #         ) -> Result<(), UStatus> {
-/// #             println!("UPClientBar: registering topic: {:?}", topic);
+/// #             println!("UPClientBar: registering source_filter: {:?}", source_filter);
 /// #             Ok(())
 /// #         }
 /// #
-/// #         async fn unregister_listener(&self, topic: UUri, _listener: Arc<dyn UListener>) -> Result<(), UStatus> {
+/// #         async fn unregister_listener(
+/// #                     &self,
+/// #                     source_filter: &UUri,
+/// #                     sink_filter: Option<&UUri>,
+/// #                     listener: Arc<dyn UListener>,
+/// #         ) -> Result<(), UStatus> {
 /// #             println!(
-/// #                 "UPClientFoo: unregistering topic: {topic:?}"
+/// #                 "UPClientBar: unregistering source_filter: {source_filter:?}"
 /// #             );
 /// #             Ok(())
 /// #         }
