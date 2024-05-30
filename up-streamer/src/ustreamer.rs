@@ -163,7 +163,7 @@ impl ForwardingListeners {
                 let forwarding_listener = Arc::new(ForwardingListener::new(forwarding_id, out_sender));
 
                 let reg_res = task::block_on(in_transport
-                    .register_listener(&uauthority_to_uuri(out_authority), Some(&any_uuri()), forwarding_listener.clone()));
+                    .register_listener(&any_uuri(), Some(&uauthority_to_uuri(out_authority)), forwarding_listener.clone()));
 
                 if let Err(err) = reg_res {
                     warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_INSERT_TAG} unable to register listener, error: {err}");

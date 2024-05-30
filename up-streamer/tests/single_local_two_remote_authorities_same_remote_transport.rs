@@ -33,7 +33,7 @@ use std::time::Duration;
 use up_rust::{UListener, UTransport};
 use up_streamer::{Endpoint, UStreamer};
 
-const DURATION_TO_RUN_CLIENTS: u128 = 1000;
+const DURATION_TO_RUN_CLIENTS: u128 = 1_000;
 const SENT_MESSAGE_VEC_CAPACITY: usize = 10_000;
 
 #[async_std::test]

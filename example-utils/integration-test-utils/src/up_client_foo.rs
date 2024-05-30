@@ -223,9 +223,9 @@ impl UTransport for UPClientFoo {
     ) -> Result<(), UStatus> {
         debug!("{}: registering listener for: source: {:?} sink: {:?}", self.name, source_filter, sink_filter);
 
-        let sink_for_any = {
+        let sink_for_specific = {
             if let Some(sink) = sink_filter {
-                if sink.authority_name == "*" {
+                if sink.authority_name != "*" {
                     true
                 } else {
                     false
@@ -235,12 +235,14 @@ impl UTransport for UPClientFoo {
             }
         };
 
-        return if source_filter.authority_name != "*" && sink_for_any {
+        return if source_filter.authority_name == "*" && sink_for_specific {
             debug!("{}: registering authority listener", &self.name);
 
+            let sink_authority = sink_filter.unwrap().clone().authority_name;
+
             let mut authority_listeners = self.authority_listeners.lock().await;
-            let authority = source_filter.authority_name.clone();
-            let authority_listeners = authority_listeners.entry(authority.to_string()).or_default();
+            let authority = sink_authority;
+            let authority_listeners = authority_listeners.entry(authority).or_default();
             let comparable_listener = ComparableListener::new(listener);
             let inserted = authority_listeners.insert(comparable_listener);
 
