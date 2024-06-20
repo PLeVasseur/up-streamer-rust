@@ -4403,6 +4403,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "up-linux-streamer-plugin"
+version = "0.1.5-dev"
+
+[[package]]
 name = "up-rust"
 version = "0.1.5"
 source = "git+https://github.com/eclipse-uprotocol/up-rust?rev=3a50104421a801d52e1d9c68979db54c013ce43d#3a50104421a801d52e1d9c68979db54c013ce43d"

@@ -13,7 +13,7 @@
 resolver = "2"
 members = [
     "example-utils/hello-world-protos",
-    "up-linux-streamer",
+    "up-linux-streamer", "up-linux-streamer-plugin",
     "up-streamer",
 ]
 
