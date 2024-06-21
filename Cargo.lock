@@ -4405,6 +4405,19 @@ dependencies = [
 [[package]]
 name = "up-linux-streamer-plugin"
 version = "0.1.5-dev"
+dependencies = [
+ "async-std",
+ "const_format",
+ "futures",
+ "git-version",
+ "serde_json",
+ "tracing",
+ "zenoh",
+ "zenoh-core",
+ "zenoh-plugin-trait",
+ "zenoh-result",
+ "zenoh-util",
+]
 
 [[package]]
 name = "up-rust"
