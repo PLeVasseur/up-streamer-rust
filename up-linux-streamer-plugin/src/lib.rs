@@ -3,6 +3,9 @@
 use futures::select;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::env;
+use std::fs::canonicalize;
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering::Relaxed},
     Arc, Mutex,
@@ -17,6 +20,10 @@ use zenoh_plugin_trait::{plugin_long_version, plugin_version, Plugin, PluginCont
 use zenoh_result::{bail, ZResult};
 use tracing::{error, trace};
 use async_std::task;
+use up_rust::UTransport;
+use up_transport_vsomeip::UPTransportVsomeip;
+use up_transport_zenoh::UPClientZenoh;
+use up_streamer::{Endpoint, UStreamer};
 
 // The struct implementing the ZenohPlugin and ZenohPlugin traits
 pub struct ExamplePlugin {}
@@ -152,14 +159,14 @@ async fn run(runtime: Runtime, selector: KeyExpr<'_>, flag: Arc<AtomicBool>) {
 
     // // create a zenoh Session that shares the same Runtime than zenohd
     // TODO: For some reason we crash out here... should ask @CY
-    // let session_res = zenoh::init(runtime).res().await;
-    // if let Err(err) = session_res {
-    //     // TODO: Just the act of passing in the runtime causes the core dump
-    //     //  so we cannot see any kind of error here
-    //     error!("Unable to initialize session from passed in runtime: {err:?}");
-    // }
-    // trace!("up-linux-streamer-plugin: after initiating session");
-    //
+    let session_res = zenoh::init(runtime).res().await;
+    if let Err(err) = session_res {
+        // TODO: Just the act of passing in the runtime causes the core dump
+        //  so we cannot see any kind of error here
+        error!("Unable to initialize session from passed in runtime: {err:?}");
+    }
+    trace!("up-linux-streamer-plugin: after initiating session");
+
     // // the HasMap used as a storage by this example of storage plugin
     // let mut stored: HashMap<String, Sample> = HashMap::new();
     //
@@ -173,9 +180,89 @@ async fn run(runtime: Runtime, selector: KeyExpr<'_>, flag: Arc<AtomicBool>) {
     // debug!("up-linux-streamer-plugin: Create Queryable on {}", selector);
     // let queryable = session.declare_queryable(&selector).res().await.unwrap();
 
+    env_logger::init();
+
+    let mut streamer = UStreamer::new("up-linux-streamer", 10000);
+
+    let exe_path = match env::current_exe() {
+        Ok(exe_path) => {
+            if let Some(exe_dir) = exe_path.parent() {
+                println!("The binary is located in: {}", exe_dir.display());
+                exe_path
+            } else {
+                panic!("Failed to determine the directory of the executable.");
+            }
+        }
+        Err(e) => {
+            panic!("Failed to get the executable path: {}", e);
+        }
+    };
+    tracing::log::trace!("exe_path: {exe_path:?}");
+    let exe_path_parent = exe_path.parent();
+    let Some(exe_path_parent) = exe_path_parent else {
+        panic!("Unable to get parent path");
+    };
+    tracing::log::trace!("exe_path_parent: {exe_path_parent:?}");
+
+    // let crate_dir = env!("CARGO_MANIFEST_DIR");
+    // // TODO: Make configurable to pass the path to the vsomeip config as a command line argument
+    let vsomeip_config = PathBuf::from(exe_path_parent).join("vsomeip-configs/point_to_point.json");
+    tracing::log::trace!("vsomeip_config: {vsomeip_config:?}");
+    let vsomeip_config = canonicalize(vsomeip_config).ok();
+    tracing::log::trace!("vsomeip_config: {vsomeip_config:?}");
+
+    // There will be a single vsomeip_transport, as there is a connection into device and a streamer
+    // TODO: Add error handling if we fail to create a UPTransportVsomeip
+    let vsomeip_transport: Arc<dyn UTransport> = Arc::new(
+        UPTransportVsomeip::new_with_config(&"linux".to_string(), 10, &vsomeip_config.unwrap())
+            .unwrap(),
+    );
+
+    // TODO: Probably make somewhat configurable?
+    let zenoh_config = Config::default();
+    // TODO: Add error handling if we fail to create a UPClientZenoh
+    let zenoh_transport: Arc<dyn UTransport> = Arc::new(
+        UPClientZenoh::new(zenoh_config, "linux".to_string())
+            .await
+            .unwrap(),
+    );
+    // TODO: Make configurable to pass the name of the mE authority as a  command line argument
+    let vsomeip_endpoint = Endpoint::new(
+        "vsomeip_endpoint",
+        "me_authority",
+        vsomeip_transport.clone(),
+    );
+
+    // TODO: Make configurable the ability to have perhaps a config file we pass in that has all the
+    //  relevant authorities over Zenoh that should be forwarded
+    let zenoh_transport_endpoint_a = Endpoint::new(
+        "zenoh_transport_endpoint_a",
+        "linux", // simple initial case of streamer + intended high compute destination on same device
+        zenoh_transport.clone(),
+    );
+
+    // TODO: Per Zenoh endpoint configured, run these two rules
+    let forwarding_res = streamer
+        .add_forwarding_rule(vsomeip_endpoint.clone(), zenoh_transport_endpoint_a.clone())
+        .await;
+
+    if let Err(err) = forwarding_res {
+        error!("Unable to add forwarding result: {err:?}");
+    }
+
+    let forwarding_res =streamer
+        .add_forwarding_rule(zenoh_transport_endpoint_a.clone(), vsomeip_endpoint.clone())
+        .await;
+
+    if let Err(err) = forwarding_res {
+        error!("Unable to add forwarding result: {err:?}");
+    }
+
     // Plugin's event loop, while the flag is true
     let mut counter = 1;
     while flag.load(Relaxed) {
+
+        // TODO: Need to implement signalling to stop uStreamer
 
         task::sleep(Duration::from_millis(1000)).await;
         trace!("counter: {counter}");
