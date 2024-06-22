@@ -50,22 +50,36 @@ impl Plugin for ExamplePlugin {
     fn start(name: &str, runtime: &Self::StartArgs) -> ZResult<Self::Instance> {
         zenoh_util::try_init_log_from_env();
         trace!("up-linux-streamer-plugin: start");
-        let config = runtime.config().lock();
-        let self_cfg = config.plugin(name).unwrap().as_object().unwrap();
-        // get the plugin's config details from self_cfg Map (here the "storage-selector" property)
-        trace!("up-linux-streamer-plugin: got self_cfg");
-        let selector: KeyExpr = match self_cfg.get("storage-selector") {
-            Some(serde_json::Value::String(s)) => KeyExpr::try_from(s)?,
-            None => KeyExpr::try_from(DEFAULT_SELECTOR).unwrap(),
-            _ => {
-                bail!("storage-selector is a mandatory option for {}", name)
-            }
-        }
-            .clone()
-            .into_owned();
-        trace!("up-linux-streamer-plugin: after selector set");
-        std::mem::drop(config);
-        trace!("up-linux-streamer-plugin: after dropping std::mem::drop(config)");
+        // let config = runtime.config().lock();
+        // trace!("config: {config:?}");
+        // let maybe_config = config.plugin(name);
+        // trace!("maybe_config: {maybe_config:?}");
+        // let selector = if let Some(config) = maybe_config {
+        //     let maybe_config_object = config.as_object();
+        //     if let Some(config_object) = maybe_config_object {
+        //         // let self_cfg = config.plugin(name).unwrap().as_object().unwrap();
+        //         // get the plugin's config details from self_cfg Map (here the "storage-selector" property)
+        //         trace!("up-linux-streamer-plugin: got self_cfg");
+        //         let selector: KeyExpr = match config_object.get("storage-selector") {
+        //             Some(serde_json::Value::String(s)) => KeyExpr::try_from(s)?,
+        //             None => KeyExpr::try_from(DEFAULT_SELECTOR).unwrap(),
+        //             _ => {
+        //                 bail!("storage-selector is a mandatory option for {}", name)
+        //             }
+        //         }
+        //             .clone()
+        //             .into_owned();
+        //         trace!("up-linux-streamer-plugin: after selector set");
+        //         trace!("up-linux-streamer-plugin: after dropping std::mem::drop(config)");
+        //         selector
+        //     } else {
+        //         KeyExpr::try_from(DEFAULT_SELECTOR).unwrap()
+        //     }
+        // } else {
+        //     KeyExpr::try_from(DEFAULT_SELECTOR).unwrap()
+        // };
+
+        let selector = KeyExpr::try_from(DEFAULT_SELECTOR).unwrap();
 
         // a flag to end the plugin's loop when the plugin is removed from the config
         let flag = Arc::new(AtomicBool::new(true));
@@ -159,7 +173,7 @@ async fn run(runtime: Runtime, selector: KeyExpr<'_>, flag: Arc<AtomicBool>) {
 
     // // create a zenoh Session that shares the same Runtime than zenohd
     // TODO: For some reason we crash out here... should ask @CY
-    let session_res = zenoh::init(runtime).res().await;
+    let session_res = zenoh::init(runtime.clone()).res().await;
     if let Err(err) = session_res {
         // TODO: Just the act of passing in the runtime causes the core dump
         //  so we cannot see any kind of error here
@@ -222,10 +236,14 @@ async fn run(runtime: Runtime, selector: KeyExpr<'_>, flag: Arc<AtomicBool>) {
     let zenoh_config = Config::default();
     // TODO: Add error handling if we fail to create a UPClientZenoh
     let zenoh_transport: Arc<dyn UTransport> = Arc::new(
-        UPClientZenoh::new(zenoh_config, "linux".to_string())
+        UPClientZenoh::new_with_runtime(runtime.clone(), "linux".to_string())
             .await
             .unwrap(),
     );
+    //     UPClientZenoh::new(zenoh_config, "linux".to_string())
+    //         .await
+    //         .unwrap(),
+    // );
     // TODO: Make configurable to pass the name of the mE authority as a  command line argument
     let vsomeip_endpoint = Endpoint::new(
         "vsomeip_endpoint",
