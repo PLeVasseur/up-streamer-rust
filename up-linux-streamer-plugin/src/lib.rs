@@ -58,6 +58,7 @@ impl Plugin for ExamplePlugin {
         let plugins = config.get("plugins");
         match plugins {
             Ok(config_guard) => {
+                // @CY / @Luca - Looks like this is None for some reason?
                 trace!("config_guard: {:?}", config_guard.downcast_ref::<Config>());
             }
             Err(err) => {
@@ -73,45 +74,23 @@ impl Plugin for ExamplePlugin {
 
         {
             let config = config.lock();
-            let plugins_config = config.plugin("up_linux_streamer");
+            let plugins_config = config.plugin(name);
 
             trace!("PluginsConfig keys: {plugins_config:?}");
         }
 
         let config_guard = config.lock();
         {
-            trace!("config_guard: {:?}", config_guard.to_string());
+            // @CY / @Luca -- this appears to panic
+            // trace!("config_guard: {:?}", config_guard.to_string());
         }
         let plugin_config = config_guard.plugin(name);
+        // @CY / @Luca - Looks like this is None for some reason?
         trace!("maybe_config: {plugin_config:?}");
         if let Some(config) = plugin_config {
             let maybe_config_object = config.as_object();
             trace!("maybe_config_object: {maybe_config_object:?}");
         }
-        // let selector = if let Some(config) = maybe_config {
-        //     let maybe_config_object = config.as_object();
-        //     if let Some(config_object) = maybe_config_object {
-        //         // let self_cfg = config.plugin(name).unwrap().as_object().unwrap();
-        //         // get the plugin's config details from self_cfg Map (here the "storage-selector" property)
-        //         trace!("up-linux-streamer-plugin: got self_cfg");
-        //         let selector: KeyExpr = match config_object.get("storage-selector") {
-        //             Some(serde_json::Value::String(s)) => KeyExpr::try_from(s)?,
-        //             None => KeyExpr::try_from(DEFAULT_SELECTOR).unwrap(),
-        //             _ => {
-        //                 bail!("storage-selector is a mandatory option for {}", name)
-        //             }
-        //         }
-        //             .clone()
-        //             .into_owned();
-        //         trace!("up-linux-streamer-plugin: after selector set");
-        //         trace!("up-linux-streamer-plugin: after dropping std::mem::drop(config)");
-        //         selector
-        //     } else {
-        //         KeyExpr::try_from(DEFAULT_SELECTOR).unwrap()
-        //     }
-        // } else {
-        //     KeyExpr::try_from(DEFAULT_SELECTOR).unwrap()
-        // };
 
         let selector = KeyExpr::try_from(DEFAULT_SELECTOR).unwrap();
 
