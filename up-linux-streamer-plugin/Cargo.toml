@@ -40,6 +40,7 @@ zenoh-core = { version = "0.11.0-rc.3" }
 zenoh-plugin-trait = { version = "0.11.0-rc.3" }
 zenoh-result = { version = "0.11.0-rc.3" }
 zenoh-util = { version = "0.11.0-rc.3" }
+zenoh_backend_traits = { version = "0.11.0-rc.3" }
 #zenoh = { version = "0.11.0-dev", features = ["unstable"] }
 #zenoh-core = { version = "0.11.0-dev" }
 #zenoh-plugin-trait = { version = "0.11.0-dev" }

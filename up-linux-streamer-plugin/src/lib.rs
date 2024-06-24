@@ -22,6 +22,7 @@ use up_transport_zenoh::UPClientZenoh;
 use zenoh::plugins::{RunningPluginTrait, ZenohPlugin};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
+use zenoh_backend_traits::config::PluginConfig;
 use zenoh_core::zlock;
 use zenoh_plugin_trait::{plugin_long_version, plugin_version, Plugin, PluginControl};
 use zenoh_result::{bail, ZResult};
@@ -51,21 +52,23 @@ impl Plugin for ExamplePlugin {
     fn start(name: &str, runtime: &Self::StartArgs) -> ZResult<Self::Instance> {
         zenoh_util::try_init_log_from_env();
         trace!("up-linux-streamer-plugin: start");
-        let config = runtime.config().clone();
+        let mut config = runtime.config().clone();
         let config_keys = config.keys();
         trace!("name: {name}");
         trace!("config_keys: {config_keys:?}");
-        let plugins = config.get("plugins");
-        match plugins {
-            Ok(config_guard) => {
-                // @CY / @Luca - Looks like this is None for some reason?
-                trace!("config_guard: {:?}", config_guard.downcast_ref::<Config>());
+        {
+            let plugins = config.get("plugins");
+            match plugins {
+                Ok(config_guard) => {
+                    // @CY / @Luca - Looks like this is None for some reason?
+                    trace!("config_guard: {:?}", config_guard.downcast_ref::<Config>());
+                }
+                Err(err) => {
+                    error!("Unable to get plugins: {err:?}");
+                }
             }
-            Err(err) => {
-                error!("Unable to get plugins: {err:?}");
-            }
+            trace!("Made past match on plugins");
         }
-        trace!("Made past match on plugins");
 
         // @CY / @Luca -- seems to crash here?
         // let config_plugin = runtime.config().get_json("plugins");
@@ -76,21 +79,64 @@ impl Plugin for ExamplePlugin {
             let config = config.lock();
             let plugins_config = config.plugin(name);
 
-            trace!("PluginsConfig keys: {plugins_config:?}");
+            trace!("plugins_config: {plugins_config:?}");
         }
 
-        let config_guard = config.lock();
+        // {
+        //     let config = config.lock();
+        //     let some_read = config.plugins_loading();
+        //     trace!("some_read: {some_read:?}");
+        // }
+
+        trace!("Before attempting to read config");
         {
+            // @CY / Luca -- this bit was lifted from the zenoh-plugin-storage-manager and seems
+            //  to also crash due to runtime.config().lock().plugin(name) being None
+            // let config =
+            //     { PluginConfig::try_from((name, runtime.config().lock().plugin(name).unwrap())) }?;
+        }
+        trace!("After attempting to read config");
+
+        {
+            let config_guard = config.lock();
             // @CY / @Luca -- this appears to panic
             // trace!("config_guard: {:?}", config_guard.to_string());
+            let plugin_config = config_guard.plugin(name);
+            // @CY / @Luca - Looks like this is None for some reason?
+            trace!("maybe_config: {plugin_config:?}");
+            if let Some(config) = plugin_config {
+                let maybe_config_object = config.as_object();
+                trace!("maybe_config_object: {maybe_config_object:?}");
+            }
         }
-        let plugin_config = config_guard.plugin(name);
-        // @CY / @Luca - Looks like this is None for some reason?
-        trace!("maybe_config: {plugin_config:?}");
-        if let Some(config) = plugin_config {
-            let maybe_config_object = config.as_object();
-            trace!("maybe_config_object: {maybe_config_object:?}");
-        }
+
+        // @CY / Luca -- this appears to also not work
+        // trace!("Trying to read plugins_loading");
+        // {
+        //     let config_guard = config.lock();
+        //     if let Some(ref search_dirs) = config_guard.plugins_loading.search_dirs {
+        //         trace!("search_dirs: {search_dirs:?}");
+        //     }
+        // }
+        // trace!("After plugins_loading");
+
+        // @CY / Luca -- this crashes if we attempt to read .plugins()
+        // trace!("Before attempting to read plugins_config");
+        // {
+        //     let config_guard = config.lock();
+        //     let plugins_config = config_guard.plugins();
+        //     trace!("plugins_config: {plugins_config:?}");
+        // }
+        // trace!("After attempting to read plugins_config");
+
+        // This also doesn't appear to work
+        // trace!("Attempting to insert serialized value into config");
+        // {
+        //     let val: u32 = 10;
+        //     let serialized_val = serde_json::to_value(val).expect("Failed to serialize val");
+        //     config.insert::<serde_json::Value>("plugins", serialized_val.into()).expect("Unable to add abc as a key");
+        // }
+        // trace!("After inserting serialized value into config");
 
         let selector = KeyExpr::try_from(DEFAULT_SELECTOR).unwrap();
 
