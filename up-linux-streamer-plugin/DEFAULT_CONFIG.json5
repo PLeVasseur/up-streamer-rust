@@ -1,0 +1,12 @@
+////
+//// This file presents the default configuration used by both the `zenoh-plugin-mqtt` plugin and the `zenoh-bridge-mqtt` standalone executable.
+//// The "mqtt" JSON5 object below can be used as such in the "plugins" part of a config file for the zenoh router (zenohd).
+////
+{
+  plugins: {
+    up_linux_streamer: {
+      __required__: true,
+      host_authority: "linux"
+    }
+  }
+}

@@ -1,10 +1,12 @@
 #![recursion_limit = "256"]
 
+use async_std::task;
 use futures::select;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::env;
 use std::fs::canonicalize;
+use std::ops::Deref;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering::Relaxed},
@@ -12,18 +14,17 @@ use std::sync::{
 };
 use std::time::Duration;
 use tracing::{debug, info};
+use tracing::{error, trace};
+use up_rust::UTransport;
+use up_streamer::{Endpoint, UStreamer};
+use up_transport_vsomeip::UPTransportVsomeip;
+use up_transport_zenoh::UPClientZenoh;
 use zenoh::plugins::{RunningPluginTrait, ZenohPlugin};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
 use zenoh_core::zlock;
 use zenoh_plugin_trait::{plugin_long_version, plugin_version, Plugin, PluginControl};
 use zenoh_result::{bail, ZResult};
-use tracing::{error, trace};
-use async_std::task;
-use up_rust::UTransport;
-use up_transport_vsomeip::UPTransportVsomeip;
-use up_transport_zenoh::UPClientZenoh;
-use up_streamer::{Endpoint, UStreamer};
 
 // The struct implementing the ZenohPlugin and ZenohPlugin traits
 pub struct ExamplePlugin {}
@@ -50,10 +51,43 @@ impl Plugin for ExamplePlugin {
     fn start(name: &str, runtime: &Self::StartArgs) -> ZResult<Self::Instance> {
         zenoh_util::try_init_log_from_env();
         trace!("up-linux-streamer-plugin: start");
-        // let config = runtime.config().lock();
-        // trace!("config: {config:?}");
-        // let maybe_config = config.plugin(name);
-        // trace!("maybe_config: {maybe_config:?}");
+        let config = runtime.config().clone();
+        let config_keys = config.keys();
+        trace!("name: {name}");
+        trace!("config_keys: {config_keys:?}");
+        let plugins = config.get("plugins");
+        match plugins {
+            Ok(config_guard) => {
+                trace!("config_guard: {:?}", config_guard.downcast_ref::<Config>());
+            }
+            Err(err) => {
+                error!("Unable to get plugins: {err:?}");
+            }
+        }
+        trace!("Made past match on plugins");
+
+        // @CY / @Luca -- seems to crash here?
+        // let config_plugin = runtime.config().get_json("plugins");
+
+        trace!("Made past reading plugins key");
+
+        {
+            let config = config.lock();
+            let plugins_config = config.plugin("up_linux_streamer");
+
+            trace!("PluginsConfig keys: {plugins_config:?}");
+        }
+
+        let config_guard = config.lock();
+        {
+            trace!("config_guard: {:?}", config_guard.to_string());
+        }
+        let plugin_config = config_guard.plugin(name);
+        trace!("maybe_config: {plugin_config:?}");
+        if let Some(config) = plugin_config {
+            let maybe_config_object = config.as_object();
+            trace!("maybe_config_object: {maybe_config_object:?}");
+        }
         // let selector = if let Some(config) = maybe_config {
         //     let maybe_config_object = config.as_object();
         //     if let Some(config_object) = maybe_config_object {
@@ -89,13 +123,11 @@ impl Plugin for ExamplePlugin {
         trace!("up-linux-streamer-plugin: after spawning run");
         // return a RunningPlugin to zenohd
         trace!("up-linux-streamer-plugin: before creating RunningPlugin");
-        let ret = Box::new(RunningPlugin(Arc::new(Mutex::new(
-            RunningPluginInner {
-                flag,
-                name: name.into(),
-                runtime: runtime.clone(),
-            },
-        ))));
+        let ret = Box::new(RunningPlugin(Arc::new(Mutex::new(RunningPluginInner {
+            flag,
+            name: name.into(),
+            runtime: runtime.clone(),
+        }))));
 
         trace!("up-linux-streamer-plugin: after creating RunningPlugin");
 
@@ -127,7 +159,7 @@ impl RunningPluginTrait for RunningPlugin {
         if path == STORAGE_SELECTOR || path.is_empty() {
             match (old.get(STORAGE_SELECTOR), new.get(STORAGE_SELECTOR)) {
                 (Some(serde_json::Value::String(os)), Some(serde_json::Value::String(ns)))
-                if os == ns => {}
+                    if os == ns => {}
                 (_, Some(serde_json::Value::String(selector))) => {
                     guard.flag.store(false, Relaxed);
                     guard.flag = Arc::new(AtomicBool::new(true));
@@ -147,11 +179,18 @@ impl RunningPluginTrait for RunningPlugin {
                     guard.flag.store(false, Relaxed);
                 }
                 _ => {
-                    bail!("up-linux-streamer-plugin: storage-selector for {} must be a string", &guard.name)
+                    bail!(
+                        "up-linux-streamer-plugin: storage-selector for {} must be a string",
+                        &guard.name
+                    )
                 }
             }
         }
-        bail!("up-linux-streamer-plugin: unknown option {} for {}", path, guard.name)
+        bail!(
+            "up-linux-streamer-plugin: unknown option {} for {}",
+            path,
+            guard.name
+        )
     }
 }
 
@@ -170,29 +209,6 @@ async fn run(runtime: Runtime, selector: KeyExpr<'_>, flag: Arc<AtomicBool>) {
     trace!("attempt to call something on the runtime");
     let timestamp_res = runtime.new_timestamp();
     trace!("called function on runtime: {timestamp_res:?}");
-
-    // // create a zenoh Session that shares the same Runtime than zenohd
-    // TODO: For some reason we crash out here... should ask @CY
-    let session_res = zenoh::init(runtime.clone()).res().await;
-    if let Err(err) = session_res {
-        // TODO: Just the act of passing in the runtime causes the core dump
-        //  so we cannot see any kind of error here
-        error!("Unable to initialize session from passed in runtime: {err:?}");
-    }
-    trace!("up-linux-streamer-plugin: after initiating session");
-
-    // // the HasMap used as a storage by this example of storage plugin
-    // let mut stored: HashMap<String, Sample> = HashMap::new();
-    //
-    // debug!("up-linux-streamer-plugin: Run example-plugin with storage-selector={}", selector);
-    //
-    // // This storage plugin subscribes to the selector and will store in HashMap the received samples
-    // debug!("up-linux-streamer-plugin: Create Subscriber on {}", selector);
-    // let sub = session.declare_subscriber(&selector).res().await.unwrap();
-    //
-    // // This storage plugin declares a Queryable that will reply to queries with the samples stored in the HashMap
-    // debug!("up-linux-streamer-plugin: Create Queryable on {}", selector);
-    // let queryable = session.declare_queryable(&selector).res().await.unwrap();
 
     env_logger::init();
 
@@ -218,8 +234,7 @@ async fn run(runtime: Runtime, selector: KeyExpr<'_>, flag: Arc<AtomicBool>) {
     };
     tracing::log::trace!("exe_path_parent: {exe_path_parent:?}");
 
-    // let crate_dir = env!("CARGO_MANIFEST_DIR");
-    // // TODO: Make configurable to pass the path to the vsomeip config as a command line argument
+    // TODO: Make configurable to pass the path to the vsomeip config as a command line argument
     let vsomeip_config = PathBuf::from(exe_path_parent).join("vsomeip-configs/point_to_point.json");
     tracing::log::trace!("vsomeip_config: {vsomeip_config:?}");
     let vsomeip_config = canonicalize(vsomeip_config).ok();
@@ -240,10 +255,6 @@ async fn run(runtime: Runtime, selector: KeyExpr<'_>, flag: Arc<AtomicBool>) {
             .await
             .unwrap(),
     );
-    //     UPClientZenoh::new(zenoh_config, "linux".to_string())
-    //         .await
-    //         .unwrap(),
-    // );
     // TODO: Make configurable to pass the name of the mE authority as a  command line argument
     let vsomeip_endpoint = Endpoint::new(
         "vsomeip_endpoint",
@@ -268,7 +279,7 @@ async fn run(runtime: Runtime, selector: KeyExpr<'_>, flag: Arc<AtomicBool>) {
         error!("Unable to add forwarding result: {err:?}");
     }
 
-    let forwarding_res =streamer
+    let forwarding_res = streamer
         .add_forwarding_rule(zenoh_transport_endpoint_a.clone(), vsomeip_endpoint.clone())
         .await;
 
@@ -279,30 +290,10 @@ async fn run(runtime: Runtime, selector: KeyExpr<'_>, flag: Arc<AtomicBool>) {
     // Plugin's event loop, while the flag is true
     let mut counter = 1;
     while flag.load(Relaxed) {
-
         // TODO: Need to implement signalling to stop uStreamer
 
         task::sleep(Duration::from_millis(1000)).await;
         trace!("counter: {counter}");
-
-        // select!(
-        //     // on sample received by the Subscriber
-        //     sample = sub.recv_async() => {
-        //         let sample = sample.unwrap();
-        //         info!("up-linux-streamer-plugin: Received data ('{}': '{}')", sample.key_expr, sample.value);
-        //         stored.insert(sample.key_expr.to_string(), sample);
-        //     },
-        //     // on query received by the Queryable
-        //     query = queryable.recv_async() => {
-        //         let query = query.unwrap();
-        //         info!("up-linux-streamer-plugin: Handling query '{}'", query.selector());
-        //         for (key_expr, sample) in stored.iter() {
-        //             if query.selector().key_expr.intersects(unsafe{keyexpr::from_str_unchecked(key_expr)}) {
-        //                 query.reply(Ok(sample.clone())).res().await.unwrap();
-        //             }
-        //         }
-        //     }
-        // );
 
         counter += 1;
     }
