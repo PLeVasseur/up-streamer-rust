@@ -110,6 +110,17 @@ impl Plugin for ExamplePlugin {
             }
         }
 
+        // @CY / Luca -- unable to read this, we can confirm that it does exist from reading
+        //  the initial loading of the plugin
+        trace!("Trying to read specific portion of config");
+        {
+            let config_guard = config.lock();
+            let baz = config_guard.get_json("plugins/up_linux_streamer/__required__");
+
+            trace!("__required__: {baz:?}");
+        }
+        trace!("Able to read specific portion of config");
+
         // @CY / Luca -- this appears to also not work
         // trace!("Trying to read plugins_loading");
         // {
