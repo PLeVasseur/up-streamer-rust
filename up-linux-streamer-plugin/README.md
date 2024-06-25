@@ -5,7 +5,7 @@
 ### Build the plugin
 
 ```bash
-LD_LIBRARY_PATH=<your/path/to/vsomeip/lib> VSOMEIP_LIB_DIR=<your/path/to/vsomeip/lib> cargo build
+cargo build
 ```
 
 ### Copy plugin and configs to standalone folder
@@ -14,7 +14,6 @@ LD_LIBRARY_PATH=<your/path/to/vsomeip/lib> VSOMEIP_LIB_DIR=<your/path/to/vsomeip
 mkdir -p my/new/standalone/zenohd/path
 cp target/debug/libzenoh_plugin_up_linux_streamer.so my/new/standalone/zenohd/path/
 cp up-linux-streamer-plugin/DEFAULT_CONFIG.json5 my/new/standalone/zenohd/path/
-cp -r up-linux-streamer-plugin/vsomeip-configs my/new/standalone/zenohd/path/
 ```
 
 ### Using the plugin
@@ -78,7 +77,7 @@ cp target/debug/zenohd my/new/standalone/zenohd/path
 From within the `my/new/standalone/zenohd/path`:
 
 ```bash
-RUST_LOG=trace LD_LIBRARY_PATH=<your/path/to/vsomeip/lib>  VSOMEIP_LIB_DIR=<your/path/to/vsomeip/lib> ./zenohd --config DEFAULT_CONFIG.json5
+RUST_LOG=trace ./zenohd --config DEFAULT_CONFIG.json5
 ```
 
 You can also run without the `RUST_LOG=trace` environment variable prepended and should for production use cases. It can be used for debugging purposes.
