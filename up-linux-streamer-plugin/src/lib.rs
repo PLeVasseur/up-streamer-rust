@@ -26,7 +26,7 @@ use zenoh::runtime::Runtime;
 use zenoh_backend_traits::config::PluginConfig;
 use zenoh_core::zlock;
 use zenoh_plugin_trait::{plugin_long_version, plugin_version, Plugin, PluginControl};
-use zenoh_result::{bail, ZResult};
+use zenoh_result::{bail, zerror, ZResult};
 
 // The struct implementing the ZenohPlugin and ZenohPlugin traits
 pub struct ExamplePlugin {}
@@ -53,6 +53,16 @@ impl Plugin for ExamplePlugin {
     fn start(name: &str, runtime: &Self::StartArgs) -> ZResult<Self::Instance> {
         zenoh_util::try_init_log_from_env();
         trace!("up-linux-streamer-plugin: start");
+
+        trace!("Attempting to do same style as mqtt plugin for reading config");
+        {
+            let runtime_conf = runtime.config().lock();
+            let plugin_conf = runtime_conf
+                .plugin(name)
+                .ok_or_else(|| zerror!("Plugin `{}`: missing config", name))?;
+        }
+        trace!("succeeded in reading plugin config");
+
         let mut config = runtime.config().clone();
         let config_keys = config.keys();
         trace!("name: {name}");

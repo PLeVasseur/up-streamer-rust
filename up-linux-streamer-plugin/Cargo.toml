@@ -35,17 +35,16 @@ const_format = "0.2.30"
 futures = { version = "0.3.25" }
 git-version = { version = "0.3.5" }
 tracing = { version = "0.1" }
+serde = { version = "1.0.154" }
 serde_json = { version = "1.0.94" }
-zenoh = { version = "0.11.0-rc.3", features = ["unstable"] }
+zenoh = { version = "0.11.0-rc.3", features = [
+    "plugins",
+    "unstable",
+] }
 zenoh-core = { version = "0.11.0-rc.3" }
 zenoh-plugin-trait = { version = "0.11.0-rc.3" }
 zenoh-result = { version = "0.11.0-rc.3" }
 zenoh-util = { version = "0.11.0-rc.3" }
 zenoh_backend_traits = { version = "0.11.0-rc.3" }
-#zenoh = { version = "0.11.0-dev", features = ["unstable"] }
-#zenoh-core = { version = "0.11.0-dev" }
-#zenoh-plugin-trait = { version = "0.11.0-dev" }
-#zenoh-result = { version = "0.11.0-dev" }
-#zenoh-util = { version = "0.11.0-dev" }
 env_logger = "0.10.2"
 usubscription-static-file = {path="../example-utils/usubscription-static-file"}
