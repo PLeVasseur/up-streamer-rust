@@ -19,6 +19,7 @@ use up_rust::UTransport;
 use up_streamer::{Endpoint, UStreamer};
 use up_transport_vsomeip::UPTransportVsomeip;
 use up_transport_zenoh::UPClientZenoh;
+use usubscription_static_file::USubscriptionStaticFile;
 use zenoh::plugins::{RunningPluginTrait, ZenohPlugin};
 use zenoh::prelude::r#async::*;
 use zenoh::runtime::Runtime;
@@ -248,7 +249,8 @@ async fn run(runtime: Runtime, selector: KeyExpr<'_>, flag: Arc<AtomicBool>) {
 
     env_logger::init();
 
-    let mut streamer = UStreamer::new("up-linux-streamer", 10000);
+    let usubscription = Arc::new(USubscriptionStaticFile::new());
+    let mut streamer = UStreamer::new("up-linux-streamer", 10000, usubscription);
 
     let exe_path = match env::current_exe() {
         Ok(exe_path) => {

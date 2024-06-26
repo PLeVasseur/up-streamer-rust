@@ -4306,6 +4306,7 @@ dependencies = [
  "up-streamer",
  "up-transport-vsomeip",
  "up-transport-zenoh",
+ "usubscription-static-file",
  "zenoh",
  "zenoh-core",
  "zenoh-plugin-trait",
