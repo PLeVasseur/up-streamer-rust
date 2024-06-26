@@ -75,13 +75,13 @@ async fn main() -> Result<(), UStatus> {
     // TODO: Probably make somewhat configurable?
     let mut zenoh_config = Config::default();
     // Specify the address to listen on using IPv4
-    let ipv4_endpoint = EndPoint::from_str("tcp/0.0.0.0:7445");
-
-    // Add the IPv4 endpoint to the Zenoh configuration
-    zenoh_config
-        .listen
-        .endpoints
-        .push(ipv4_endpoint.expect("FAIL"));
+    // let ipv4_endpoint = EndPoint::from_str("tcp/0.0.0.0:7445");
+    //
+    // // Add the IPv4 endpoint to the Zenoh configuration
+    // zenoh_config
+    //     .listen
+    //     .endpoints
+    //     .push(ipv4_endpoint.expect("FAIL"));
     // TODO: Add error handling if we fail to create a UPClientZenoh
     let service: Arc<dyn UTransport> = Arc::new(
         UPClientZenoh::new(zenoh_config, "linux".to_string())
