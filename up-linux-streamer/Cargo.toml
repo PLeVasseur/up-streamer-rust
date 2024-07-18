@@ -9,18 +9,20 @@ keywords.workspace = true
 license.workspace = true
 
 [dependencies]
+async-trait = { workspace = true }
+clap = { version = "4.5.9", features = ["derive"] }
+env_logger = { version = "0.10.2" }
+log = { workspace = true }
+json5 = { workspace = true }
+protobuf = { workspace = true }
+serde = { workspace = true }
 tokio = { workspace = true }
 up-rust = { workspace = true }
+up-streamer = { path = "../up-streamer" }
 up-transport-zenoh = { git = "https://github.com/eclipse-uprotocol/up-transport-zenoh-rust.git", rev = "7c839e7a94f526a82027564a609f48a79a3f4eae" }
 up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", branch = "feature/up-transport-vsomeip-rust_initial-implementation" }
 #up-transport-vsomeip = { git = "https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust.git", rev = "" }
-up-streamer = { path = "../up-streamer" }
-serde = { workspace = true }
 zenoh = { version = "0.11.0-rc.3", features = ["unstable"]}
-env_logger = { version = "0.10.2" }
-log = { workspace = true }
-async-trait = { workspace = true }
-protobuf = { workspace = true }
 
 [dev-dependencies]
 hello-world-protos = { path = "../example-utils/hello-world-protos" }
