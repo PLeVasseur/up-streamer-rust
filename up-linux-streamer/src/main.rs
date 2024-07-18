@@ -2,11 +2,9 @@ mod config;
 
 use crate::config::{Config, HostTransport};
 use clap::Parser;
-use json5;
 use log::trace;
-use std::fs::{canonicalize, File};
+use std::fs::File;
 use std::io::Read;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::{env, thread};
 use up_rust::{UCode, UStatus, UTransport};
@@ -14,8 +12,6 @@ use up_streamer::{Endpoint, UStreamer};
 use up_transport_vsomeip::UPTransportVsomeip;
 use up_transport_zenoh::UPClientZenoh;
 use zenoh::config::Config as ZenohConfig;
-
-const CLIENT_AUTHORITY: &str = "me_authority";
 
 #[derive(Parser)]
 #[command()]

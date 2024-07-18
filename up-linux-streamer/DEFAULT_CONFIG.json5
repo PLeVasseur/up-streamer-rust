@@ -3,9 +3,6 @@
 //// The "up_linux_streamer" JSON5 object below can be used as such in the "plugins" part of a config file for the zenoh router (zenohd).
 ////
 {
-    // Should be left as true -- enforces that if the plugin .so cannot be found
-    // zenohd will panic and crash
-    __required__: true,
     up_streamer_config: {
       // The message queue size of each route between endpoints within the UStreamer
       // Lower numbers mean that some messages will be dropped
