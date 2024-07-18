@@ -1,3 +1,5 @@
+mod config;
+
 use log::trace;
 use std::fs::canonicalize;
 use std::path::PathBuf;
@@ -9,6 +11,8 @@ use up_streamer::{Endpoint, UStreamer};
 use up_transport_vsomeip::UPTransportVsomeip;
 use up_transport_zenoh::UPClientZenoh;
 use zenoh::config::Config;
+
+const CLIENT_AUTHORITY: &str = "me_authority";
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
@@ -25,8 +29,13 @@ async fn main() -> Result<(), UStatus> {
     // There will be a single vsomeip_transport, as there is a connection into device and a streamer
     // TODO: Add error handling if we fail to create a UPTransportVsomeip
     let vsomeip_transport: Arc<dyn UTransport> = Arc::new(
-        UPTransportVsomeip::new_with_config(&"linux".to_string(), 10, &vsomeip_config.unwrap())
-            .unwrap(),
+        UPTransportVsomeip::new_with_config(
+            &"linux".to_string(),
+            &CLIENT_AUTHORITY.to_string(),
+            10,
+            &vsomeip_config.unwrap(),
+        )
+        .unwrap(),
     );
 
     // TODO: Probably make somewhat configurable?

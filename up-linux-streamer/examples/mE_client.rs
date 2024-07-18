@@ -22,6 +22,8 @@ const CLIENT_RESOURCE_ID: u16 = 0;
 
 const REQUEST_TTL: u32 = 1000;
 
+const REMOTE_AUTHORITY: &str = "linux";
+
 struct ServiceResponseListener;
 
 #[async_trait]
@@ -62,6 +64,7 @@ async fn main() -> Result<(), UStatus> {
     let client: Arc<dyn UTransport> = Arc::new(
         UPTransportVsomeip::new_with_config(
             &CLIENT_AUTHORITY.to_string(),
+            &REMOTE_AUTHORITY.to_string(),
             CLIENT_UE_ID,
             &vsomeip_config.unwrap(),
         )
