@@ -6,9 +6,8 @@ use std::fs::canonicalize;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use up_rust::{UListener, UMessage, UMessageBuilder, UPayloadFormat, UStatus, UTransport, UUri};
+use up_rust::{UListener, UMessage, UMessageBuilder, UStatus, UTransport, UUri};
 use up_transport_vsomeip::UPTransportVsomeip;
-use zenoh::config::Config;
 
 const SERVICE_AUTHORITY: &str = "linux";
 const SERVICE_UE_ID: u16 = 0x1236;
