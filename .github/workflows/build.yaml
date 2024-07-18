@@ -13,6 +13,17 @@
 
 name: Build checks and tests
 
+env:
+  VSOMEIP_RELEASE_URL: https://github.com/COVESA/vsomeip/archive/refs/tags/
+  VSOMEIP_RELEASE_TAG: 3.4.10.tar.gz
+  VSOMEIP_SOURCE_PATH: vsomeip-src
+  VSOMEIP_INSTALL_PATH: vsomeip-install
+
+  # Not used in actuality -- assembled below
+  VSOMEIP_LIB_PATH: /does/not/yet/exist
+  GENERIC_CPP_STDLIB_PATH: /usr/include/c++/11
+  ARCH_SPECIFIC_CPP_STDLIB_PATH: /usr/include/x86_64-linux-gnu/c++/11
+
 on:
   push:
     branches: [ main ]
