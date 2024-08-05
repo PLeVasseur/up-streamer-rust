@@ -288,9 +288,9 @@ jobs:
 
       - name: Create Documentation for up-streamer
         working-directory: ${{github.workspace}}
-        run: RUSTDOCFLAGS=-Dwarnings cargo doc -p up-streamer --no-deps
+        run: RUSTDOCFLAGS=-Dwarnings cargo doc -p up-streamer --no-deps --no-default-features
 
       - name: Create Documentation for up-linux-streamer
         working-directory: ${{github.workspace}}
-        run: RUSTDOCFLAGS=-Dwarnings cargo doc -p up-linux-streamer --no-deps
+        run: RUSTDOCFLAGS=-Dwarnings cargo doc -p up-linux-streamer --no-deps --no-default-features
 
