@@ -8,6 +8,10 @@ edition.workspace = true
 keywords.workspace = true
 license.workspace = true
 
+[features]
+default = ["bundled-vsomeip"]
+bundled-vsomeip = ["up-transport-vsomeip/bundled"]
+
 [dependencies]
 async-trait = { workspace = true }
 clap = { version = "4.5.9", features = ["derive"] }
@@ -20,8 +24,7 @@ tokio = { workspace = true }
 up-rust = { workspace = true }
 up-streamer = { path = "../up-streamer" }
 up-transport-zenoh = { git = "https://github.com/eclipse-uprotocol/up-transport-zenoh-rust.git", rev = "7c839e7a94f526a82027564a609f48a79a3f4eae" }
-up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", branch = "feature/up-transport-vsomeip-rust_initial-implementation" }
-#up-transport-vsomeip = { git = "https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust.git", rev = "" }
+up-transport-vsomeip = { git = "https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust.git", rev = "acbb0d0c9b8b48dd35c74f461e97151f1e922000", default-features = false }
 zenoh = { version = "0.11.0-rc.3", features = ["unstable"]}
 
 [dev-dependencies]
