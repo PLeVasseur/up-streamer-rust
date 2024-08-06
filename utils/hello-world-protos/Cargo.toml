@@ -18,7 +18,7 @@ edition = "2021"
 
 [dependencies]
 bytes = { version = "1.5" }
-protobuf = { version = "3.3", features = ["with-bytes"] }
+protobuf = { workspace = true }
 
 [build-dependencies]
 protobuf-codegen = { version = "3.3" }

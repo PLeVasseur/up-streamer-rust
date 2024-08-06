@@ -12,7 +12,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "example-utils/hello-world-protos",
+    "utils/hello-world-protos",
+    "utils/integration-test-utils",
     "up-linux-streamer",
     "up-streamer",
 ]
