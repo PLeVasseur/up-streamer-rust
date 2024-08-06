@@ -24,7 +24,6 @@ fn main() -> std::io::Result<()> {
     // if let Err(err) = get_and_build_protos(
     if let Err(err) = get_and_build_protos(
         &[
-            "https://raw.githubusercontent.com/protocolbuffers/protobuf/main/src/google/protobuf/descriptor.proto",
             "https://raw.githubusercontent.com/googleapis/googleapis/master/google/type/timeofday.proto",
             "https://raw.githubusercontent.com/eclipse-uprotocol/up-spec/main/up-core-api/uprotocol/uoptions.proto",
             "https://raw.githubusercontent.com/COVESA/uservices/main/src/main/proto/example/hello_world/v1/hello_world_topics.proto",

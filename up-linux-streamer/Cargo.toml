@@ -28,4 +28,4 @@ up-transport-vsomeip = { git = "https://github.com/eclipse-uprotocol/up-transpor
 zenoh = { version = "0.11.0-rc.3", features = ["unstable"]}
 
 [dev-dependencies]
-hello-world-protos = { path = "../example-utils/hello-world-protos" }
+hello-world-protos = { path = "../utils/hello-world-protos" }
