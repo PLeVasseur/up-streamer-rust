@@ -111,7 +111,7 @@ impl RunningPluginTrait for RunningPlugin {
         _new: &serde_json::Map<String, serde_json::Value>,
     ) -> ZResult<Option<serde_json::Map<String, serde_json::Value>>> {
         // TODO: Learn more about how the config_checker is used
-        return Ok(None);
+        Ok(None)
     }
 }
 
