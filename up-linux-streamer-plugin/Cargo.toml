@@ -20,7 +20,8 @@ keywords.workspace = true
 license.workspace = true
 
 [features]
-default = ["dynamic_plugin", "zenoh/default", "zenoh/unstable", "zenoh/plugins"]
+default = ["bundled-vsomeip", "dynamic_plugin", "zenoh/default", "zenoh/unstable", "zenoh/plugins"]
+bundled-vsomeip = ["up-transport-vsomeip/bundled"]
 dynamic_plugin = []
 
 [lib]

@@ -46,8 +46,16 @@ LinuxStreamerZenohPlugin ..> ZenohRouter: loaded by
 ### Build the plugin
 
 ```bash
-LD_LIBRARY_PATH=<your/path/to/vsomeip/lib> VSOMEIP_LIB_DIR=<your/path/to/vsomeip/lib> cargo build
+LD_LIBRARY_PATH=<path/to/where/to/install/vsomeip/lib> VSOMEIP_INSTALL_PATH=<path/to/where/to/install/vsomeip/lib> cargo build
 ```
+
+### Bundled vsomeip or bring your own
+
+The default is to build a bundled version of [vsomeip](https://github.com/COVESA/vsomeip) for use by the `up-transport-vsomeip` crate.
+
+The vsomeip library is used to communicate over [SOME/IP](https://some-ip.com/) to mechatronics devices.
+
+If you wish to bring your own vsomeip install, you can use the flag `--no-default-features` flag when building with `cargo build`. For more details on required environment variables when building `up-transport-vsomeip-rust`, reference the README for [vsomeip-sys](https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust/tree/main/vsomeip-sys).
 
 ### Copy plugin and configs to standalone folder
 
@@ -58,9 +66,11 @@ cp up-linux-streamer-plugin/DEFAULT_CONFIG.json5 my/new/standalone/zenohd/path/
 cp -r up-linux-streamer-plugin/vsomeip-configs my/new/standalone/zenohd/path/
 ```
 
-### Using the plugin
+### A note on compatability
 
 Because up-transport-zenoh-rust uses minimum supported Rust version (**MSRV**) of 1.74.0 and up-rust uses MSRV of 1.72.1, we need to build Zenoh from source in order to get a compatible zenohd (Zenoh Router). The following steps describe how to do so.
+
+Note: We have an open issue [here](https://github.com/eclipse-uprotocol/up-streamer-rust/issues/43) which is for creating a compatible Zenoh Router (zenohd) which will avoid the next section.
 
 ### Getting Zenoh
 
@@ -162,7 +172,7 @@ You may also run the other examples similarly.
 
 ### up-linux-streamer-plugin configuration
 
-A configuration file is required to be supplied to `zenohd` as shown in the `Using the Plugin` section.
+A configuration file is required to be supplied to `zenohd` as shown in the [Using the plugin](#using-the-plugin) section.
 
 `DEFAULT_CONFIG.json5` is provided as a starting point, but can have certain parameters modified. Please reference it for guidance.
 
