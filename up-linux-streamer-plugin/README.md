@@ -66,7 +66,7 @@ cp up-linux-streamer-plugin/DEFAULT_CONFIG.json5 my/new/standalone/zenohd/path/
 cp -r up-linux-streamer-plugin/vsomeip-configs my/new/standalone/zenohd/path/
 ```
 
-### Using the plugin
+### A note on compatability
 
 Because up-transport-zenoh-rust uses minimum supported Rust version (**MSRV**) of 1.74.0 and up-rust uses MSRV of 1.72.1, we need to build Zenoh from source in order to get a compatible zenohd (Zenoh Router). The following steps describe how to do so.
 
@@ -172,7 +172,7 @@ You may also run the other examples similarly.
 
 ### up-linux-streamer-plugin configuration
 
-A configuration file is required to be supplied to `zenohd` as shown in the `Using the Plugin` section.
+A configuration file is required to be supplied to `zenohd` as shown in the [Using the plugin](#using-the-plugin) section.
 
 `DEFAULT_CONFIG.json5` is provided as a starting point, but can have certain parameters modified. Please reference it for guidance.
 
