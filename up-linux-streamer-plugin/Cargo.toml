@@ -48,7 +48,7 @@ up-transport-zenoh = { version = "0.1.1"  }
 up-transport-vsomeip = { git = "https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust.git", tag = "v0.1.0", default-features = false }
 up-streamer = { path = "../up-streamer" }
 usubscription-static-file = {path = "../utils/usubscription-static-file"}
-zenoh = { version = "1.0.0-alpha.6", features = ["unstable", "internal"]}
+zenoh = { version = "1.0.0-alpha.6", features = ["unstable", "internal", "plugins"]}
 zenoh-core = { version = "1.0.0-alpha.6" }
 zenoh-plugin-trait = { version = "1.0.0-alpha.6" }
 zenoh-result = { version = "1.0.0-alpha.6" }
