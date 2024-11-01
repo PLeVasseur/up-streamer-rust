@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use async_std::sync::Arc;
+use std::sync::Arc;
 use log::*;
 use up_rust::UTransport;
 
