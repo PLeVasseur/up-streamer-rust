@@ -59,6 +59,27 @@ impl Error for ForwardingListenerError {}
 type ForwardingListenersContainer =
     Mutex<HashMap<(TransportIdentityKey, String, String), (usize, Arc<ForwardingListener>)>>;
 
+type ListenerFilter = (UUri, Option<UUri>);
+
+#[allow(clippy::mutable_key_type)]
+async fn rollback_registered_filters(
+    in_transport: &Arc<dyn UTransport>,
+    rollback_filters: &HashSet<ListenerFilter>,
+    forwarding_listener: Arc<ForwardingListener>,
+) {
+    for (source_filter, sink_filter) in rollback_filters {
+        if let Err(err) = in_transport
+            .unregister_listener(source_filter, sink_filter.as_ref(), forwarding_listener.clone())
+            .await
+        {
+            warn!(
+                "{}:{} unable to unregister listener, error: {}",
+                FORWARDING_LISTENERS_TAG, FORWARDING_LISTENERS_FN_INSERT_TAG, err
+            );
+        }
+    }
+}
+
 pub(crate) struct ForwardingListeners {
     listeners: ForwardingListenersContainer,
 }
@@ -97,14 +118,13 @@ impl ForwardingListeners {
         let forwarding_listener =
             Arc::new(ForwardingListener::new(forwarding_id, out_sender.clone()));
 
-        type SourceSinkFilterPair = (UUri, Option<UUri>);
         #[allow(clippy::mutable_key_type)]
-        let mut uuris_to_backpedal: HashSet<SourceSinkFilterPair> = HashSet::new();
+        let mut rollback_filters: HashSet<ListenerFilter> = HashSet::new();
 
         let request_source_filter = uauthority_to_uuri(in_authority);
         let request_sink_filter = uauthority_to_uuri(out_authority);
 
-        uuris_to_backpedal.insert((
+        rollback_filters.insert((
             request_source_filter.clone(),
             Some(request_sink_filter.clone()),
         ));
@@ -121,21 +141,12 @@ impl ForwardingListeners {
                 "{}:{} unable to register request listener, error: {}",
                 FORWARDING_LISTENERS_TAG, FORWARDING_LISTENERS_FN_INSERT_TAG, err
             );
-            for uuri_pair in &uuris_to_backpedal {
-                if let Err(err) = in_transport
-                    .unregister_listener(
-                        &uuri_pair.0,
-                        uuri_pair.1.as_ref(),
-                        forwarding_listener.clone(),
-                    )
-                    .await
-                {
-                    warn!(
-                        "{}:{} unable to unregister listener, error: {}",
-                        FORWARDING_LISTENERS_TAG, FORWARDING_LISTENERS_FN_INSERT_TAG, err
-                    );
-                };
-            }
+            rollback_registered_filters(
+                &in_transport,
+                &rollback_filters,
+                forwarding_listener.clone(),
+            )
+            .await;
             return Err(ForwardingListenerError::FailToRegisterNotificationRequestResponseListener);
         }
 
@@ -176,27 +187,18 @@ impl ForwardingListeners {
                     "{}:{} unable to register listener, error: {}",
                     FORWARDING_LISTENERS_TAG, FORWARDING_LISTENERS_FN_INSERT_TAG, err
                 );
-                for uuri_pair in &uuris_to_backpedal {
-                    if let Err(err) = in_transport
-                        .unregister_listener(
-                            &uuri_pair.0,
-                            uuri_pair.1.as_ref(),
-                            forwarding_listener.clone(),
-                        )
-                        .await
-                    {
-                        warn!(
-                            "{}:{} unable to unregister listener, error: {}",
-                            FORWARDING_LISTENERS_TAG, FORWARDING_LISTENERS_FN_INSERT_TAG, err
-                        );
-                    };
-                }
+                rollback_registered_filters(
+                    &in_transport,
+                    &rollback_filters,
+                    forwarding_listener.clone(),
+                )
+                .await;
                 return Err(ForwardingListenerError::FailToRegisterPublishListener(
                     source_uri,
                 ));
             }
 
-            uuris_to_backpedal.insert((source_uri, None));
+            rollback_filters.insert((source_uri, None));
             debug!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_INSERT_TAG} able to register listener");
         }
 
