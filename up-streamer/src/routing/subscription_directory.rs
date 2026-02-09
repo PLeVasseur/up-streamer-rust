@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use tracing::warn;
 
 #[allow(clippy::mutable_key_type)]
-pub(crate) async fn fetch_subscribers_for_authority(
+pub(crate) async fn resolve_subscribers_for_authority(
     subscription_cache: &Arc<Mutex<SubscriptionCache>>,
     out_authority: &str,
     tag: &str,
