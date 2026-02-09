@@ -26,7 +26,7 @@ pub(crate) async fn remove_forwarding_rule(
 mod tests {
     use super::{insert_forwarding_rule, remove_forwarding_rule, ForwardingRules};
     use crate::control_plane::route_table::ForwardingRule;
-    use crate::ustreamer::ComparableTransport;
+    use crate::control_plane::transport_identity::TransportIdentityKey;
     use async_trait::async_trait;
     use std::collections::HashSet;
     use std::sync::Arc;
@@ -77,8 +77,8 @@ mod tests {
         (
             in_authority.to_string(),
             out_authority.to_string(),
-            ComparableTransport::new(in_transport),
-            ComparableTransport::new(out_transport),
+            TransportIdentityKey::new(in_transport),
+            TransportIdentityKey::new(out_transport),
         )
     }
 

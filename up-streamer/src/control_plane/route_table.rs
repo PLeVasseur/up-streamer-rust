@@ -1,17 +1,17 @@
 //! Forwarding-rule identity tuple construction for the control plane.
 
 use crate::endpoint::Endpoint;
-use crate::ustreamer::ComparableTransport;
+use crate::control_plane::transport_identity::TransportIdentityKey;
 
-pub(crate) type ForwardingRule = (String, String, ComparableTransport, ComparableTransport);
+pub(crate) type ForwardingRule = (String, String, TransportIdentityKey, TransportIdentityKey);
 
 #[inline(always)]
 pub(crate) fn build_forwarding_rule(r#in: &Endpoint, out: &Endpoint) -> ForwardingRule {
     (
         r#in.authority.clone(),
         out.authority.clone(),
-        ComparableTransport::new(r#in.transport.clone()),
-        ComparableTransport::new(out.transport.clone()),
+        TransportIdentityKey::new(r#in.transport.clone()),
+        TransportIdentityKey::new(out.transport.clone()),
     )
 }
 

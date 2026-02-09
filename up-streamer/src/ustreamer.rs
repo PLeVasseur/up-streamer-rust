@@ -18,14 +18,12 @@ use crate::control_plane::route_table::build_forwarding_rule;
 use crate::endpoint::Endpoint;
 use crate::runtime::subscription_runtime::fetch_subscriptions;
 use std::collections::HashSet;
-use std::fmt::{Debug, Formatter};
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use subscription_cache::SubscriptionCache;
 use tokio::sync::Mutex;
 use tracing::{debug, error};
 use up_rust::core::usubscription::{FetchSubscriptionsRequest, SubscriberInfo, USubscription};
-use up_rust::{UCode, UStatus, UTransport, UUri};
+use up_rust::{UCode, UStatus, UUri};
 
 const USTREAMER_TAG: &str = "UStreamer:";
 const USTREAMER_FN_NEW_TAG: &str = "new():";
@@ -227,37 +225,5 @@ impl UStreamer {
             .await;
 
         Ok(())
-    }
-}
-
-#[derive(Clone)]
-pub(crate) struct ComparableTransport {
-    transport: Arc<dyn UTransport>,
-}
-
-impl ComparableTransport {
-    pub fn new(transport: Arc<dyn UTransport>) -> Self {
-        Self { transport }
-    }
-}
-
-impl Hash for ComparableTransport {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        Arc::as_ptr(&self.transport).hash(state);
-    }
-}
-
-impl PartialEq for ComparableTransport {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.transport, &other.transport)
-    }
-}
-
-impl Eq for ComparableTransport {}
-
-impl Debug for ComparableTransport {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ComparableTransport")
-            .finish_non_exhaustive()
     }
 }
