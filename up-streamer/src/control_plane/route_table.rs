@@ -6,6 +6,10 @@ use std::collections::HashSet;
 use tokio::sync::Mutex;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+/// Stable identity for a single ingress->egress route registration.
+///
+/// Equality intentionally includes transport identity to distinguish routes that share
+/// authorities but are backed by different transport instances.
 pub(crate) struct RouteKey {
     pub(crate) ingress_authority: String,
     pub(crate) egress_authority: String,
@@ -14,6 +18,7 @@ pub(crate) struct RouteKey {
 }
 
 impl RouteKey {
+    /// Builds a `RouteKey` from outward API endpoints.
     #[inline(always)]
     pub(crate) fn from_endpoints(r#in: &Endpoint, out: &Endpoint) -> Self {
         Self {
@@ -25,22 +30,26 @@ impl RouteKey {
     }
 }
 
+/// Route registry storage owner for dedupe and idempotent presence checks.
 pub(crate) struct RouteTable {
     routes: Mutex<HashSet<RouteKey>>,
 }
 
 impl RouteTable {
+    /// Creates an empty route table.
     pub(crate) fn new() -> Self {
         Self {
             routes: Mutex::new(HashSet::new()),
         }
     }
 
+    /// Inserts a route identity. Returns `true` only when first inserted.
     pub(crate) async fn insert_route(&self, route_key: RouteKey) -> bool {
         let mut routes = self.routes.lock().await;
         routes.insert(route_key)
     }
 
+    /// Removes a route identity. Returns `true` only when the route existed.
     pub(crate) async fn remove_route(&self, route_key: &RouteKey) -> bool {
         let mut routes = self.routes.lock().await;
         routes.remove(route_key)

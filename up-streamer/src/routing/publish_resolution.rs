@@ -5,6 +5,7 @@ use subscription_cache::SubscriptionInformation;
 use tracing::{debug, warn};
 use up_rust::UUri;
 
+/// Resolves publish source filters for route listeners under one ingress->egress pair.
 pub(crate) struct PublishRouteResolver<'a> {
     ingress_authority: &'a str,
     egress_authority: &'a str,
@@ -13,6 +14,7 @@ pub(crate) struct PublishRouteResolver<'a> {
 }
 
 impl<'a> PublishRouteResolver<'a> {
+    /// Creates a resolver for one route context and log scope.
     pub(crate) fn new(
         ingress_authority: &'a str,
         egress_authority: &'a str,
@@ -27,10 +29,12 @@ impl<'a> PublishRouteResolver<'a> {
         }
     }
 
+    /// Returns `true` when a subscription topic can originate from the ingress authority.
     fn topic_matches_ingress_authority(&self, topic: &UUri) -> bool {
         topic.authority_name == "*" || topic.authority_name == self.ingress_authority
     }
 
+    /// Builds a single publish source filter for a subscriber topic when applicable.
     fn derive_source_filter_for_topic(&self, topic: &UUri) -> Option<UUri> {
         if !self.topic_matches_ingress_authority(topic) {
             debug!(
@@ -67,6 +71,7 @@ impl<'a> PublishRouteResolver<'a> {
     }
 
     #[allow(clippy::mutable_key_type)]
+    /// Derives deduplicated publish source filters for all matching subscribers.
     pub(crate) fn derive_source_filters(
         &self,
         subscribers: &HashSet<SubscriptionInformation>,

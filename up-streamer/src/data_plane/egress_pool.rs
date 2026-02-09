@@ -13,18 +13,21 @@ const EGRESS_ROUTE_POOL_TAG: &str = "EgressRoutePool:";
 const EGRESS_ROUTE_POOL_FN_ATTACH_TAG: &str = "attach_route:";
 const EGRESS_ROUTE_POOL_FN_DETACH_TAG: &str = "detach_route:";
 
+/// Per-transport egress worker binding state.
 pub(crate) struct EgressRouteBinding {
     pub(crate) ref_count: usize,
     pub(crate) worker: EgressRouteWorker,
     pub(crate) sender: Sender<Arc<UMessage>>,
 }
 
+/// Refcounted registry of egress workers keyed by transport identity.
 pub(crate) struct EgressRoutePool {
     message_queue_size: usize,
     pub(crate) workers: Mutex<HashMap<TransportIdentityKey, EgressRouteBinding>>,
 }
 
 impl EgressRoutePool {
+    /// Creates an empty egress route pool.
     pub(crate) fn new(message_queue_size: usize) -> Self {
         Self {
             message_queue_size,
@@ -32,6 +35,7 @@ impl EgressRoutePool {
         }
     }
 
+    /// Attaches one route to an egress transport, reusing worker state when possible.
     pub(crate) async fn attach_route(
         &mut self,
         out_transport: Arc<dyn UTransport>,
@@ -57,6 +61,7 @@ impl EgressRoutePool {
         slot.sender.clone()
     }
 
+    /// Detaches one route from an egress transport and drops worker state at refcount zero.
     pub(crate) async fn detach_route(&mut self, out_transport: Arc<dyn UTransport>) {
         let out_transport_key = TransportIdentityKey::new(out_transport.clone());
 
@@ -146,7 +151,7 @@ mod tests {
         let slot = workers
             .values()
             .next()
-            .expect("single transport forwarder");
+            .expect("single egress worker binding");
         assert_eq!(slot.ref_count, 2);
         assert!(sender_a.same_channel(&sender_b));
     }

@@ -18,6 +18,7 @@ const INGRESS_ROUTE_REGISTRY_TAG: &str = "IngressRouteRegistry:";
 const INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG: &str = "register_route:";
 const INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG: &str = "unregister_route:";
 
+/// Ingress route registration failures.
 pub enum IngressRouteRegistrationError {
     FailedToRegisterRequestRouteListener,
     FailedToRegisterPublishRouteListener(UUri),
@@ -52,6 +53,7 @@ impl Display for IngressRouteRegistrationError {
 impl Error for IngressRouteRegistrationError {}
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+/// Identity for one ingress binding registration in the data plane.
 struct IngressRouteBindingKey {
     transport: TransportIdentityKey,
     ingress_authority: String,
@@ -96,11 +98,13 @@ async fn rollback_registered_filters(
     }
 }
 
+/// Refcounted ingress listener registry keyed by route binding identity.
 pub(crate) struct IngressRouteRegistry {
     bindings: tokio::sync::Mutex<HashMap<IngressRouteBindingKey, IngressRouteBinding>>,
 }
 
 impl IngressRouteRegistry {
+    /// Creates an empty ingress route registry.
     pub(crate) fn new() -> Self {
         Self {
             bindings: tokio::sync::Mutex::new(HashMap::new()),
@@ -229,6 +233,7 @@ impl IngressRouteRegistry {
         Ok(Some(route_listener))
     }
 
+    /// Unregisters ingress route listeners when the binding refcount reaches zero.
     pub(crate) async fn unregister_route(
         &self,
         in_transport: Arc<dyn UTransport>,
