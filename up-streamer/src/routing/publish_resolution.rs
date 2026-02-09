@@ -1,9 +1,11 @@
 //! Publish-source filter derivation and dedupe policy.
 
-use std::collections::HashSet;
-use subscription_cache::SubscriptionInformation;
+use std::collections::HashMap;
+use subscription_cache::{SubscriptionLookup, UUriIdentityKey};
 use tracing::{debug, warn};
 use up_rust::UUri;
+
+pub(crate) type SourceFilterLookup = HashMap<UUriIdentityKey, UUri>;
 
 /// Resolves publish source filters for route listeners under one ingress->egress pair.
 pub(crate) struct PublishRouteResolver<'a> {
@@ -70,17 +72,18 @@ impl<'a> PublishRouteResolver<'a> {
         }
     }
 
-    #[allow(clippy::mutable_key_type)]
     /// Derives deduplicated publish source filters for all matching subscribers.
     pub(crate) fn derive_source_filters(
         &self,
-        subscribers: &HashSet<SubscriptionInformation>,
-    ) -> HashSet<UUri> {
-        let mut source_filters = HashSet::new();
+        subscribers: &SubscriptionLookup,
+    ) -> SourceFilterLookup {
+        let mut source_filters = HashMap::new();
 
-        for subscriber in subscribers {
+        for subscriber in subscribers.values() {
             if let Some(source_uri) = self.derive_source_filter_for_topic(&subscriber.topic) {
-                source_filters.insert(source_uri);
+                source_filters
+                    .entry(UUriIdentityKey::from(&source_uri))
+                    .or_insert(source_uri);
             }
         }
 
@@ -91,9 +94,11 @@ impl<'a> PublishRouteResolver<'a> {
 #[cfg(test)]
 mod tests {
     use super::PublishRouteResolver;
-    use std::collections::HashSet;
+    use std::collections::HashMap;
     use std::str::FromStr;
-    use subscription_cache::SubscriptionInformation;
+    use subscription_cache::{
+        SubscriptionIdentityKey, SubscriptionInformation, SubscriptionLookup,
+    };
     use up_rust::core::usubscription::{
         EventDeliveryConfig, SubscribeAttributes, SubscriberInfo, SubscriptionStatus,
     };
@@ -110,6 +115,16 @@ mod tests {
             attributes: SubscribeAttributes::default(),
             config: EventDeliveryConfig::default(),
         }
+    }
+
+    fn subscription_lookup(subscriptions: Vec<SubscriptionInformation>) -> SubscriptionLookup {
+        let mut lookup = HashMap::new();
+
+        for subscription in subscriptions {
+            lookup.insert(SubscriptionIdentityKey::from(&subscription), subscription);
+        }
+
+        lookup
     }
 
     #[test]
@@ -143,21 +158,12 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::mutable_key_type)]
     fn resolver_dedupes_sources_across_subscribers() {
-        let mut subscribers = HashSet::new();
-        subscribers.insert(subscription_info(
-            "//authority-a/5BA0/1/8001",
-            "//authority-b/5678/1/1234",
-        ));
-        subscribers.insert(subscription_info(
-            "//authority-a/5BA0/1/8001",
-            "//authority-b/5679/1/1234",
-        ));
-        subscribers.insert(subscription_info(
-            "//authority-z/5BA0/1/8001",
-            "//authority-b/567A/1/1234",
-        ));
+        let subscribers = subscription_lookup(vec![
+            subscription_info("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234"),
+            subscription_info("//authority-a/5BA0/1/8001", "//authority-b/5679/1/1234"),
+            subscription_info("//authority-z/5BA0/1/8001", "//authority-b/567A/1/1234"),
+        ]);
 
         let resolver =
             PublishRouteResolver::new("authority-a", "authority-b", "routing-test", "insert");
@@ -166,6 +172,8 @@ mod tests {
         assert_eq!(filters.len(), 1);
         let expected =
             UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).expect("expected source uri");
-        assert!(filters.contains(&expected));
+        assert!(filters
+            .values()
+            .any(|source_filter| source_filter == &expected));
     }
 }

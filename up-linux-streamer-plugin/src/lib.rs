@@ -45,6 +45,10 @@ pub mod plugin {
     use zenoh_result::{zerror, ZResult};
     use zenoh_util::ffi::JsonKeyValueMap;
 
+    fn try_init_tracing_from_env() {
+        let _ = tracing_subscriber::fmt::try_init();
+    }
+
     // The struct implementing the ZenohPlugin and ZenohPlugin traits
     pub struct UpLinuxStreamerPlugin {}
 
@@ -64,7 +68,7 @@ pub mod plugin {
 
         // The first operation called by zenohd on the plugin
         fn start(name: &str, runtime: &Self::StartArgs) -> ZResult<Self::Instance> {
-            zenoh_util::try_init_log_from_env();
+            try_init_tracing_from_env();
             trace!("up-linux-streamer-plugin: start");
 
             let plugin_conf = runtime
@@ -92,8 +96,6 @@ pub mod plugin {
             trace!("up-linux-streamer-plugin: before creating RunningPlugin");
             let ret = Box::new(RunningPlugin(Arc::new(Mutex::new(RunningPluginInner {
                 flag,
-                name: name.into(),
-                runtime: runtime.clone(),
             }))));
             trace!("up-linux-streamer-plugin: after creating RunningPlugin");
 
@@ -104,10 +106,6 @@ pub mod plugin {
     // An inner-state for the RunningPlugin
     struct RunningPluginInner {
         flag: Arc<AtomicBool>,
-        #[allow(dead_code)] // Allowing this to be able to configure streamer at runtime later
-        name: String,
-        #[allow(dead_code)] // Allowing this to be able to configure streamer at runtime later
-        runtime: DynamicRuntime,
     }
     // The RunningPlugin struct implementing the RunningPluginTrait trait
     #[derive(Clone)]
@@ -136,14 +134,10 @@ pub mod plugin {
 
     async fn run(runtime: DynamicRuntime, config: Config, flag: Arc<AtomicBool>) {
         trace!("up-linux-streamer-plugin: inside of run");
-        zenoh_util::try_init_log_from_env();
-        trace!("up-linux-streamer-plugin: after try_init_log_from_env()");
 
         trace!("attempt to call something on the runtime");
         let timestamp_res = runtime.new_timestamp();
         trace!("called function on runtime: {timestamp_res:?}");
-
-        let _ = tracing_subscriber::fmt::try_init();
 
         let subscription_path = config.usubscription_config.file_path;
         let usubscription = Arc::new(USubscriptionStaticFile::new(subscription_path));
@@ -193,7 +187,7 @@ pub mod plugin {
             } else {
                 config.someip_config.config_file
             };
-            tracing::log::trace!("someip_config_file_abs_path: {someip_config_file_abs_path:?}");
+            trace!("someip_config_file_abs_path: {someip_config_file_abs_path:?}");
             if !someip_config_file_abs_path.exists() {
                 panic!(
                 "The specified someip config_file doesn't exist: {someip_config_file_abs_path:?}"

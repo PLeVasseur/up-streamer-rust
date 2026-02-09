@@ -1,8 +1,8 @@
 //! Subscription-directory adapter used by routing and data-plane flows.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
-use subscription_cache::{SubscriptionCache, SubscriptionInformation};
+use subscription_cache::{SubscriptionCache, SubscriptionLookup};
 use tokio::sync::Mutex;
 use tracing::warn;
 
@@ -18,14 +18,13 @@ impl SubscriptionDirectory {
         Self { cache }
     }
 
-    #[allow(clippy::mutable_key_type)]
     /// Looks up subscribers for one egress authority with wildcard matching.
     pub(crate) async fn lookup_route_subscribers(
         &self,
         out_authority: &str,
         tag: &str,
         action: &str,
-    ) -> HashSet<SubscriptionInformation> {
+    ) -> SubscriptionLookup {
         match self
             .cache
             .lock()
@@ -35,7 +34,7 @@ impl SubscriptionDirectory {
             Some(subscribers) => subscribers,
             None => {
                 warn!("{tag}:{action} no subscribers found for out_authority: {out_authority:?}");
-                HashSet::new()
+                HashMap::new()
             }
         }
     }

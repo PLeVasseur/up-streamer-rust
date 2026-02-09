@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 use tracing::warn;
@@ -22,7 +22,47 @@ use up_rust::core::usubscription::{
 use up_rust::UUri;
 use up_rust::{UCode, UStatus};
 
-pub type SubscribersMap = Mutex<HashMap<String, HashSet<SubscriptionInformation>>>;
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct UUriIdentityKey {
+    authority_name: String,
+    ue_id: u32,
+    ue_version_major: u8,
+    resource_id: u16,
+}
+
+impl From<&UUri> for UUriIdentityKey {
+    fn from(uri: &UUri) -> Self {
+        Self {
+            authority_name: uri.authority_name.clone(),
+            ue_id: uri.ue_id,
+            ue_version_major: uri.uentity_major_version(),
+            resource_id: uri.resource_id(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct SubscriptionIdentityKey {
+    topic: UUriIdentityKey,
+    subscriber: Option<UUriIdentityKey>,
+}
+
+impl From<&SubscriptionInformation> for SubscriptionIdentityKey {
+    fn from(subscription_information: &SubscriptionInformation) -> Self {
+        Self {
+            topic: UUriIdentityKey::from(&subscription_information.topic),
+            subscriber: subscription_information
+                .subscriber
+                .uri
+                .as_ref()
+                .map(UUriIdentityKey::from),
+        }
+    }
+}
+
+pub type SubscriptionLookup = HashMap<SubscriptionIdentityKey, SubscriptionInformation>;
+
+type SubscribersMap = Mutex<HashMap<String, SubscriptionLookup>>;
 
 // Tracks subscription information inside the SubscriptionCache
 pub struct SubscriptionInformation {
@@ -132,17 +172,21 @@ impl SubscriptionCache {
                     ))
                 }
             };
-            subscription_cache_hash_map
+            let subscription_identity = SubscriptionIdentityKey::from(&subscription_information);
+            let authority_subscriptions = subscription_cache_hash_map
                 .entry(subscriber_authority_name)
-                .or_insert_with(HashSet::new)
-                .insert(subscription_information);
+                .or_insert_with(HashMap::new);
+
+            authority_subscriptions
+                .entry(subscription_identity)
+                .or_insert(subscription_information);
         }
         Ok(Self {
             subscription_cache_map: Mutex::new(subscription_cache_hash_map),
         })
     }
 
-    pub fn fetch_cache_entry(&self, entry: String) -> Option<HashSet<SubscriptionInformation>> {
+    pub fn fetch_cache_entry(&self, entry: String) -> Option<SubscriptionLookup> {
         let map = match self.subscription_cache_map.lock() {
             Ok(map) => map,
             Err(_) => return None,
@@ -150,25 +194,21 @@ impl SubscriptionCache {
         map.get(&entry).cloned()
     }
 
-    pub fn fetch_cache_entry_with_wildcard(
-        &self,
-        entry: &str,
-    ) -> Option<HashSet<SubscriptionInformation>> {
+    pub fn fetch_cache_entry_with_wildcard(&self, entry: &str) -> Option<SubscriptionLookup> {
         let map = match self.subscription_cache_map.lock() {
             Ok(map) => map,
             Err(_) => return None,
         };
 
-        #[allow(clippy::mutable_key_type)]
-        let mut merged = HashSet::new();
+        let mut merged: SubscriptionLookup = HashMap::new();
 
         if let Some(exact_subscribers) = map.get(entry) {
-            merged.extend(exact_subscribers.iter().cloned());
+            merged.extend(exact_subscribers.clone());
         }
 
         if entry != "*" {
             if let Some(wildcard_subscribers) = map.get("*") {
-                merged.extend(wildcard_subscribers.iter().cloned());
+                merged.extend(wildcard_subscribers.clone());
             }
         }
 
@@ -203,7 +243,7 @@ mod tests {
         let mut topics: Vec<UUri> = cache
             .fetch_cache_entry(authority.to_string())
             .unwrap()
-            .into_iter()
+            .into_values()
             .map(|subscription| subscription.topic)
             .collect();
         topics.sort_by_key(|topic| topic.to_uri(false));
@@ -265,7 +305,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::mutable_key_type)]
     fn wildcard_lookup_merges_exact_and_wildcard_rows() {
         let cache = SubscriptionCache::new(FetchSubscriptionsResponse {
             subscriptions: vec![

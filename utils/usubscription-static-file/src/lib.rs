@@ -11,11 +11,9 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-#![allow(clippy::mutable_key_type)]
-
 use async_trait::async_trait;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs::{self, canonicalize};
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -27,13 +25,146 @@ use up_rust::core::usubscription::{
 };
 use up_rust::{UCode, UStatus, UUri};
 
+const STATIC_RESOURCE_ID: u32 = 0x8001;
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct UUriIdentityKey {
+    authority_name: String,
+    ue_id: u32,
+    ue_version_major: u8,
+    resource_id: u32,
+}
+
+impl From<&UUri> for UUriIdentityKey {
+    fn from(uri: &UUri) -> Self {
+        Self {
+            authority_name: uri.authority_name.clone(),
+            ue_id: uri.ue_id,
+            ue_version_major: uri.uentity_major_version(),
+            resource_id: uri.resource_id,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct SubscriptionIdentityKey {
+    topic: UUriIdentityKey,
+    subscriber: UUriIdentityKey,
+}
+
 pub struct USubscriptionStaticFile {
     static_file: String,
 }
 
 impl USubscriptionStaticFile {
     pub fn new(static_file: String) -> Self {
-        USubscriptionStaticFile { static_file }
+        Self { static_file }
+    }
+
+    fn unsupported_operation_status(operation: &str) -> UStatus {
+        UStatus::fail_with_code(
+            UCode::UNIMPLEMENTED,
+            format!("{operation} is not supported by USubscriptionStaticFile (read-only backend)"),
+        )
+    }
+
+    fn canonicalized_static_file_path(&self) -> Result<PathBuf, UStatus> {
+        let subscription_json_file = PathBuf::from(self.static_file.clone());
+        debug!("subscription_json_file: {subscription_json_file:?}");
+
+        let canonicalized_result = canonicalize(subscription_json_file);
+        debug!("canonicalize: {canonicalized_result:?}");
+
+        canonicalized_result.map_err(|error| {
+            UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                format!("Static subscription file not found: {error:?}"),
+            )
+        })
+    }
+
+    fn read_static_config_json(&self) -> Result<Value, UStatus> {
+        let subscription_json_file = self.canonicalized_static_file_path()?;
+        let data = fs::read_to_string(subscription_json_file).map_err(|error| {
+            UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                format!("Unable to read file: {error:?}"),
+            )
+        })?;
+
+        serde_json::from_str(&data).map_err(|error| {
+            UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                format!("Unable to parse JSON: {error:?}"),
+            )
+        })
+    }
+
+    fn parse_static_subscriptions(&self) -> Result<Vec<Subscription>, UStatus> {
+        let value = self.read_static_config_json()?;
+        let Some(entries) = value.as_object() else {
+            return Err(UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                "Static subscription file must be a JSON object mapping topic URI keys to arrays of subscriber URI strings",
+            ));
+        };
+
+        let mut subscriptions_by_key: HashMap<SubscriptionIdentityKey, Subscription> =
+            HashMap::new();
+
+        for (topic_key, subscriber_values) in entries {
+            let mut topic = match UUri::from_str(topic_key) {
+                Ok(uri) => uri,
+                Err(error) => {
+                    error!("Error deserializing topic '{topic_key}': {error}");
+                    continue;
+                }
+            };
+
+            if topic.resource_id != STATIC_RESOURCE_ID {
+                warn!("Setting fixed resource_id {STATIC_RESOURCE_ID:#06X} for topic '{topic}'");
+                topic.resource_id = STATIC_RESOURCE_ID;
+            }
+
+            let Some(subscribers) = subscriber_values.as_array() else {
+                warn!("Ignoring non-array subscriber list for topic '{topic_key}'");
+                continue;
+            };
+
+            for subscriber_value in subscribers {
+                let Some(subscriber_str) = subscriber_value.as_str() else {
+                    warn!("Unable to parse subscriber '{subscriber_value}'");
+                    continue;
+                };
+
+                let subscriber_uri = match UUri::from_str(subscriber_str) {
+                    Ok(uri) => uri,
+                    Err(error) => {
+                        error!("Error deserializing subscriber '{subscriber_str}': {error}");
+                        continue;
+                    }
+                };
+
+                let subscription_identity = SubscriptionIdentityKey {
+                    topic: UUriIdentityKey::from(&topic),
+                    subscriber: UUriIdentityKey::from(&subscriber_uri),
+                };
+
+                subscriptions_by_key
+                    .entry(subscription_identity)
+                    .or_insert_with(|| Subscription {
+                        topic: Some(topic.clone()).into(),
+                        subscriber: Some(SubscriberInfo {
+                            uri: Some(subscriber_uri).into(),
+                            ..Default::default()
+                        })
+                        .into(),
+                        ..Default::default()
+                    });
+            }
+        }
+
+        Ok(subscriptions_by_key.into_values().collect())
     }
 }
 
@@ -43,117 +174,26 @@ impl USubscription for USubscriptionStaticFile {
         &self,
         _subscription_request: SubscriptionRequest,
     ) -> Result<SubscriptionResponse, UStatus> {
-        todo!()
+        Err(Self::unsupported_operation_status("subscribe"))
     }
 
     async fn fetch_subscriptions(
         &self,
         fetch_subscriptions_request: FetchSubscriptionsRequest,
     ) -> Result<FetchSubscriptionsResponse, UStatus> {
-        // Reads in a file and builds it into a subscription_cache data type
-        // This is a static file, so we will just return the same set of subscribers
-        // for all URIs
-        debug!(
-            "fetch_subscriptions for topic: {}",
-            fetch_subscriptions_request.subscriber()
-        );
+        debug!("fetch_subscriptions request: {fetch_subscriptions_request:?}");
 
-        let subscription_json_file = PathBuf::from(self.static_file.clone());
+        let subscriptions = self.parse_static_subscriptions()?;
+        debug!("Finished reading subscriptions\n{subscriptions:#?}");
 
-        let mut subscriptions_vec = Vec::new();
-
-        debug!("subscription_json_file: {subscription_json_file:?}");
-        let canonicalized_result = canonicalize(subscription_json_file);
-        debug!("canonicalize: {canonicalized_result:?}",);
-
-        let subscription_json_file = match canonicalized_result {
-            Ok(path) => path,
-            Err(e) => {
-                return Err(UStatus::fail_with_code(
-                    UCode::INVALID_ARGUMENT,
-                    format!("Static subscription file not found: {e:?}"),
-                ))
-            }
-        };
-
-        let data = fs::read_to_string(subscription_json_file).map_err(|e| {
-            UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
-                format!("Unable to read file: {e:?}"),
-            )
-        })?;
-
-        let res: Value = serde_json::from_str(&data).map_err(|e| {
-            UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
-                format!("Unable to parse JSON: {e:?}"),
-            )
-        })?;
-
-        if let Some(obj) = res.as_object() {
-            for (key, value) in obj {
-                debug!("key: {key}, value: {value}");
-                let mut subscriber_set: HashSet<UUri> = HashSet::new();
-
-                if let Some(array) = value.as_array() {
-                    for subscriber in array {
-                        debug!("Reading subscriber as URI: {subscriber}");
-
-                        if let Some(subscriber_str) = subscriber.as_str() {
-                            match UUri::from_str(subscriber_str) {
-                                Ok(uri) => {
-                                    debug!("All good for subscriber: {uri}");
-                                    subscriber_set.insert(uri);
-                                }
-                                Err(error) => {
-                                    error!("Error with Deserializing Subscriber '{subscriber_str}': {error}");
-                                }
-                            }
-                        } else {
-                            warn!("Unable to parse subscriber '{subscriber}");
-                        }
-                    }
-                }
-
-                debug!("key: {key}");
-                let topic = match UUri::from_str(&key.to_string()) {
-                    Ok(mut uri) => {
-                        debug!("All good for key '{key}'");
-                        warn!("Setting fixed resourceid 0x8001 for uri '{uri}'");
-                        uri.resource_id = 0x8001;
-                        uri
-                    }
-                    Err(error) => {
-                        error!("Error with Deserializing Key: {error}");
-                        continue;
-                    }
-                };
-
-                for subscriber in subscriber_set {
-                    let subscriber_info_tmp = SubscriberInfo {
-                        uri: Some(subscriber).into(),
-                        ..Default::default()
-                    };
-                    let subscription_tmp = Subscription {
-                        topic: Some(topic.clone()).into(),
-                        subscriber: Some(subscriber_info_tmp).into(),
-                        ..Default::default()
-                    };
-                    subscriptions_vec.push(subscription_tmp);
-                }
-            }
-        }
-        debug!("Finished reading Subscriptions\n{subscriptions_vec:#?}");
-        let fetch_response = FetchSubscriptionsResponse {
-            subscriptions: subscriptions_vec,
+        Ok(FetchSubscriptionsResponse {
+            subscriptions,
             ..Default::default()
-        };
-
-        Ok(fetch_response)
+        })
     }
 
     async fn unsubscribe(&self, _unsubscribe_request: UnsubscribeRequest) -> Result<(), UStatus> {
-        todo!()
+        Err(Self::unsupported_operation_status("unsubscribe"))
     }
 
     async fn register_for_notifications(
@@ -167,14 +207,51 @@ impl USubscription for USubscriptionStaticFile {
         &self,
         _notifications_unregister_request: NotificationsRequest,
     ) -> Result<(), UStatus> {
-        todo!()
+        Ok(())
     }
 
     async fn fetch_subscribers(
         &self,
-        _fetch_subscribers_request: FetchSubscribersRequest,
+        fetch_subscribers_request: FetchSubscribersRequest,
     ) -> Result<FetchSubscribersResponse, UStatus> {
-        todo!();
+        let requested_topic = fetch_subscribers_request.topic.as_ref().ok_or_else(|| {
+            UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                "fetch_subscribers requires a topic",
+            )
+        })?;
+
+        let mut canonical_topic = requested_topic.clone();
+        canonical_topic.resource_id = STATIC_RESOURCE_ID;
+        let requested_topic_identity = UUriIdentityKey::from(&canonical_topic);
+
+        let subscriptions = self.parse_static_subscriptions()?;
+        let mut subscribers_by_key: HashMap<UUriIdentityKey, SubscriberInfo> = HashMap::new();
+
+        for subscription in subscriptions {
+            let Some(topic) = subscription.topic.as_ref() else {
+                continue;
+            };
+            if UUriIdentityKey::from(topic) != requested_topic_identity {
+                continue;
+            }
+
+            let Some(subscriber) = subscription.subscriber.as_ref() else {
+                continue;
+            };
+            let Some(subscriber_uri) = subscriber.uri.as_ref() else {
+                continue;
+            };
+
+            subscribers_by_key
+                .entry(UUriIdentityKey::from(subscriber_uri))
+                .or_insert_with(|| subscriber.clone());
+        }
+
+        Ok(FetchSubscribersResponse {
+            subscribers: subscribers_by_key.into_values().collect(),
+            ..Default::default()
+        })
     }
 
     async fn reset(&self, _reset_request: ResetRequest) -> Result<ResetResponse, UStatus> {
