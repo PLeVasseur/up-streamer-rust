@@ -23,12 +23,12 @@ use integration_test_utils::{
     wait_for_pause, ClientCommand, ClientConfiguration, ClientControl, ClientHistory,
     ClientMessages, LocalClientListener, RemoteClientListener, UPClientFoo,
 };
-use log::debug;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio_condvar::Condvar;
+use tracing::debug;
 use up_rust::{UListener, UTransport};
 use up_streamer::{Endpoint, UStreamer};
 use usubscription_static_file::USubscriptionStaticFile;
@@ -36,8 +36,7 @@ use usubscription_static_file::USubscriptionStaticFile;
 const DURATION_TO_RUN_CLIENTS: u128 = 10;
 const SENT_MESSAGE_VEC_CAPACITY: usize = 10_000;
 
-#[tokio::test(flavor = "multi_thread")]
-async fn single_local_single_remote() {
+async fn run_single_local_single_remote() {
     integration_test_utils::init_logging();
 
     // using async_broadcast to simulate communication protocol
@@ -246,4 +245,9 @@ async fn single_local_single_remote() {
     check_messages_in_order(remote_client_listener.retrieve_message_store()).await;
 
     debug!("All clients finished.");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn single_local_single_remote() {
+    run_single_local_single_remote().await;
 }
