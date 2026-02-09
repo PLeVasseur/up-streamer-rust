@@ -2,8 +2,8 @@
 
 use crate::data_plane::ingress_listener::ForwardingListener;
 use crate::control_plane::transport_identity::TransportIdentityKey;
-use crate::routing::publish_resolution::effective_publish_source_filters;
-use crate::routing::subscription_directory::fetch_subscribers_for_authority;
+use crate::routing::publish_resolution::derive_publish_source_filters;
+use crate::routing::subscription_directory::resolve_subscribers_for_authority;
 use crate::ustreamer::uauthority_to_uuri;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -145,7 +145,7 @@ impl ForwardingListeners {
         );
 
         #[allow(clippy::mutable_key_type)]
-        let subscribers = fetch_subscribers_for_authority(
+        let subscribers = resolve_subscribers_for_authority(
             &subscription_cache,
             out_authority,
             FORWARDING_LISTENERS_TAG,
@@ -154,7 +154,7 @@ impl ForwardingListeners {
         .await;
 
         #[allow(clippy::mutable_key_type)]
-        let publish_source_filters = effective_publish_source_filters(
+        let publish_source_filters = derive_publish_source_filters(
             in_authority,
             out_authority,
             &subscribers,
@@ -262,7 +262,7 @@ impl ForwardingListeners {
                 }
 
                 #[allow(clippy::mutable_key_type)]
-                let subscribers = fetch_subscribers_for_authority(
+                let subscribers = resolve_subscribers_for_authority(
                     &subscription_cache,
                     out_authority,
                     FORWARDING_LISTENERS_TAG,
@@ -271,7 +271,7 @@ impl ForwardingListeners {
                 .await;
 
                 #[allow(clippy::mutable_key_type)]
-                let publish_source_filters = effective_publish_source_filters(
+                let publish_source_filters = derive_publish_source_filters(
                     in_authority,
                     out_authority,
                     &subscribers,

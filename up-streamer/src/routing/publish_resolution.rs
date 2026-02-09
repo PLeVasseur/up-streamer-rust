@@ -5,7 +5,7 @@ use subscription_cache::SubscriptionInformation;
 use tracing::{debug, warn};
 use up_rust::UUri;
 
-pub(crate) fn publish_source_uri_for_rule(
+pub(crate) fn derive_publish_source_filter(
     in_authority: &str,
     out_authority: &str,
     topic: &UUri,
@@ -37,7 +37,7 @@ pub(crate) fn publish_source_uri_for_rule(
 }
 
 #[allow(clippy::mutable_key_type)]
-pub(crate) fn effective_publish_source_filters(
+pub(crate) fn derive_publish_source_filters(
     in_authority: &str,
     out_authority: &str,
     subscribers: &HashSet<SubscriptionInformation>,
@@ -47,9 +47,13 @@ pub(crate) fn effective_publish_source_filters(
     let mut source_filters = HashSet::new();
 
     for subscriber in subscribers {
-        if let Some(source_uri) =
-            publish_source_uri_for_rule(in_authority, out_authority, &subscriber.topic, tag, action)
-        {
+        if let Some(source_uri) = derive_publish_source_filter(
+            in_authority,
+            out_authority,
+            &subscriber.topic,
+            tag,
+            action,
+        ) {
             source_filters.insert(source_uri);
         }
     }
@@ -59,7 +63,7 @@ pub(crate) fn effective_publish_source_filters(
 
 #[cfg(test)]
 mod tests {
-    use super::{effective_publish_source_filters, publish_source_uri_for_rule};
+    use super::{derive_publish_source_filter, derive_publish_source_filters};
     use std::collections::HashSet;
     use std::str::FromStr;
     use subscription_cache::SubscriptionInformation;
@@ -82,10 +86,10 @@ mod tests {
     }
 
     #[test]
-    fn publish_source_uri_for_rule_blocks_mismatched_authority() {
+    fn derive_publish_source_filter_blocks_mismatched_authority() {
         let topic = UUri::from_str("//authority-a/5BA0/1/8001").expect("valid topic UUri");
 
-        let source = publish_source_uri_for_rule(
+        let source = derive_publish_source_filter(
             "authority-c",
             "authority-b",
             &topic,
@@ -97,10 +101,10 @@ mod tests {
     }
 
     #[test]
-    fn publish_source_uri_for_rule_allows_wildcard_topic_authority() {
+    fn derive_publish_source_filter_allows_wildcard_topic_authority() {
         let topic = UUri::from_str("//*/5BA0/1/8001").expect("valid wildcard topic UUri");
 
-        let source = publish_source_uri_for_rule(
+        let source = derive_publish_source_filter(
             "authority-c",
             "authority-b",
             &topic,
@@ -120,7 +124,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::mutable_key_type)]
-    fn effective_publish_source_filters_dedupes_sources_across_subscribers() {
+    fn derive_publish_source_filters_dedupes_sources_across_subscribers() {
         let mut subscribers = HashSet::new();
         subscribers.insert(subscription_info(
             "//authority-a/5BA0/1/8001",
@@ -135,7 +139,7 @@ mod tests {
             "//authority-b/567A/1/1234",
         ));
 
-        let filters = effective_publish_source_filters(
+        let filters = derive_publish_source_filters(
             "authority-a",
             "authority-b",
             &subscribers,
