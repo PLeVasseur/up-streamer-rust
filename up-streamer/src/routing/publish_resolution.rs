@@ -5,65 +5,87 @@ use subscription_cache::SubscriptionInformation;
 use tracing::{debug, warn};
 use up_rust::UUri;
 
-pub(crate) fn derive_publish_source_filter(
-    in_authority: &str,
-    out_authority: &str,
-    topic: &UUri,
-    tag: &str,
-    action: &str,
-) -> Option<UUri> {
-    if topic.authority_name != "*" && topic.authority_name != in_authority {
-        debug!(
-            "{tag}:{action} skipping publish listener {action} for in_authority='{in_authority}', out_authority='{out_authority}', topic_authority='{}', topic={topic:?}",
-            topic.authority_name
-        );
-        return None;
-    }
-
-    match UUri::try_from_parts(
-        in_authority,
-        topic.ue_id,
-        topic.uentity_major_version(),
-        topic.resource_id(),
-    ) {
-        Ok(source_uri) => Some(source_uri),
-        Err(err) => {
-            warn!(
-                "{tag}:{action} unable to build publish source URI for in_authority='{in_authority}', out_authority='{out_authority}', topic={topic:?}: {err}"
-            );
-            None
-        }
-    }
+pub(crate) struct PublishRouteResolver<'a> {
+    ingress_authority: &'a str,
+    egress_authority: &'a str,
+    tag: &'a str,
+    action: &'a str,
 }
 
-#[allow(clippy::mutable_key_type)]
-pub(crate) fn derive_publish_source_filters(
-    in_authority: &str,
-    out_authority: &str,
-    subscribers: &HashSet<SubscriptionInformation>,
-    tag: &str,
-    action: &str,
-) -> HashSet<UUri> {
-    let mut source_filters = HashSet::new();
-
-    for subscriber in subscribers {
-        if let Some(source_uri) = derive_publish_source_filter(
-            in_authority,
-            out_authority,
-            &subscriber.topic,
+impl<'a> PublishRouteResolver<'a> {
+    pub(crate) fn new(
+        ingress_authority: &'a str,
+        egress_authority: &'a str,
+        tag: &'a str,
+        action: &'a str,
+    ) -> Self {
+        Self {
+            ingress_authority,
+            egress_authority,
             tag,
             action,
-        ) {
-            source_filters.insert(source_uri);
         }
     }
 
-    source_filters
+    fn topic_matches_ingress_authority(&self, topic: &UUri) -> bool {
+        topic.authority_name == "*" || topic.authority_name == self.ingress_authority
+    }
+
+    fn derive_source_filter_for_topic(&self, topic: &UUri) -> Option<UUri> {
+        if !self.topic_matches_ingress_authority(topic) {
+            debug!(
+                "{}:{} skipping publish listener {} for in_authority='{}', out_authority='{}', topic_authority='{}', topic={topic:?}",
+                self.tag,
+                self.action,
+                self.action,
+                self.ingress_authority,
+                self.egress_authority,
+                topic.authority_name,
+            );
+            return None;
+        }
+
+        match UUri::try_from_parts(
+            self.ingress_authority,
+            topic.ue_id,
+            topic.uentity_major_version(),
+            topic.resource_id(),
+        ) {
+            Ok(source_uri) => Some(source_uri),
+            Err(err) => {
+                warn!(
+                    "{}:{} unable to build publish source URI for in_authority='{}', out_authority='{}', topic={topic:?}: {}",
+                    self.tag,
+                    self.action,
+                    self.ingress_authority,
+                    self.egress_authority,
+                    err,
+                );
+                None
+            }
+        }
+    }
+
+    #[allow(clippy::mutable_key_type)]
+    pub(crate) fn derive_source_filters(
+        &self,
+        subscribers: &HashSet<SubscriptionInformation>,
+    ) -> HashSet<UUri> {
+        let mut source_filters = HashSet::new();
+
+        for subscriber in subscribers {
+            if let Some(source_uri) = self.derive_source_filter_for_topic(&subscriber.topic) {
+                source_filters.insert(source_uri);
+            }
+        }
+
+        source_filters
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_publish_source_filter, derive_publish_source_filters};
+    use super::PublishRouteResolver;
     use std::collections::HashSet;
     use std::str::FromStr;
     use subscription_cache::SubscriptionInformation;
@@ -86,32 +108,25 @@ mod tests {
     }
 
     #[test]
-    fn derive_publish_source_filter_blocks_mismatched_authority() {
+    fn resolver_blocks_mismatched_topic_authority() {
         let topic = UUri::from_str("//authority-a/5BA0/1/8001").expect("valid topic UUri");
+        let resolver =
+            PublishRouteResolver::new("authority-c", "authority-b", "routing-test", "insert");
 
-        let source = derive_publish_source_filter(
-            "authority-c",
-            "authority-b",
-            &topic,
-            "routing-test",
-            "insert",
-        );
+        let source = resolver.derive_source_filter_for_topic(&topic);
 
         assert!(source.is_none());
     }
 
     #[test]
-    fn derive_publish_source_filter_allows_wildcard_topic_authority() {
+    fn resolver_allows_wildcard_topic_authority() {
         let topic = UUri::from_str("//*/5BA0/1/8001").expect("valid wildcard topic UUri");
+        let resolver =
+            PublishRouteResolver::new("authority-c", "authority-b", "routing-test", "insert");
 
-        let source = derive_publish_source_filter(
-            "authority-c",
-            "authority-b",
-            &topic,
-            "routing-test",
-            "insert",
-        )
-        .expect("wildcard topic should resolve");
+        let source = resolver
+            .derive_source_filter_for_topic(&topic)
+            .expect("wildcard topic should resolve");
 
         assert_eq!(source.authority_name, "authority-c");
         assert_eq!(source.ue_id, topic.ue_id);
@@ -124,7 +139,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::mutable_key_type)]
-    fn derive_publish_source_filters_dedupes_sources_across_subscribers() {
+    fn resolver_dedupes_sources_across_subscribers() {
         let mut subscribers = HashSet::new();
         subscribers.insert(subscription_info(
             "//authority-a/5BA0/1/8001",
@@ -139,13 +154,9 @@ mod tests {
             "//authority-b/567A/1/1234",
         ));
 
-        let filters = derive_publish_source_filters(
-            "authority-a",
-            "authority-b",
-            &subscribers,
-            "routing-test",
-            "insert",
-        );
+        let resolver =
+            PublishRouteResolver::new("authority-a", "authority-b", "routing-test", "insert");
+        let filters = resolver.derive_source_filters(&subscribers);
 
         assert_eq!(filters.len(), 1);
         let expected =

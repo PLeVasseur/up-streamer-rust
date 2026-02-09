@@ -1,103 +1,110 @@
-//! Forwarding-rule lifecycle primitives for the control plane.
+//! Route lifecycle orchestration for control-plane route transitions.
 
-use crate::control_plane::route_table::ForwardingRule;
-use std::collections::HashSet;
-use tokio::sync::Mutex;
+use crate::control_plane::route_table::{RouteKey, RouteTable};
+use crate::data_plane::egress_pool::EgressRoutePool;
+use crate::data_plane::ingress_registry::{IngressRouteRegistrationError, IngressRouteRegistry};
+use crate::endpoint::Endpoint;
+use crate::routing::subscription_directory::SubscriptionDirectory;
 
-pub(crate) type ForwardingRules = Mutex<HashSet<ForwardingRule>>;
-
-pub(crate) async fn insert_forwarding_rule(
-    registered_forwarding_rules: &ForwardingRules,
-    forwarding_rule: ForwardingRule,
-) -> bool {
-    let mut registered = registered_forwarding_rules.lock().await;
-    registered.insert(forwarding_rule)
+pub(crate) enum AddRouteError {
+    SameAuthority,
+    AlreadyExists,
+    FailedToRegisterIngressRoute(IngressRouteRegistrationError),
 }
 
-pub(crate) async fn remove_forwarding_rule(
-    registered_forwarding_rules: &ForwardingRules,
-    forwarding_rule: &ForwardingRule,
-) -> bool {
-    let mut registered = registered_forwarding_rules.lock().await;
-    registered.remove(forwarding_rule)
+pub(crate) enum RemoveRouteError {
+    SameAuthority,
+    NotFound,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{insert_forwarding_rule, remove_forwarding_rule, ForwardingRules};
-    use crate::control_plane::route_table::ForwardingRule;
-    use crate::control_plane::transport_identity::TransportIdentityKey;
-    use async_trait::async_trait;
-    use std::collections::HashSet;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
-    use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
+pub(crate) struct RouteLifecycle<'a> {
+    route_table: &'a RouteTable,
+    egress_route_pool: &'a mut EgressRoutePool,
+    ingress_route_registry: &'a IngressRouteRegistry,
+    subscription_directory: &'a SubscriptionDirectory,
+}
 
-    struct NoopTransport;
-
-    #[async_trait]
-    impl UTransport for NoopTransport {
-        async fn send(&self, _message: UMessage) -> Result<(), UStatus> {
-            Ok(())
-        }
-
-        async fn receive(
-            &self,
-            _source_filter: &UUri,
-            _sink_filter: Option<&UUri>,
-        ) -> Result<UMessage, UStatus> {
-            Err(UStatus::fail_with_code(
-                UCode::UNIMPLEMENTED,
-                "not used in tests",
-            ))
-        }
-
-        async fn register_listener(
-            &self,
-            _source_filter: &UUri,
-            _sink_filter: Option<&UUri>,
-            _listener: Arc<dyn UListener>,
-        ) -> Result<(), UStatus> {
-            Ok(())
-        }
-
-        async fn unregister_listener(
-            &self,
-            _source_filter: &UUri,
-            _sink_filter: Option<&UUri>,
-            _listener: Arc<dyn UListener>,
-        ) -> Result<(), UStatus> {
-            Ok(())
+impl<'a> RouteLifecycle<'a> {
+    pub(crate) fn new(
+        route_table: &'a RouteTable,
+        egress_route_pool: &'a mut EgressRoutePool,
+        ingress_route_registry: &'a IngressRouteRegistry,
+        subscription_directory: &'a SubscriptionDirectory,
+    ) -> Self {
+        Self {
+            route_table,
+            egress_route_pool,
+            ingress_route_registry,
+            subscription_directory,
         }
     }
 
-    fn forwarding_rule(in_authority: &str, out_authority: &str) -> ForwardingRule {
-        let in_transport: Arc<dyn UTransport> = Arc::new(NoopTransport);
-        let out_transport: Arc<dyn UTransport> = Arc::new(NoopTransport);
-        (
-            in_authority.to_string(),
-            out_authority.to_string(),
-            TransportIdentityKey::new(in_transport),
-            TransportIdentityKey::new(out_transport),
-        )
+    pub(crate) async fn add_route(
+        &mut self,
+        r#in: &Endpoint,
+        out: &Endpoint,
+        route_label: &str,
+    ) -> Result<(), AddRouteError> {
+        if r#in.authority == out.authority {
+            return Err(AddRouteError::SameAuthority);
+        }
+
+        let route_key = RouteKey::from_endpoints(r#in, out);
+        let inserted = self.route_table.insert_route(route_key.clone()).await;
+
+        if !inserted {
+            return Err(AddRouteError::AlreadyExists);
+        }
+
+        let out_sender = self.egress_route_pool.attach_route(out.transport.clone()).await;
+
+        if let Err(err) = self
+            .ingress_route_registry
+            .register_route(
+                r#in.transport.clone(),
+                &r#in.authority,
+                &out.authority,
+                route_label,
+                out_sender,
+                self.subscription_directory,
+            )
+            .await
+        {
+            self.route_table.remove_route(&route_key).await;
+            self.egress_route_pool.detach_route(out.transport.clone()).await;
+
+            return Err(AddRouteError::FailedToRegisterIngressRoute(err));
+        }
+
+        Ok(())
     }
 
-    #[tokio::test]
-    async fn insert_forwarding_rule_returns_false_for_duplicate() {
-        let rules: ForwardingRules = Mutex::new(HashSet::new());
-        let rule = forwarding_rule("authority-a", "authority-b");
+    pub(crate) async fn remove_route(
+        &mut self,
+        r#in: &Endpoint,
+        out: &Endpoint,
+    ) -> Result<(), RemoveRouteError> {
+        if r#in.authority == out.authority {
+            return Err(RemoveRouteError::SameAuthority);
+        }
 
-        assert!(insert_forwarding_rule(&rules, rule.clone()).await);
-        assert!(!insert_forwarding_rule(&rules, rule).await);
-    }
+        let route_key = RouteKey::from_endpoints(r#in, out);
+        let removed = self.route_table.remove_route(&route_key).await;
 
-    #[tokio::test]
-    async fn remove_forwarding_rule_is_idempotent() {
-        let rules: ForwardingRules = Mutex::new(HashSet::new());
-        let rule = forwarding_rule("authority-a", "authority-b");
+        if !removed {
+            return Err(RemoveRouteError::NotFound);
+        }
 
-        assert!(insert_forwarding_rule(&rules, rule.clone()).await);
-        assert!(remove_forwarding_rule(&rules, &rule).await);
-        assert!(!remove_forwarding_rule(&rules, &rule).await);
+        self.egress_route_pool.detach_route(out.transport.clone()).await;
+        self.ingress_route_registry
+            .unregister_route(
+                r#in.transport.clone(),
+                &r#in.authority,
+                &out.authority,
+                self.subscription_directory,
+            )
+            .await;
+
+        Ok(())
     }
 }

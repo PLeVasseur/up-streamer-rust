@@ -1,6 +1,6 @@
-//! Egress forwarder pool and refcounted transport ownership.
+//! Egress-route worker pool and refcounted transport ownership.
 
-use crate::data_plane::egress_worker::TransportForwarder;
+use crate::data_plane::egress_worker::EgressRouteWorker;
 use crate::control_plane::transport_identity::TransportIdentityKey;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -9,50 +9,47 @@ use tokio::sync::Mutex;
 use tracing::{debug, warn};
 use up_rust::{UMessage, UTransport};
 
-const TRANSPORT_FORWARDERS_TAG: &str = "TransportForwarders:";
-const TRANSPORT_FORWARDERS_FN_INSERT_TAG: &str = "insert:";
-const TRANSPORT_FORWARDERS_FN_REMOVE_TAG: &str = "remove:";
+const EGRESS_ROUTE_POOL_TAG: &str = "EgressRoutePool:";
+const EGRESS_ROUTE_POOL_FN_ATTACH_TAG: &str = "attach_route:";
+const EGRESS_ROUTE_POOL_FN_DETACH_TAG: &str = "detach_route:";
 
-pub(crate) struct ForwarderSlot {
+pub(crate) struct EgressRouteBinding {
     pub(crate) ref_count: usize,
-    pub(crate) _worker: Arc<TransportForwarder>,
+    pub(crate) worker: EgressRouteWorker,
     pub(crate) sender: Sender<Arc<UMessage>>,
 }
 
-pub(crate) type TransportForwardersContainer =
-    Mutex<HashMap<TransportIdentityKey, ForwarderSlot>>;
-
-pub(crate) struct TransportForwarders {
+pub(crate) struct EgressRoutePool {
     message_queue_size: usize,
-    pub(crate) forwarders: TransportForwardersContainer,
+    pub(crate) workers: Mutex<HashMap<TransportIdentityKey, EgressRouteBinding>>,
 }
 
-impl TransportForwarders {
+impl EgressRoutePool {
     pub(crate) fn new(message_queue_size: usize) -> Self {
         Self {
             message_queue_size,
-            forwarders: Mutex::new(HashMap::new()),
+            workers: Mutex::new(HashMap::new()),
         }
     }
 
-    pub(crate) async fn insert(
+    pub(crate) async fn attach_route(
         &mut self,
         out_transport: Arc<dyn UTransport>,
     ) -> Sender<Arc<UMessage>> {
         let out_transport_key = TransportIdentityKey::new(out_transport.clone());
 
-        let mut transport_forwarders = self.forwarders.lock().await;
+        let mut egress_workers = self.workers.lock().await;
 
-        let slot = transport_forwarders
+        let slot = egress_workers
             .entry(out_transport_key)
             .or_insert_with(|| {
                 debug!(
-                    "{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_INSERT_TAG} Inserting..."
+                    "{EGRESS_ROUTE_POOL_TAG}:{EGRESS_ROUTE_POOL_FN_ATTACH_TAG} Inserting..."
                 );
                 let (tx, rx) = tokio::sync::broadcast::channel(self.message_queue_size);
-                ForwarderSlot {
+                EgressRouteBinding {
                     ref_count: 0,
-                    _worker: Arc::new(TransportForwarder::new(out_transport, rx)),
+                    worker: EgressRouteWorker::new(out_transport, rx),
                     sender: tx,
                 }
             });
@@ -60,15 +57,15 @@ impl TransportForwarders {
         slot.sender.clone()
     }
 
-    pub(crate) async fn remove(&mut self, out_transport: Arc<dyn UTransport>) {
+    pub(crate) async fn detach_route(&mut self, out_transport: Arc<dyn UTransport>) {
         let out_transport_key = TransportIdentityKey::new(out_transport.clone());
 
-        let mut transport_forwarders = self.forwarders.lock().await;
+        let mut egress_workers = self.workers.lock().await;
 
         let active_num = {
-            let Some(slot) = transport_forwarders.get_mut(&out_transport_key) else {
+            let Some(slot) = egress_workers.get_mut(&out_transport_key) else {
                 warn!(
-                    "{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} no such out_transport_key"
+                    "{EGRESS_ROUTE_POOL_TAG}:{EGRESS_ROUTE_POOL_FN_DETACH_TAG} no such out_transport_key"
                 );
                 return;
             };
@@ -78,12 +75,14 @@ impl TransportForwarders {
         };
 
         if active_num == 0 {
-            let removed = transport_forwarders.remove(&out_transport_key);
-            debug!("{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} went to remove TransportForwarder for this transport");
-            if removed.is_none() {
-                warn!("{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} was none to remove");
+            let removed = egress_workers.remove(&out_transport_key);
+            if let Some(binding) = removed {
+                debug!(
+                    "{EGRESS_ROUTE_POOL_TAG}:{EGRESS_ROUTE_POOL_FN_DETACH_TAG} removed worker thread {:?}",
+                    binding.worker.thread_id()
+                );
             } else {
-                debug!("{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} had one to remove");
+                warn!("{EGRESS_ROUTE_POOL_TAG}:{EGRESS_ROUTE_POOL_FN_DETACH_TAG} was none to remove");
             }
         }
     }
@@ -91,7 +90,7 @@ impl TransportForwarders {
 
 #[cfg(test)]
 mod tests {
-    use super::TransportForwarders;
+    use super::EgressRoutePool;
     use async_trait::async_trait;
     use std::sync::Arc;
     use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
@@ -135,16 +134,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_same_transport_reuses_queue_and_increments_refcount() {
-        let mut pool = TransportForwarders::new(8);
+    async fn attach_route_reuses_queue_and_increments_refcount() {
+        let mut pool = EgressRoutePool::new(8);
         let transport: Arc<dyn UTransport> = Arc::new(NoopTransport);
 
-        let sender_a = pool.insert(transport.clone()).await;
-        let sender_b = pool.insert(transport).await;
+        let sender_a = pool.attach_route(transport.clone()).await;
+        let sender_b = pool.attach_route(transport).await;
 
-        let forwarders = pool.forwarders.lock().await;
-        assert_eq!(forwarders.len(), 1);
-        let slot = forwarders
+        let workers = pool.workers.lock().await;
+        assert_eq!(workers.len(), 1);
+        let slot = workers
             .values()
             .next()
             .expect("single transport forwarder");
@@ -153,17 +152,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remove_drops_forwarder_when_refcount_reaches_zero() {
-        let mut pool = TransportForwarders::new(8);
+    async fn detach_route_drops_worker_when_refcount_reaches_zero() {
+        let mut pool = EgressRoutePool::new(8);
         let transport: Arc<dyn UTransport> = Arc::new(NoopTransport);
 
-        pool.insert(transport.clone()).await;
-        pool.insert(transport.clone()).await;
+        pool.attach_route(transport.clone()).await;
+        pool.attach_route(transport.clone()).await;
 
-        pool.remove(transport.clone()).await;
-        assert_eq!(pool.forwarders.lock().await.len(), 1);
+        pool.detach_route(transport.clone()).await;
+        assert_eq!(pool.workers.lock().await.len(), 1);
 
-        pool.remove(transport).await;
-        assert!(pool.forwarders.lock().await.is_empty());
+        pool.detach_route(transport).await;
+        assert!(pool.workers.lock().await.is_empty());
     }
 }

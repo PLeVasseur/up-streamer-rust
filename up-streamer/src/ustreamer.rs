@@ -11,13 +11,13 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use crate::control_plane::route_lifecycle::{
-    insert_forwarding_rule, remove_forwarding_rule, ForwardingRules,
-};
-use crate::control_plane::route_table::build_forwarding_rule;
+use crate::control_plane::route_lifecycle::{AddRouteError, RemoveRouteError, RouteLifecycle};
+use crate::control_plane::route_table::RouteTable;
+use crate::data_plane::egress_pool::EgressRoutePool;
+use crate::data_plane::ingress_registry::IngressRouteRegistry;
 use crate::endpoint::Endpoint;
+use crate::routing::subscription_directory::SubscriptionDirectory;
 use crate::runtime::subscription_runtime::fetch_subscriptions;
-use std::collections::HashSet;
 use std::sync::Arc;
 use subscription_cache::SubscriptionCache;
 use tokio::sync::Mutex;
@@ -27,25 +27,15 @@ use up_rust::{UCode, UStatus, UUri};
 
 const USTREAMER_TAG: &str = "UStreamer:";
 const USTREAMER_FN_NEW_TAG: &str = "new():";
-const USTREAMER_FN_ADD_FORWARDING_RULE_TAG: &str = "add_forwarding_rule():";
-const USTREAMER_FN_DELETE_FORWARDING_RULE_TAG: &str = "delete_forwarding_rule():";
-
-pub(crate) fn uauthority_to_uuri(authority_name: &str) -> UUri {
-    UUri {
-        authority_name: authority_name.to_string(),
-        ue_id: 0xFFFF_FFFF,
-        ue_version_major: 0xFF,
-        resource_id: 0xFFFF,
-        ..Default::default()
-    }
-}
+const USTREAMER_FN_ADD_ROUTE_TAG: &str = "add_route():";
+const USTREAMER_FN_DELETE_ROUTE_TAG: &str = "delete_route():";
 
 pub struct UStreamer {
     name: String,
-    registered_forwarding_rules: ForwardingRules,
-    transport_forwarders: crate::data_plane::egress_pool::TransportForwarders,
-    forwarding_listeners: crate::data_plane::ingress_registry::ForwardingListeners,
-    subscription_cache: Arc<Mutex<SubscriptionCache>>,
+    route_table: RouteTable,
+    egress_route_pool: EgressRoutePool,
+    ingress_route_registry: IngressRouteRegistry,
+    subscription_directory: SubscriptionDirectory,
 }
 
 impl UStreamer {
@@ -80,8 +70,8 @@ impl UStreamer {
         fetch_request.set_subscriber(subscriber_info);
 
         let subscriptions = fetch_subscriptions(usubscription, fetch_request);
-        let subscription_cache = match SubscriptionCache::new(subscriptions) {
-            Ok(cache) => Arc::new(Mutex::new(cache)),
+        let subscription_directory = match SubscriptionCache::new(subscriptions) {
+            Ok(cache) => SubscriptionDirectory::new(Arc::new(Mutex::new(cache))),
             Err(e) => {
                 return Err(UStatus::fail_with_code(
                     UCode::INVALID_ARGUMENT,
@@ -95,17 +85,15 @@ impl UStreamer {
 
         Ok(Self {
             name: name.to_string(),
-            registered_forwarding_rules: Mutex::new(HashSet::new()),
-            transport_forwarders: crate::data_plane::egress_pool::TransportForwarders::new(
-                message_queue_size as usize,
-            ),
-            forwarding_listeners: crate::data_plane::ingress_registry::ForwardingListeners::new(),
-            subscription_cache,
+            route_table: RouteTable::new(),
+            egress_route_pool: EgressRoutePool::new(message_queue_size as usize),
+            ingress_route_registry: IngressRouteRegistry::new(),
+            subscription_directory,
         })
     }
 
     #[inline(always)]
-    fn forwarding_id(r#in: &Endpoint, out: &Endpoint) -> String {
+    fn route_label(r#in: &Endpoint, out: &Endpoint) -> String {
         format!(
             "[in.name: {}, in.authority: {:?} ; out.name: {}, out.authority: {:?}]",
             r#in.name, r#in.authority, out.name, out.authority
@@ -113,19 +101,88 @@ impl UStreamer {
     }
 
     #[inline(always)]
-    fn fail_due_to_same_authority(&self, r#in: &Endpoint, out: &Endpoint) -> Result<(), UStatus> {
+    fn fail_due_to_same_authority(
+        &self,
+        action_tag: &str,
+        r#in: &Endpoint,
+        out: &Endpoint,
+    ) -> Result<(), UStatus> {
         let err = Err(UStatus::fail_with_code(
             UCode::INVALID_ARGUMENT,
-            format!(
-                "{} are the same. Unable to delete.",
-                Self::forwarding_id(r#in, out)
-            ),
+            format!("{} are the same. Unable to delete.", Self::route_label(r#in, out)),
         ));
         error!(
-            "{}:{}:{} forwarding rule failed: {:?}",
-            self.name, USTREAMER_TAG, USTREAMER_FN_ADD_FORWARDING_RULE_TAG, err
+            "{}:{}:{} route operation failed: {:?}",
+            self.name, USTREAMER_TAG, action_tag, err
         );
         err
+    }
+
+    pub async fn add_route(
+        &mut self,
+        r#in: Endpoint,
+        out: Endpoint,
+    ) -> Result<(), UStatus> {
+        let route_label = Self::route_label(&r#in, &out);
+        debug!(
+            "{}:{}:{} Adding route for {}",
+            self.name,
+            USTREAMER_TAG,
+            USTREAMER_FN_ADD_ROUTE_TAG,
+            route_label
+        );
+
+        let mut lifecycle = RouteLifecycle::new(
+            &self.route_table,
+            &mut self.egress_route_pool,
+            &self.ingress_route_registry,
+            &self.subscription_directory,
+        );
+
+        match lifecycle.add_route(&r#in, &out, &route_label).await {
+            Ok(()) => Ok(()),
+            Err(AddRouteError::SameAuthority) => {
+                self.fail_due_to_same_authority(USTREAMER_FN_ADD_ROUTE_TAG, &r#in, &out)
+            }
+            Err(AddRouteError::AlreadyExists) => {
+                Err(UStatus::fail_with_code(UCode::ALREADY_EXISTS, "already exists"))
+            }
+            Err(AddRouteError::FailedToRegisterIngressRoute(err)) => {
+                Err(UStatus::fail_with_code(UCode::INVALID_ARGUMENT, err.to_string()))
+            }
+        }
+    }
+
+    pub async fn delete_route(
+        &mut self,
+        r#in: Endpoint,
+        out: Endpoint,
+    ) -> Result<(), UStatus> {
+        let route_label = Self::route_label(&r#in, &out);
+        debug!(
+            "{}:{}:{} Deleting route for {}",
+            self.name,
+            USTREAMER_TAG,
+            USTREAMER_FN_DELETE_ROUTE_TAG,
+            route_label
+        );
+
+        let mut lifecycle = RouteLifecycle::new(
+            &self.route_table,
+            &mut self.egress_route_pool,
+            &self.ingress_route_registry,
+            &self.subscription_directory,
+        );
+
+        match lifecycle.remove_route(&r#in, &out).await {
+            Ok(()) => Ok(()),
+            Err(RemoveRouteError::SameAuthority) => {
+                self.fail_due_to_same_authority(USTREAMER_FN_DELETE_ROUTE_TAG, &r#in, &out)
+            }
+            Err(RemoveRouteError::NotFound) => {
+                Err(UStatus::fail_with_code(UCode::NOT_FOUND, "not found"))
+            }
+        }
     }
 
     pub async fn add_forwarding_rule(
@@ -133,58 +190,7 @@ impl UStreamer {
         r#in: Endpoint,
         out: Endpoint,
     ) -> Result<(), UStatus> {
-        debug!(
-            "{}:{}:{} Adding forwarding rule for {}",
-            self.name,
-            USTREAMER_TAG,
-            USTREAMER_FN_ADD_FORWARDING_RULE_TAG,
-            Self::forwarding_id(&r#in, &out)
-        );
-
-        if r#in.authority == out.authority {
-            return self.fail_due_to_same_authority(&r#in, &out);
-        }
-
-        let forwarding_rule = build_forwarding_rule(&r#in, &out);
-        let inserted =
-            insert_forwarding_rule(&self.registered_forwarding_rules, forwarding_rule.clone())
-                .await;
-
-        if !inserted {
-            return Err(UStatus::fail_with_code(
-                UCode::ALREADY_EXISTS,
-                "already exists",
-            ));
-        }
-
-        let out_sender = self
-            .transport_forwarders
-            .insert(out.transport.clone())
-            .await;
-
-        if let Err(err) = self
-            .forwarding_listeners
-            .insert(
-                r#in.transport.clone(),
-                &r#in.authority,
-                &out.authority,
-                &Self::forwarding_id(&r#in, &out),
-                out_sender,
-                self.subscription_cache.clone(),
-            )
-            .await
-        {
-            remove_forwarding_rule(&self.registered_forwarding_rules, &forwarding_rule).await;
-            self.transport_forwarders
-                .remove(out.transport.clone())
-                .await;
-            return Err(UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
-                err.to_string(),
-            ));
-        }
-
-        Ok(())
+        self.add_route(r#in, out).await
     }
 
     pub async fn delete_forwarding_rule(
@@ -192,38 +198,6 @@ impl UStreamer {
         r#in: Endpoint,
         out: Endpoint,
     ) -> Result<(), UStatus> {
-        debug!(
-            "{}:{}:{} Deleting forwarding rule for {}",
-            self.name,
-            USTREAMER_TAG,
-            USTREAMER_FN_DELETE_FORWARDING_RULE_TAG,
-            Self::forwarding_id(&r#in, &out)
-        );
-
-        if r#in.authority == out.authority {
-            return self.fail_due_to_same_authority(&r#in, &out);
-        }
-
-        let forwarding_rule = build_forwarding_rule(&r#in, &out);
-        let removed =
-            remove_forwarding_rule(&self.registered_forwarding_rules, &forwarding_rule).await;
-
-        if !removed {
-            return Err(UStatus::fail_with_code(UCode::NOT_FOUND, "not found"));
-        }
-
-        self.transport_forwarders
-            .remove(out.transport.clone())
-            .await;
-        self.forwarding_listeners
-            .remove(
-                r#in.transport,
-                &r#in.authority,
-                &out.authority,
-                self.subscription_cache.clone(),
-            )
-            .await;
-
-        Ok(())
+        self.delete_route(r#in, out).await
     }
 }

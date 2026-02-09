@@ -1,4 +1,4 @@
-//! Local transport identity keying used by forwarding rule ownership.
+//! Local transport identity keying used by route ownership.
 
 use std::fmt::{Debug, Formatter};
 use std::hash::{Hash, Hasher};
