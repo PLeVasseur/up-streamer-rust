@@ -30,7 +30,7 @@ async fn usubscription_bad_data() {
     let subscription_path =
         "../utils/usubscription-static-file/static-configs/testdata.json".to_string();
     let usubscription = Arc::new(USubscriptionStaticFile::new(subscription_path));
-    let mut ustreamer = match UStreamer::new("foo_bar_streamer", 3000, usubscription) {
+    let mut ustreamer = match UStreamer::new("foo_bar_streamer", 3000, usubscription).await {
         Ok(streamer) => streamer,
         Err(error) => panic!("Failed to create uStreamer: {}", error),
     };

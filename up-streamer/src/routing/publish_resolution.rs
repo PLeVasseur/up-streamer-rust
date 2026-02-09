@@ -1,9 +1,10 @@
 //! Publish-source filter derivation and dedupe policy.
 
 use std::collections::HashMap;
-use subscription_cache::{SubscriptionLookup, UUriIdentityKey};
 use tracing::{debug, warn};
 use up_rust::UUri;
+
+use crate::routing::subscription_cache::{SubscriptionLookup, UUriIdentityKey};
 
 pub(crate) type SourceFilterLookup = HashMap<UUriIdentityKey, UUri>;
 
@@ -94,14 +95,12 @@ impl<'a> PublishRouteResolver<'a> {
 #[cfg(test)]
 mod tests {
     use super::PublishRouteResolver;
-    use std::collections::HashMap;
-    use std::str::FromStr;
-    use subscription_cache::{
+    use crate::routing::subscription_cache::{
         SubscriptionIdentityKey, SubscriptionInformation, SubscriptionLookup,
     };
-    use up_rust::core::usubscription::{
-        EventDeliveryConfig, SubscribeAttributes, SubscriberInfo, SubscriptionStatus,
-    };
+    use std::collections::HashMap;
+    use std::str::FromStr;
+    use up_rust::core::usubscription::SubscriberInfo;
     use up_rust::UUri;
 
     fn subscription_info(topic: &str, subscriber: &str) -> SubscriptionInformation {
@@ -111,9 +110,6 @@ mod tests {
                 uri: Some(UUri::from_str(subscriber).expect("valid subscriber UUri")).into(),
                 ..Default::default()
             },
-            status: SubscriptionStatus::default(),
-            attributes: SubscribeAttributes::default(),
-            config: EventDeliveryConfig::default(),
         }
     }
 

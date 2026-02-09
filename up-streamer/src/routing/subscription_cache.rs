@@ -1,29 +1,13 @@
-/********************************************************************************
- * Copyright (c) 2024 Contributors to the Eclipse Foundation
- *
- * See the NOTICE file(s) distributed with this work for additional
- * information regarding copyright ownership.
- *
- * This program and the accompanying materials are made available under the
- * terms of the Apache License Version 2.0 which is available at
- * https://www.apache.org/licenses/LICENSE-2.0
- *
- * SPDX-License-Identifier: Apache-2.0
- ********************************************************************************/
+//! Internal subscription cache used by routing and listener resolution.
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::sync::Mutex;
-use tracing::warn;
-use up_rust::core::usubscription::{
-    EventDeliveryConfig, FetchSubscriptionsResponse, SubscribeAttributes, SubscriberInfo,
-    SubscriptionStatus,
-};
+use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo};
 use up_rust::UUri;
 use up_rust::{UCode, UStatus};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct UUriIdentityKey {
+pub(crate) struct UUriIdentityKey {
     authority_name: String,
     ue_id: u32,
     ue_version_major: u8,
@@ -42,7 +26,7 @@ impl From<&UUri> for UUriIdentityKey {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct SubscriptionIdentityKey {
+pub(crate) struct SubscriptionIdentityKey {
     topic: UUriIdentityKey,
     subscriber: Option<UUriIdentityKey>,
 }
@@ -60,21 +44,14 @@ impl From<&SubscriptionInformation> for SubscriptionIdentityKey {
     }
 }
 
-pub type SubscriptionLookup = HashMap<SubscriptionIdentityKey, SubscriptionInformation>;
+pub(crate) type SubscriptionLookup = HashMap<SubscriptionIdentityKey, SubscriptionInformation>;
 
-type SubscribersMap = Mutex<HashMap<String, SubscriptionLookup>>;
-
-// Tracks subscription information inside the SubscriptionCache
-pub struct SubscriptionInformation {
+#[derive(Clone)]
+pub(crate) struct SubscriptionInformation {
     pub topic: UUri,
     pub subscriber: SubscriberInfo,
-    pub status: SubscriptionStatus,
-    pub attributes: SubscribeAttributes,
-    pub config: EventDeliveryConfig,
 }
 
-// Will be moving this to up-rust
-// Issue: https://github.com/eclipse-uprotocol/up-rust/issues/178
 impl Eq for SubscriptionInformation {}
 
 impl PartialEq for SubscriptionInformation {
@@ -90,35 +67,13 @@ impl Hash for SubscriptionInformation {
     }
 }
 
-impl Clone for SubscriptionInformation {
-    fn clone(&self) -> Self {
-        Self {
-            topic: self.topic.clone(),
-            subscriber: self.subscriber.clone(),
-            status: self.status.clone(),
-            attributes: self.attributes.clone(),
-            config: self.config.clone(),
-        }
-    }
+#[derive(Default)]
+pub(crate) struct SubscriptionCache {
+    subscription_cache_map: HashMap<String, SubscriptionLookup>,
 }
 
-pub struct SubscriptionCache {
-    subscription_cache_map: SubscribersMap,
-}
-
-impl Default for SubscriptionCache {
-    fn default() -> Self {
-        Self {
-            subscription_cache_map: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-/// A [`SubscriptionCache`] is used to store and manage subscriptions to
-/// topics. It is kept local to the streamer. The streamer will receive updates
-/// from the subscription service, and update the SubscriptionCache accordingly.
 impl SubscriptionCache {
-    pub fn new(subscription_cache_map: FetchSubscriptionsResponse) -> Result<Self, UStatus> {
+    pub(crate) fn new(subscription_cache_map: FetchSubscriptionsResponse) -> Result<Self, UStatus> {
         let mut subscription_cache_hash_map = HashMap::new();
         for subscription in subscription_cache_map.subscriptions {
             let topic = subscription.topic.into_option().ok_or_else(|| {
@@ -133,35 +88,10 @@ impl SubscriptionCache {
                     "Unable to retrieve topic".to_string(),
                 )
             })?;
-            // At minimum, topic and subscriber are required to track a subscription.
-            // status, attributes, and config can be used either within the subscription service,
-            // or for tracking pending subscriptions, but they are not required for forwarding
-            // subscriptions across the streamer, so if not included, they will be set to default.
-            let status = if let Some(status) = subscription.status.into_option() {
-                status
-            } else {
-                warn!("Unable to parse status from subscription, setting as default");
-                SubscriptionStatus::default()
-            };
-            let attributes = if let Some(attributes) = subscription.attributes.into_option() {
-                attributes
-            } else {
-                warn!("Unable to parse attributes from subscription, setting as default");
-                SubscribeAttributes::default()
-            };
-            let config = if let Some(config) = subscription.config.into_option() {
-                config
-            } else {
-                warn!("Unable to parse config from subscription, setting as default");
-                EventDeliveryConfig::default()
-            };
-            // Create new hashset if the key does not exist and insert the subscription
+
             let subscription_information = SubscriptionInformation {
                 topic: topic.clone(),
                 subscriber: subscriber.clone(),
-                status,
-                attributes,
-                config,
             };
             let subscriber_authority_name = match subscription_information.subscriber.uri.as_ref() {
                 Some(uri) => uri.authority_name.clone(),
@@ -182,32 +112,27 @@ impl SubscriptionCache {
                 .or_insert(subscription_information);
         }
         Ok(Self {
-            subscription_cache_map: Mutex::new(subscription_cache_hash_map),
+            subscription_cache_map: subscription_cache_hash_map,
         })
     }
 
-    pub fn fetch_cache_entry(&self, entry: String) -> Option<SubscriptionLookup> {
-        let map = match self.subscription_cache_map.lock() {
-            Ok(map) => map,
-            Err(_) => return None,
-        };
-        map.get(&entry).cloned()
+    #[cfg(test)]
+    pub(crate) fn fetch_cache_entry(&self, entry: &str) -> Option<SubscriptionLookup> {
+        self.subscription_cache_map.get(entry).cloned()
     }
 
-    pub fn fetch_cache_entry_with_wildcard(&self, entry: &str) -> Option<SubscriptionLookup> {
-        let map = match self.subscription_cache_map.lock() {
-            Ok(map) => map,
-            Err(_) => return None,
-        };
-
+    pub(crate) fn fetch_cache_entry_with_wildcard(
+        &self,
+        entry: &str,
+    ) -> Option<SubscriptionLookup> {
         let mut merged: SubscriptionLookup = HashMap::new();
 
-        if let Some(exact_subscribers) = map.get(entry) {
+        if let Some(exact_subscribers) = self.subscription_cache_map.get(entry) {
             merged.extend(exact_subscribers.clone());
         }
 
         if entry != "*" {
-            if let Some(wildcard_subscribers) = map.get("*") {
+            if let Some(wildcard_subscribers) = self.subscription_cache_map.get("*") {
                 merged.extend(wildcard_subscribers.clone());
             }
         }
@@ -229,9 +154,9 @@ mod tests {
 
     fn subscription(topic: &str, subscriber: &str) -> Subscription {
         Subscription {
-            topic: Some(UUri::from_str(topic).unwrap()).into(),
+            topic: Some(UUri::from_str(topic).expect("valid topic URI")).into(),
             subscriber: Some(SubscriberInfo {
-                uri: Some(UUri::from_str(subscriber).unwrap()).into(),
+                uri: Some(UUri::from_str(subscriber).expect("valid subscriber URI")).into(),
                 ..Default::default()
             })
             .into(),
@@ -241,8 +166,8 @@ mod tests {
 
     fn topics_for_authority(cache: &SubscriptionCache, authority: &str) -> Vec<UUri> {
         let mut topics: Vec<UUri> = cache
-            .fetch_cache_entry(authority.to_string())
-            .unwrap()
+            .fetch_cache_entry(authority)
+            .expect("authority should exist")
             .into_values()
             .map(|subscription| subscription.topic)
             .collect();
@@ -259,7 +184,7 @@ mod tests {
             ],
             ..Default::default()
         })
-        .unwrap();
+        .expect("cache should build");
 
         let topics = topics_for_authority(&cache, "authority-b");
 
@@ -283,7 +208,7 @@ mod tests {
             ],
             ..Default::default()
         })
-        .unwrap();
+        .expect("initial cache should build");
 
         let rebuilt_cache = SubscriptionCache::new(FetchSubscriptionsResponse {
             subscriptions: vec![subscription(
@@ -292,7 +217,7 @@ mod tests {
             )],
             ..Default::default()
         })
-        .unwrap();
+        .expect("rebuilt cache should build");
 
         assert_eq!(topics_for_authority(&initial_cache, "authority-b").len(), 2);
 
@@ -313,14 +238,14 @@ mod tests {
             ],
             ..Default::default()
         })
-        .unwrap();
+        .expect("cache should build");
 
         let merged_for_b = cache
             .fetch_cache_entry_with_wildcard("authority-b")
-            .unwrap();
+            .expect("authority-b should resolve");
         let merged_for_d = cache
             .fetch_cache_entry_with_wildcard("authority-d")
-            .unwrap();
+            .expect("authority-d should resolve wildcard");
 
         assert_eq!(merged_for_b.len(), 2);
         assert_eq!(merged_for_d.len(), 1);

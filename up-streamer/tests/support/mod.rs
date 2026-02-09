@@ -3,12 +3,13 @@ use usubscription_static_file::USubscriptionStaticFile;
 
 const SUBSCRIPTION_CONFIG: &str = "../utils/usubscription-static-file/static-configs/testdata.json";
 
-pub(crate) fn make_streamer(name: &str, message_queue_size: u16) -> UStreamer {
+pub(crate) async fn make_streamer(name: &str, message_queue_size: u16) -> UStreamer {
     let usubscription = std::sync::Arc::new(USubscriptionStaticFile::new(
         SUBSCRIPTION_CONFIG.to_string(),
     ));
 
     UStreamer::new(name, message_queue_size, usubscription)
+        .await
         .expect("streamer creation should succeed")
 }
 
