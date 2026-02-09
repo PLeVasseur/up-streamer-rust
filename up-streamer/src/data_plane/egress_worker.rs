@@ -1,18 +1,20 @@
 //! Egress worker abstraction that forwards queued messages on output transports.
 
-use crate::runtime::worker_runtime::spawn_message_forwarding_loop;
+use crate::runtime::worker_runtime::spawn_route_dispatch_loop;
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::broadcast::Receiver;
 use tracing::{debug, info, trace, warn};
 use up_rust::{UMessage, UTransport, UUID};
 
-const TRANSPORT_FORWARDER_TAG: &str = "TransportForwarder:";
-const TRANSPORT_FORWARDER_FN_MESSAGE_FORWARDING_LOOP_TAG: &str = "message_forwarding_loop():";
+const EGRESS_ROUTE_WORKER_TAG: &str = "EgressRouteWorker:";
+const EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG: &str = "run_loop():";
 
-pub(crate) struct TransportForwarder {}
+pub(crate) struct EgressRouteWorker {
+    join_handle: std::thread::JoinHandle<()>,
+}
 
-impl TransportForwarder {
+impl EgressRouteWorker {
     pub(crate) fn new(
         out_transport: Arc<dyn UTransport>,
         message_receiver: Receiver<Arc<UMessage>>,
@@ -20,12 +22,12 @@ impl TransportForwarder {
         let out_transport_clone = out_transport.clone();
         let message_receiver_clone = message_receiver.resubscribe();
 
-        spawn_message_forwarding_loop(
+        let join_handle = spawn_route_dispatch_loop(
             out_transport_clone,
             message_receiver_clone,
             move |out_transport, message_receiver| async move {
                 trace!("Within blocked runtime");
-                Self::message_forwarding_loop(
+                Self::route_dispatch_loop(
                     UUID::build().to_hyphenated_string(),
                     out_transport,
                     message_receiver,
@@ -35,10 +37,14 @@ impl TransportForwarder {
             },
         );
 
-        Self {}
+        Self { join_handle }
     }
 
-    pub(crate) async fn message_forwarding_loop(
+    pub(crate) fn thread_id(&self) -> std::thread::ThreadId {
+        self.join_handle.thread().id()
+    }
+
+    pub(crate) async fn route_dispatch_loop(
         id: String,
         out_transport: Arc<dyn UTransport>,
         mut message_receiver: Receiver<Arc<UMessage>>,
@@ -47,8 +53,8 @@ impl TransportForwarder {
             debug!(
                 "{}:{}:{} Attempting send of message: {:?}",
                 id,
-                TRANSPORT_FORWARDER_TAG,
-                TRANSPORT_FORWARDER_FN_MESSAGE_FORWARDING_LOOP_TAG,
+                EGRESS_ROUTE_WORKER_TAG,
+                EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG,
                 msg
             );
             let send_res = out_transport.send(msg.deref().clone()).await;
@@ -56,14 +62,14 @@ impl TransportForwarder {
                 warn!(
                     "{}:{}:{} Sending on out_transport failed: {:?}",
                     id,
-                    TRANSPORT_FORWARDER_TAG,
-                    TRANSPORT_FORWARDER_FN_MESSAGE_FORWARDING_LOOP_TAG,
+                    EGRESS_ROUTE_WORKER_TAG,
+                    EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG,
                     err
                 );
             } else {
                 debug!(
                     "{}:{}:{} Sending on out_transport succeeded",
-                    id, TRANSPORT_FORWARDER_TAG, TRANSPORT_FORWARDER_FN_MESSAGE_FORWARDING_LOOP_TAG
+                    id, EGRESS_ROUTE_WORKER_TAG, EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG
                 );
             }
         }

@@ -82,7 +82,7 @@
 //! # });
 //! ```
 //!
-//! ## Forwarding-rule contract
+//! ## Route contract
 //!
 //! This doctest focuses on route lifecycle behavior exposed by the API facade:
 //! same-authority rules are rejected, duplicate inserts fail, and deleting a missing
@@ -174,9 +174,9 @@
 //! ## Internal architecture map
 //!
 //! - API facade: outward `Endpoint`/`UStreamer` surface
-//! - Control plane: forwarding-rule lifecycle and route-table ownership
+//! - Control plane: route-registration lifecycle and route-table ownership
 //! - Routing: publish-source and subscription-resolution policy
-//! - Data plane: ingress listeners and egress forwarder pool/worker
+//! - Data plane: ingress listeners and egress route worker pool
 //! - Runtime: subscription bootstrap and worker runtime boundaries
 //!
 //! ## Observability model

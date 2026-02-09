@@ -1,13 +1,13 @@
 //! Data-plane layer.
 //!
 //! Owns ingress listener registration/unregistration and egress worker pooling.
-//! This layer translates resolved route policy into concrete message forwarding
-//! execution paths.
+//! This layer translates resolved route policy into concrete ingress/egress
+//! dispatch execution paths.
 //!
 //! ```ignore
 //! use up_streamer::UStreamer;
 //!
-//! // Data-plane components are created/managed by forwarding-rule lifecycle changes.
+//! // Data-plane components are created/managed by route lifecycle changes.
 //! # let _ = UStreamer::delete_forwarding_rule;
 //! ```
 

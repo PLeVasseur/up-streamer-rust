@@ -1,4 +1,4 @@
-//! Ingress listener adapter that receives messages and feeds the egress queue.
+//! Ingress-route listener adapter that receives messages and feeds egress dispatch.
 
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -6,32 +6,32 @@ use tokio::sync::broadcast::Sender;
 use tracing::{debug, error};
 use up_rust::{UListener, UMessage, UPayloadFormat};
 
-const FORWARDING_LISTENER_TAG: &str = "ForwardingListener:";
-const FORWARDING_LISTENER_FN_ON_RECEIVE_TAG: &str = "on_receive():";
+const INGRESS_ROUTE_LISTENER_TAG: &str = "IngressRouteListener:";
+const INGRESS_ROUTE_LISTENER_FN_ON_RECEIVE_TAG: &str = "on_receive():";
 
 #[derive(Clone)]
-pub(crate) struct ForwardingListener {
-    forwarding_id: String,
+pub(crate) struct IngressRouteListener {
+    route_id: String,
     sender: Sender<Arc<UMessage>>,
 }
 
-impl ForwardingListener {
-    pub(crate) fn new(forwarding_id: &str, sender: Sender<Arc<UMessage>>) -> Self {
+impl IngressRouteListener {
+    pub(crate) fn new(route_id: &str, sender: Sender<Arc<UMessage>>) -> Self {
         Self {
-            forwarding_id: forwarding_id.to_string(),
+            route_id: route_id.to_string(),
             sender,
         }
     }
 }
 
 #[async_trait]
-impl UListener for ForwardingListener {
+impl UListener for IngressRouteListener {
     async fn on_receive(&self, msg: UMessage) {
         debug!(
             "{}:{}:{} Received message: {:?}",
-            self.forwarding_id,
-            FORWARDING_LISTENER_TAG,
-            FORWARDING_LISTENER_FN_ON_RECEIVE_TAG,
+            self.route_id,
+            INGRESS_ROUTE_LISTENER_TAG,
+            INGRESS_ROUTE_LISTENER_FN_ON_RECEIVE_TAG,
             &msg
         );
 
@@ -40,9 +40,9 @@ impl UListener for ForwardingListener {
         {
             debug!(
                 "{}:{}:{} Received message with type UPAYLOAD_FORMAT_SHM, which is not supported. A pointer to shared memory will not be usable on another device. UAttributes: {:#?}",
-                self.forwarding_id,
-                FORWARDING_LISTENER_TAG,
-                FORWARDING_LISTENER_FN_ON_RECEIVE_TAG,
+                self.route_id,
+                INGRESS_ROUTE_LISTENER_TAG,
+                INGRESS_ROUTE_LISTENER_FN_ON_RECEIVE_TAG,
                 &msg.attributes
             );
             return;
@@ -51,7 +51,9 @@ impl UListener for ForwardingListener {
         if let Err(e) = self.sender.send(Arc::new(msg)) {
             error!(
                 "{}:{}:{} Unable to send message to worker pool: {e:?}",
-                self.forwarding_id, FORWARDING_LISTENER_TAG, FORWARDING_LISTENER_FN_ON_RECEIVE_TAG,
+                self.route_id,
+                INGRESS_ROUTE_LISTENER_TAG,
+                INGRESS_ROUTE_LISTENER_FN_ON_RECEIVE_TAG,
             );
         }
     }

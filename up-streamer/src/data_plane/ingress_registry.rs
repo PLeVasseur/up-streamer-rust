@@ -1,63 +1,77 @@
-//! Ingress listener registry and lifecycle management.
+//! Ingress-route listener registry and lifecycle management.
 
-use crate::data_plane::ingress_listener::ForwardingListener;
+use crate::data_plane::ingress_listener::IngressRouteListener;
 use crate::control_plane::transport_identity::TransportIdentityKey;
-use crate::routing::publish_resolution::derive_publish_source_filters;
-use crate::routing::subscription_directory::resolve_subscribers_for_authority;
-use crate::ustreamer::uauthority_to_uuri;
+use crate::routing::authority_filter::authority_to_wildcard_filter;
+use crate::routing::publish_resolution::PublishRouteResolver;
+use crate::routing::subscription_directory::SubscriptionDirectory;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
-use subscription_cache::SubscriptionCache;
 use tokio::sync::broadcast::Sender;
-use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 use up_rust::{UMessage, UTransport, UUri};
 
-const FORWARDING_LISTENERS_TAG: &str = "ForwardingListeners:";
-const FORWARDING_LISTENERS_FN_INSERT_TAG: &str = "insert:";
-const FORWARDING_LISTENERS_FN_REMOVE_TAG: &str = "remove:";
+const INGRESS_ROUTE_REGISTRY_TAG: &str = "IngressRouteRegistry:";
+const INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG: &str = "register_route:";
+const INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG: &str = "unregister_route:";
 
-pub enum ForwardingListenerError {
-    FailToRegisterNotificationRequestResponseListener,
-    FailToRegisterPublishListener(UUri),
+pub enum IngressRouteRegistrationError {
+    FailedToRegisterRequestRouteListener,
+    FailedToRegisterPublishRouteListener(UUri),
 }
 
-impl Debug for ForwardingListenerError {
+impl Debug for IngressRouteRegistrationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            ForwardingListenerError::FailToRegisterNotificationRequestResponseListener => {
-                write!(f, "FailToRegisterNotificationRequestResponseListener")
+            IngressRouteRegistrationError::FailedToRegisterRequestRouteListener => {
+                write!(f, "FailedToRegisterRequestRouteListener")
             }
-            ForwardingListenerError::FailToRegisterPublishListener(uri) => {
-                write!(f, "FailToRegisterPublishListener({:?})", uri)
+            IngressRouteRegistrationError::FailedToRegisterPublishRouteListener(uri) => {
+                write!(f, "FailedToRegisterPublishRouteListener({:?})", uri)
             }
         }
     }
 }
 
-impl Display for ForwardingListenerError {
+impl Display for IngressRouteRegistrationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            ForwardingListenerError::FailToRegisterNotificationRequestResponseListener => {
-                write!(
-                    f,
-                    "Failed to register notification request/response listener"
-                )
+            IngressRouteRegistrationError::FailedToRegisterRequestRouteListener => {
+                write!(f, "Failed to register notification request/response listener")
             }
-            ForwardingListenerError::FailToRegisterPublishListener(uri) => {
-                write!(f, "Failed to register publish listener for URI: {}", uri)
+            IngressRouteRegistrationError::FailedToRegisterPublishRouteListener(uri) => {
+                write!(f, "Failed to register publish route listener for URI: {}", uri)
             }
         }
     }
 }
 
-impl Error for ForwardingListenerError {}
+impl Error for IngressRouteRegistrationError {}
 
-type ForwardingListenersContainer =
-    Mutex<HashMap<(TransportIdentityKey, String, String), (usize, Arc<ForwardingListener>)>>;
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct IngressRouteBindingKey {
+    transport: TransportIdentityKey,
+    ingress_authority: String,
+    egress_authority: String,
+}
+
+impl IngressRouteBindingKey {
+    fn new(in_transport: Arc<dyn UTransport>, in_authority: &str, out_authority: &str) -> Self {
+        Self {
+            transport: TransportIdentityKey::new(in_transport),
+            ingress_authority: in_authority.to_string(),
+            egress_authority: out_authority.to_string(),
+        }
+    }
+}
+
+struct IngressRouteBinding {
+    ref_count: usize,
+    listener: Arc<IngressRouteListener>,
+}
 
 type ListenerFilter = (UUri, Option<UUri>);
 
@@ -65,64 +79,62 @@ type ListenerFilter = (UUri, Option<UUri>);
 async fn rollback_registered_filters(
     in_transport: &Arc<dyn UTransport>,
     rollback_filters: &HashSet<ListenerFilter>,
-    forwarding_listener: Arc<ForwardingListener>,
+    route_listener: Arc<IngressRouteListener>,
 ) {
     for (source_filter, sink_filter) in rollback_filters {
         if let Err(err) = in_transport
-            .unregister_listener(source_filter, sink_filter.as_ref(), forwarding_listener.clone())
+            .unregister_listener(source_filter, sink_filter.as_ref(), route_listener.clone())
             .await
         {
             warn!(
                 "{}:{} unable to unregister listener, error: {}",
-                FORWARDING_LISTENERS_TAG, FORWARDING_LISTENERS_FN_INSERT_TAG, err
+                INGRESS_ROUTE_REGISTRY_TAG,
+                INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
+                err
             );
         }
     }
 }
 
-pub(crate) struct ForwardingListeners {
-    listeners: ForwardingListenersContainer,
+pub(crate) struct IngressRouteRegistry {
+    bindings: tokio::sync::Mutex<HashMap<IngressRouteBindingKey, IngressRouteBinding>>,
 }
 
-impl ForwardingListeners {
+impl IngressRouteRegistry {
     pub(crate) fn new() -> Self {
         Self {
-            listeners: Mutex::new(HashMap::new()),
+            bindings: tokio::sync::Mutex::new(HashMap::new()),
         }
     }
 
-    pub(crate) async fn insert(
+    pub(crate) async fn register_route(
         &self,
         in_transport: Arc<dyn UTransport>,
         in_authority: &str,
         out_authority: &str,
-        forwarding_id: &str,
+        route_id: &str,
         out_sender: Sender<Arc<UMessage>>,
-        subscription_cache: Arc<Mutex<SubscriptionCache>>,
-    ) -> Result<Option<Arc<ForwardingListener>>, ForwardingListenerError> {
-        let in_transport_key = TransportIdentityKey::new(in_transport.clone());
-        let mut forwarding_listeners = self.listeners.lock().await;
+        subscription_directory: &SubscriptionDirectory,
+    ) -> Result<Option<Arc<IngressRouteListener>>, IngressRouteRegistrationError> {
+        let binding_key =
+            IngressRouteBindingKey::new(in_transport.clone(), in_authority, out_authority);
+        let mut route_bindings = self.bindings.lock().await;
 
-        if let Some((active, forwarding_listener)) = forwarding_listeners.get_mut(&(
-            in_transport_key.clone(),
-            in_authority.to_string(),
-            out_authority.to_string(),
-        )) {
-            *active += 1;
-            if *active > 1 {
+        if let Some(binding) = route_bindings.get_mut(&binding_key) {
+            binding.ref_count += 1;
+            if binding.ref_count > 1 {
                 return Ok(None);
             }
-            return Ok(Some(forwarding_listener.clone()));
+            return Ok(Some(binding.listener.clone()));
         }
 
-        let forwarding_listener =
-            Arc::new(ForwardingListener::new(forwarding_id, out_sender.clone()));
+        let route_listener = Arc::new(IngressRouteListener::new(route_id, out_sender.clone()));
 
         #[allow(clippy::mutable_key_type)]
         let mut rollback_filters: HashSet<ListenerFilter> = HashSet::new();
 
-        let request_source_filter = uauthority_to_uuri(in_authority);
-        let request_sink_filter = uauthority_to_uuri(out_authority);
+        let request_source_filter = authority_to_wildcard_filter(in_authority);
+        let request_sink_filter = authority_to_wildcard_filter(out_authority);
 
         rollback_filters.insert((
             request_source_filter.clone(),
@@ -133,45 +145,48 @@ impl ForwardingListeners {
             .register_listener(
                 &request_source_filter,
                 Some(&request_sink_filter),
-                forwarding_listener.clone(),
+                route_listener.clone(),
             )
             .await
         {
             warn!(
                 "{}:{} unable to register request listener, error: {}",
-                FORWARDING_LISTENERS_TAG, FORWARDING_LISTENERS_FN_INSERT_TAG, err
+                INGRESS_ROUTE_REGISTRY_TAG,
+                INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
+                err
             );
             rollback_registered_filters(
                 &in_transport,
                 &rollback_filters,
-                forwarding_listener.clone(),
+                route_listener.clone(),
             )
             .await;
-            return Err(ForwardingListenerError::FailToRegisterNotificationRequestResponseListener);
+            return Err(IngressRouteRegistrationError::FailedToRegisterRequestRouteListener);
         }
 
         debug!(
             "{}:{} able to register request listener",
-            FORWARDING_LISTENERS_TAG, FORWARDING_LISTENERS_FN_INSERT_TAG
+            INGRESS_ROUTE_REGISTRY_TAG,
+            INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG
         );
 
         #[allow(clippy::mutable_key_type)]
-        let subscribers = resolve_subscribers_for_authority(
-            &subscription_cache,
+        let subscribers = subscription_directory
+            .lookup_route_subscribers(
             out_authority,
-            FORWARDING_LISTENERS_TAG,
-            FORWARDING_LISTENERS_FN_INSERT_TAG,
+            INGRESS_ROUTE_REGISTRY_TAG,
+            INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
         )
         .await;
 
-        #[allow(clippy::mutable_key_type)]
-        let publish_source_filters = derive_publish_source_filters(
+        let route_resolver = PublishRouteResolver::new(
             in_authority,
             out_authority,
-            &subscribers,
-            FORWARDING_LISTENERS_TAG,
-            FORWARDING_LISTENERS_FN_INSERT_TAG,
+            INGRESS_ROUTE_REGISTRY_TAG,
+            INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
         );
+        #[allow(clippy::mutable_key_type)]
+        let publish_source_filters = route_resolver.derive_source_filters(&subscribers);
 
         for source_uri in publish_source_filters {
             info!(
@@ -180,119 +195,114 @@ impl ForwardingListeners {
             );
 
             if let Err(err) = in_transport
-                .register_listener(&source_uri, None, forwarding_listener.clone())
+                .register_listener(&source_uri, None, route_listener.clone())
                 .await
             {
                 warn!(
                     "{}:{} unable to register listener, error: {}",
-                    FORWARDING_LISTENERS_TAG, FORWARDING_LISTENERS_FN_INSERT_TAG, err
+                    INGRESS_ROUTE_REGISTRY_TAG,
+                    INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
+                    err
                 );
                 rollback_registered_filters(
                     &in_transport,
                     &rollback_filters,
-                    forwarding_listener.clone(),
+                    route_listener.clone(),
                 )
                 .await;
-                return Err(ForwardingListenerError::FailToRegisterPublishListener(
+                return Err(IngressRouteRegistrationError::FailedToRegisterPublishRouteListener(
                     source_uri,
                 ));
             }
 
             rollback_filters.insert((source_uri, None));
-            debug!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_INSERT_TAG} able to register listener");
+            debug!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG} able to register listener");
         }
 
-        forwarding_listeners.insert(
-            (
-                in_transport_key,
-                in_authority.to_string(),
-                out_authority.to_string(),
-            ),
-            (1, forwarding_listener.clone()),
+        route_bindings.insert(
+            binding_key,
+            IngressRouteBinding {
+                ref_count: 1,
+                listener: route_listener.clone(),
+            },
         );
-        Ok(Some(forwarding_listener))
+        Ok(Some(route_listener))
     }
 
-    pub(crate) async fn remove(
+    pub(crate) async fn unregister_route(
         &self,
         in_transport: Arc<dyn UTransport>,
         in_authority: &str,
         out_authority: &str,
-        subscription_cache: Arc<Mutex<SubscriptionCache>>,
+        subscription_directory: &SubscriptionDirectory,
     ) {
-        let in_transport_key = TransportIdentityKey::new(in_transport.clone());
+        let binding_key =
+            IngressRouteBindingKey::new(in_transport.clone(), in_authority, out_authority);
 
-        let mut forwarding_listeners = self.listeners.lock().await;
+        let mut route_bindings = self.bindings.lock().await;
 
         let active_num = {
-            let Some((active, _)) = forwarding_listeners.get_mut(&(
-                in_transport_key.clone(),
-                in_authority.to_string(),
-                out_authority.to_string(),
-            )) else {
+            let Some(binding) = route_bindings.get_mut(&binding_key) else {
                 warn!(
-                    "{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} no such in_transport_key, out_authority: {out_authority:?}"
+                    "{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} no such in_transport_key, out_authority: {out_authority:?}"
                 );
                 return;
             };
-            *active -= 1;
-            *active
+            binding.ref_count -= 1;
+            binding.ref_count
         };
 
         if active_num == 0 {
-            let removed = forwarding_listeners.remove(&(
-                in_transport_key,
-                in_authority.to_string(),
-                out_authority.to_string(),
-            ));
-            if let Some((_, forwarding_listener)) = removed {
-                let request_source_filter = uauthority_to_uuri(in_authority);
-                let request_sink_filter = uauthority_to_uuri(out_authority);
+            let removed = route_bindings.remove(&binding_key);
+            if let Some(binding) = removed {
+                let route_listener = binding.listener;
+                let request_source_filter = authority_to_wildcard_filter(in_authority);
+                let request_sink_filter = authority_to_wildcard_filter(out_authority);
 
                 let request_unreg_res = in_transport
                     .unregister_listener(
                         &request_source_filter,
                         Some(&request_sink_filter),
-                        forwarding_listener.clone(),
+                        route_listener.clone(),
                     )
                     .await;
 
                 if let Err(err) = request_unreg_res {
-                    warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} unable to unregister request listener, error: {err}");
+                    warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} unable to unregister request listener, error: {err}");
                 } else {
-                    debug!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} able to unregister request listener");
+                    debug!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} able to unregister request listener");
                 }
 
                 #[allow(clippy::mutable_key_type)]
-                let subscribers = resolve_subscribers_for_authority(
-                    &subscription_cache,
+                let subscribers = subscription_directory
+                    .lookup_route_subscribers(
                     out_authority,
-                    FORWARDING_LISTENERS_TAG,
-                    FORWARDING_LISTENERS_FN_REMOVE_TAG,
+                    INGRESS_ROUTE_REGISTRY_TAG,
+                    INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG,
                 )
                 .await;
 
-                #[allow(clippy::mutable_key_type)]
-                let publish_source_filters = derive_publish_source_filters(
+                let route_resolver = PublishRouteResolver::new(
                     in_authority,
                     out_authority,
-                    &subscribers,
-                    FORWARDING_LISTENERS_TAG,
-                    FORWARDING_LISTENERS_FN_REMOVE_TAG,
+                    INGRESS_ROUTE_REGISTRY_TAG,
+                    INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG,
                 );
+                #[allow(clippy::mutable_key_type)]
+                let publish_source_filters = route_resolver.derive_source_filters(&subscribers);
 
                 for source_uri in publish_source_filters {
                     if let Err(err) = in_transport
-                        .unregister_listener(&source_uri, None, forwarding_listener.clone())
+                        .unregister_listener(&source_uri, None, route_listener.clone())
                         .await
                     {
-                        warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} unable to unregister publish listener, error: {err}");
+                        warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} unable to unregister publish listener, error: {err}");
                     } else {
-                        debug!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} able to unregister publish listener");
+                        debug!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} able to unregister publish listener");
                     }
                 }
             } else {
-                warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} none found we can remove, out_authority: {out_authority:?}");
+                warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} none found we can remove, out_authority: {out_authority:?}");
             }
         }
     }
@@ -300,8 +310,9 @@ impl ForwardingListeners {
 
 #[cfg(test)]
 mod tests {
-    use super::ForwardingListeners;
-    use crate::ustreamer::uauthority_to_uuri;
+    use super::IngressRouteRegistry;
+    use crate::routing::authority_filter::authority_to_wildcard_filter;
+    use crate::routing::subscription_directory::SubscriptionDirectory;
     use async_trait::async_trait;
     use std::collections::HashMap;
     use std::str::FromStr;
@@ -427,37 +438,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_and_remove_registers_and_unregisters_request_and_publish_filters() {
-        let forwarding_listeners = ForwardingListeners::new();
+    async fn register_and_unregister_route_registers_and_unregisters_request_and_publish_filters() {
+        let route_registry = IngressRouteRegistry::new();
         let recording_transport = Arc::new(RecordingTransport::default());
         let in_transport: Arc<dyn UTransport> = recording_transport.clone();
         let (out_sender, _) = tokio::sync::broadcast::channel(16);
         let subscription_cache =
             make_subscription_cache(&[("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234")]);
+        let subscription_directory = SubscriptionDirectory::new(subscription_cache);
 
-        assert!(forwarding_listeners
-            .insert(
+        assert!(route_registry
+            .register_route(
                 in_transport.clone(),
                 "authority-a",
                 "authority-b",
-                "test-forwarding",
+                "test-route",
                 out_sender,
-                subscription_cache.clone(),
+                &subscription_directory,
             )
             .await
             .is_ok());
 
-        forwarding_listeners
-            .remove(
+        route_registry
+            .unregister_route(
                 in_transport,
                 "authority-a",
                 "authority-b",
-                subscription_cache,
+                &subscription_directory,
             )
             .await;
 
-        let request_source = uauthority_to_uuri("authority-a");
-        let request_sink = uauthority_to_uuri("authority-b");
+        let request_source = authority_to_wildcard_filter("authority-a");
+        let request_sink = authority_to_wildcard_filter("authority-b");
         let publish_source =
             UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).expect("valid publish source");
 
@@ -480,42 +492,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn duplicate_insert_for_same_route_keeps_single_listener_registration() {
-        let forwarding_listeners = ForwardingListeners::new();
+    async fn duplicate_register_route_keeps_single_listener_registration() {
+        let route_registry = IngressRouteRegistry::new();
         let recording_transport = Arc::new(RecordingTransport::default());
         let in_transport: Arc<dyn UTransport> = recording_transport.clone();
         let (out_sender, _) = tokio::sync::broadcast::channel(16);
         let subscription_cache =
             make_subscription_cache(&[("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234")]);
+        let subscription_directory = SubscriptionDirectory::new(subscription_cache);
 
-        let first_insert = forwarding_listeners
-            .insert(
+        let first_register = route_registry
+            .register_route(
                 in_transport.clone(),
                 "authority-a",
                 "authority-b",
-                "test-forwarding",
+                "test-route",
                 out_sender.clone(),
-                subscription_cache.clone(),
+                &subscription_directory,
             )
             .await
-            .expect("first insert success");
-        let second_insert = forwarding_listeners
-            .insert(
+            .expect("first register success");
+        let second_register = route_registry
+            .register_route(
                 in_transport,
                 "authority-a",
                 "authority-b",
-                "test-forwarding",
+                "test-route",
                 out_sender,
-                subscription_cache,
+                &subscription_directory,
             )
             .await
-            .expect("second insert success");
+            .expect("second register success");
 
-        assert!(first_insert.is_some());
-        assert!(second_insert.is_none());
+        assert!(first_register.is_some());
+        assert!(second_register.is_none());
 
-        let request_source = uauthority_to_uuri("authority-a");
-        let request_sink = uauthority_to_uuri("authority-b");
+        let request_source = authority_to_wildcard_filter("authority-a");
+        let request_sink = authority_to_wildcard_filter("authority-b");
         let publish_source =
             UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).expect("valid publish source");
 

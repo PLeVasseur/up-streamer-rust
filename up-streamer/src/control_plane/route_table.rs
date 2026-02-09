@@ -1,23 +1,55 @@
-//! Forwarding-rule identity tuple construction for the control plane.
+//! Route-table data model and storage owner for control-plane route identity.
 
-use crate::endpoint::Endpoint;
 use crate::control_plane::transport_identity::TransportIdentityKey;
+use crate::endpoint::Endpoint;
+use std::collections::HashSet;
+use tokio::sync::Mutex;
 
-pub(crate) type ForwardingRule = (String, String, TransportIdentityKey, TransportIdentityKey);
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct RouteKey {
+    pub(crate) ingress_authority: String,
+    pub(crate) egress_authority: String,
+    pub(crate) ingress_transport: TransportIdentityKey,
+    pub(crate) egress_transport: TransportIdentityKey,
+}
 
-#[inline(always)]
-pub(crate) fn build_forwarding_rule(r#in: &Endpoint, out: &Endpoint) -> ForwardingRule {
-    (
-        r#in.authority.clone(),
-        out.authority.clone(),
-        TransportIdentityKey::new(r#in.transport.clone()),
-        TransportIdentityKey::new(out.transport.clone()),
-    )
+impl RouteKey {
+    #[inline(always)]
+    pub(crate) fn from_endpoints(r#in: &Endpoint, out: &Endpoint) -> Self {
+        Self {
+            ingress_authority: r#in.authority.clone(),
+            egress_authority: out.authority.clone(),
+            ingress_transport: TransportIdentityKey::new(r#in.transport.clone()),
+            egress_transport: TransportIdentityKey::new(out.transport.clone()),
+        }
+    }
+}
+
+pub(crate) struct RouteTable {
+    routes: Mutex<HashSet<RouteKey>>,
+}
+
+impl RouteTable {
+    pub(crate) fn new() -> Self {
+        Self {
+            routes: Mutex::new(HashSet::new()),
+        }
+    }
+
+    pub(crate) async fn insert_route(&self, route_key: RouteKey) -> bool {
+        let mut routes = self.routes.lock().await;
+        routes.insert(route_key)
+    }
+
+    pub(crate) async fn remove_route(&self, route_key: &RouteKey) -> bool {
+        let mut routes = self.routes.lock().await;
+        routes.remove(route_key)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::build_forwarding_rule;
+    use super::{RouteKey, RouteTable};
     use crate::Endpoint;
     use async_trait::async_trait;
     use std::sync::Arc;
@@ -61,21 +93,69 @@ mod tests {
         }
     }
 
+    fn build_route(
+        in_name: &str,
+        in_authority: &str,
+        in_transport: Arc<dyn UTransport>,
+        out_name: &str,
+        out_authority: &str,
+        out_transport: Arc<dyn UTransport>,
+    ) -> RouteKey {
+        let in_endpoint = Endpoint::new(in_name, in_authority, in_transport);
+        let out_endpoint = Endpoint::new(out_name, out_authority, out_transport);
+        RouteKey::from_endpoints(&in_endpoint, &out_endpoint)
+    }
+
     #[tokio::test]
-    async fn build_forwarding_rule_uses_transport_identity_in_tuple() {
+    async fn route_key_uses_transport_identity() {
         let shared_transport: Arc<dyn UTransport> = Arc::new(NoopTransport);
         let another_transport: Arc<dyn UTransport> = Arc::new(NoopTransport);
 
-        let in_endpoint = Endpoint::new("in", "authority-a", shared_transport.clone());
-        let out_endpoint_a = Endpoint::new("out-a", "authority-b", another_transport.clone());
-        let out_endpoint_b = Endpoint::new("out-b", "authority-b", another_transport);
-        let out_endpoint_c = Endpoint::new("out-c", "authority-b", Arc::new(NoopTransport));
+        let route_a = build_route(
+            "in",
+            "authority-a",
+            shared_transport.clone(),
+            "out-a",
+            "authority-b",
+            another_transport.clone(),
+        );
+        let route_b = build_route(
+            "in",
+            "authority-a",
+            shared_transport,
+            "out-b",
+            "authority-b",
+            another_transport,
+        );
+        let route_c = build_route(
+            "in",
+            "authority-a",
+            Arc::new(NoopTransport),
+            "out-c",
+            "authority-b",
+            Arc::new(NoopTransport),
+        );
 
-        let rule_a = build_forwarding_rule(&in_endpoint, &out_endpoint_a);
-        let rule_b = build_forwarding_rule(&in_endpoint, &out_endpoint_b);
-        let rule_c = build_forwarding_rule(&in_endpoint, &out_endpoint_c);
+        assert_eq!(route_a, route_b);
+        assert_ne!(route_a, route_c);
+    }
 
-        assert!(rule_a == rule_b);
-        assert!(rule_a != rule_c);
+    #[tokio::test]
+    async fn route_table_insert_and_remove_are_idempotent() {
+        let route_table = RouteTable::new();
+        let route = build_route(
+            "in",
+            "authority-a",
+            Arc::new(NoopTransport),
+            "out",
+            "authority-b",
+            Arc::new(NoopTransport),
+        );
+
+        assert!(route_table.insert_route(route.clone()).await);
+        assert!(!route_table.insert_route(route.clone()).await);
+
+        assert!(route_table.remove_route(&route).await);
+        assert!(!route_table.remove_route(&route).await);
     }
 }

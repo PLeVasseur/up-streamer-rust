@@ -10,5 +10,6 @@
 //! # let _ = UStreamer::add_forwarding_rule;
 //! ```
 
+pub(crate) mod authority_filter;
 pub(crate) mod publish_resolution;
 pub(crate) mod subscription_directory;
