@@ -13,8 +13,14 @@ const TRANSPORT_FORWARDERS_TAG: &str = "TransportForwarders:";
 const TRANSPORT_FORWARDERS_FN_INSERT_TAG: &str = "insert:";
 const TRANSPORT_FORWARDERS_FN_REMOVE_TAG: &str = "remove:";
 
+pub(crate) struct ForwarderSlot {
+    pub(crate) ref_count: usize,
+    pub(crate) _worker: Arc<TransportForwarder>,
+    pub(crate) sender: Sender<Arc<UMessage>>,
+}
+
 pub(crate) type TransportForwardersContainer =
-    Mutex<HashMap<TransportIdentityKey, (usize, Arc<TransportForwarder>, Sender<Arc<UMessage>>)>>;
+    Mutex<HashMap<TransportIdentityKey, ForwarderSlot>>;
 
 pub(crate) struct TransportForwarders {
     message_queue_size: usize,
@@ -37,17 +43,21 @@ impl TransportForwarders {
 
         let mut transport_forwarders = self.forwarders.lock().await;
 
-        let (active, _, sender) = transport_forwarders
+        let slot = transport_forwarders
             .entry(out_transport_key)
             .or_insert_with(|| {
                 debug!(
                     "{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_INSERT_TAG} Inserting..."
                 );
                 let (tx, rx) = tokio::sync::broadcast::channel(self.message_queue_size);
-                (0, Arc::new(TransportForwarder::new(out_transport, rx)), tx)
+                ForwarderSlot {
+                    ref_count: 0,
+                    _worker: Arc::new(TransportForwarder::new(out_transport, rx)),
+                    sender: tx,
+                }
             });
-        *active += 1;
-        sender.clone()
+        slot.ref_count += 1;
+        slot.sender.clone()
     }
 
     pub(crate) async fn remove(&mut self, out_transport: Arc<dyn UTransport>) {
@@ -56,16 +66,15 @@ impl TransportForwarders {
         let mut transport_forwarders = self.forwarders.lock().await;
 
         let active_num = {
-            let Some((active, _, _)) = transport_forwarders.get_mut(&out_transport_key)
-            else {
+            let Some(slot) = transport_forwarders.get_mut(&out_transport_key) else {
                 warn!(
                     "{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} no such out_transport_key"
                 );
                 return;
             };
 
-            *active -= 1;
-            *active
+            slot.ref_count -= 1;
+            slot.ref_count
         };
 
         if active_num == 0 {
@@ -135,11 +144,11 @@ mod tests {
 
         let forwarders = pool.forwarders.lock().await;
         assert_eq!(forwarders.len(), 1);
-        let (active, _, _) = forwarders
+        let slot = forwarders
             .values()
             .next()
             .expect("single transport forwarder");
-        assert_eq!(*active, 2);
+        assert_eq!(slot.ref_count, 2);
         assert!(sender_a.same_channel(&sender_b));
     }
 
