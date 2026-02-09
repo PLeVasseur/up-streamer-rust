@@ -1,9 +1,10 @@
 //! Ingress listener registry and lifecycle management.
 
 use crate::data_plane::ingress_listener::ForwardingListener;
+use crate::control_plane::transport_identity::TransportIdentityKey;
 use crate::routing::publish_resolution::effective_publish_source_filters;
 use crate::routing::subscription_directory::fetch_subscribers_for_authority;
-use crate::ustreamer::{uauthority_to_uuri, ComparableTransport};
+use crate::ustreamer::uauthority_to_uuri;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
@@ -56,7 +57,7 @@ impl Display for ForwardingListenerError {
 impl Error for ForwardingListenerError {}
 
 type ForwardingListenersContainer =
-    Mutex<HashMap<(ComparableTransport, String, String), (usize, Arc<ForwardingListener>)>>;
+    Mutex<HashMap<(TransportIdentityKey, String, String), (usize, Arc<ForwardingListener>)>>;
 
 pub(crate) struct ForwardingListeners {
     listeners: ForwardingListenersContainer,
@@ -78,11 +79,11 @@ impl ForwardingListeners {
         out_sender: Sender<Arc<UMessage>>,
         subscription_cache: Arc<Mutex<SubscriptionCache>>,
     ) -> Result<Option<Arc<ForwardingListener>>, ForwardingListenerError> {
-        let in_comparable_transport = ComparableTransport::new(in_transport.clone());
+        let in_transport_key = TransportIdentityKey::new(in_transport.clone());
         let mut forwarding_listeners = self.listeners.lock().await;
 
         if let Some((active, forwarding_listener)) = forwarding_listeners.get_mut(&(
-            in_comparable_transport.clone(),
+            in_transport_key.clone(),
             in_authority.to_string(),
             out_authority.to_string(),
         )) {
@@ -201,7 +202,7 @@ impl ForwardingListeners {
 
         forwarding_listeners.insert(
             (
-                in_comparable_transport,
+                in_transport_key,
                 in_authority.to_string(),
                 out_authority.to_string(),
             ),
@@ -217,17 +218,19 @@ impl ForwardingListeners {
         out_authority: &str,
         subscription_cache: Arc<Mutex<SubscriptionCache>>,
     ) {
-        let in_comparable_transport = ComparableTransport::new(in_transport.clone());
+        let in_transport_key = TransportIdentityKey::new(in_transport.clone());
 
         let mut forwarding_listeners = self.listeners.lock().await;
 
         let active_num = {
             let Some((active, _)) = forwarding_listeners.get_mut(&(
-                in_comparable_transport.clone(),
+                in_transport_key.clone(),
                 in_authority.to_string(),
                 out_authority.to_string(),
             )) else {
-                warn!("{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} no such out_comparable_transport, out_authority: {out_authority:?}");
+                warn!(
+                    "{FORWARDING_LISTENERS_TAG}:{FORWARDING_LISTENERS_FN_REMOVE_TAG} no such in_transport_key, out_authority: {out_authority:?}"
+                );
                 return;
             };
             *active -= 1;
@@ -236,7 +239,7 @@ impl ForwardingListeners {
 
         if active_num == 0 {
             let removed = forwarding_listeners.remove(&(
-                in_comparable_transport,
+                in_transport_key,
                 in_authority.to_string(),
                 out_authority.to_string(),
             ));

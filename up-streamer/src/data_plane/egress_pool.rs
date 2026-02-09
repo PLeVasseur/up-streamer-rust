@@ -1,7 +1,7 @@
 //! Egress forwarder pool and refcounted transport ownership.
 
 use crate::data_plane::egress_worker::TransportForwarder;
-use crate::ustreamer::ComparableTransport;
+use crate::control_plane::transport_identity::TransportIdentityKey;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast::Sender;
@@ -14,7 +14,7 @@ const TRANSPORT_FORWARDERS_FN_INSERT_TAG: &str = "insert:";
 const TRANSPORT_FORWARDERS_FN_REMOVE_TAG: &str = "remove:";
 
 pub(crate) type TransportForwardersContainer =
-    Mutex<HashMap<ComparableTransport, (usize, Arc<TransportForwarder>, Sender<Arc<UMessage>>)>>;
+    Mutex<HashMap<TransportIdentityKey, (usize, Arc<TransportForwarder>, Sender<Arc<UMessage>>)>>;
 
 pub(crate) struct TransportForwarders {
     message_queue_size: usize,
@@ -33,12 +33,12 @@ impl TransportForwarders {
         &mut self,
         out_transport: Arc<dyn UTransport>,
     ) -> Sender<Arc<UMessage>> {
-        let out_comparable_transport = ComparableTransport::new(out_transport.clone());
+        let out_transport_key = TransportIdentityKey::new(out_transport.clone());
 
         let mut transport_forwarders = self.forwarders.lock().await;
 
         let (active, _, sender) = transport_forwarders
-            .entry(out_comparable_transport)
+            .entry(out_transport_key)
             .or_insert_with(|| {
                 debug!(
                     "{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_INSERT_TAG} Inserting..."
@@ -51,14 +51,16 @@ impl TransportForwarders {
     }
 
     pub(crate) async fn remove(&mut self, out_transport: Arc<dyn UTransport>) {
-        let out_comparable_transport = ComparableTransport::new(out_transport.clone());
+        let out_transport_key = TransportIdentityKey::new(out_transport.clone());
 
         let mut transport_forwarders = self.forwarders.lock().await;
 
         let active_num = {
-            let Some((active, _, _)) = transport_forwarders.get_mut(&out_comparable_transport)
+            let Some((active, _, _)) = transport_forwarders.get_mut(&out_transport_key)
             else {
-                warn!("{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} no such out_comparable_transport");
+                warn!(
+                    "{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} no such out_transport_key"
+                );
                 return;
             };
 
@@ -67,7 +69,7 @@ impl TransportForwarders {
         };
 
         if active_num == 0 {
-            let removed = transport_forwarders.remove(&out_comparable_transport);
+            let removed = transport_forwarders.remove(&out_transport_key);
             debug!("{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} went to remove TransportForwarder for this transport");
             if removed.is_none() {
                 warn!("{TRANSPORT_FORWARDERS_TAG}:{TRANSPORT_FORWARDERS_FN_REMOVE_TAG} was none to remove");
