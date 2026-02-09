@@ -307,12 +307,12 @@ impl IngressRouteRegistry {
 mod tests {
     use super::IngressRouteRegistry;
     use crate::routing::authority_filter::authority_to_wildcard_filter;
+    use crate::routing::subscription_cache::SubscriptionCache;
     use crate::routing::subscription_directory::SubscriptionDirectory;
     use async_trait::async_trait;
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::{Arc, Mutex as StdMutex};
-    use subscription_cache::SubscriptionCache;
     use tokio::sync::Mutex;
     use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo, Subscription};
     use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};

@@ -24,8 +24,7 @@ pub mod plugin {
 
     const THREAD_NUM: usize = 10;
 
-    use crate::config::Config;
-    use crate::config::HostTransport;
+    use crate::config::{Config, HostTransport, SubscriptionProviderMode};
     use std::env;
     use std::sync::{
         atomic::{AtomicBool, Ordering::Relaxed},
@@ -33,6 +32,7 @@ pub mod plugin {
     };
     use std::time::Duration;
     use tracing::trace;
+    use up_rust::core::usubscription::USubscription;
     use up_rust::{UTransport, UUri};
     use up_streamer::{Endpoint, UStreamer};
     use up_transport_vsomeip::UPTransportVsomeip;
@@ -139,14 +139,23 @@ pub mod plugin {
         let timestamp_res = runtime.new_timestamp();
         trace!("called function on runtime: {timestamp_res:?}");
 
-        let subscription_path = config.usubscription_config.file_path;
-        let usubscription = Arc::new(USubscriptionStaticFile::new(subscription_path));
+        let usubscription: Arc<dyn USubscription> =
+            match config.usubscription_config.mode {
+                SubscriptionProviderMode::StaticFile => Arc::new(USubscriptionStaticFile::new(
+                    config.usubscription_config.file_path.clone(),
+                )),
+                SubscriptionProviderMode::LiveUsubscription => panic!(
+                    "live_usubscription mode is reserved in this phase; live runtime integration is deferred (see reports/usubscription-decoupled-pubsub-migration/05-live-integration-deferred.md)"
+                ),
+            };
 
         let mut streamer = match UStreamer::new(
             "up-linux-streamer",
             config.up_streamer_config.message_queue_size,
             usubscription,
-        ) {
+        )
+        .await
+        {
             Ok(streamer) => streamer,
             Err(error) => panic!("Failed to create uStreamer: {}", error),
         };
