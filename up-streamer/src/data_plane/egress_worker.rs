@@ -56,19 +56,13 @@ impl EgressRouteWorker {
         while let Ok(msg) = message_receiver.recv().await {
             debug!(
                 "{}:{}:{} Attempting send of message: {:?}",
-                id,
-                EGRESS_ROUTE_WORKER_TAG,
-                EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG,
-                msg
+                id, EGRESS_ROUTE_WORKER_TAG, EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG, msg
             );
             let send_res = out_transport.send(msg.deref().clone()).await;
             if let Err(err) = send_res {
                 warn!(
                     "{}:{}:{} Sending on out_transport failed: {:?}",
-                    id,
-                    EGRESS_ROUTE_WORKER_TAG,
-                    EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG,
-                    err
+                    id, EGRESS_ROUTE_WORKER_TAG, EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG, err
                 );
             } else {
                 debug!(
