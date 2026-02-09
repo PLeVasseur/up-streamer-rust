@@ -186,7 +186,6 @@
 //! subscriber. Binaries/plugins/tests are responsible for one-time
 //! `tracing_subscriber` initialization at process boundaries.
 
-pub mod api;
 mod control_plane;
 mod data_plane;
 mod endpoint;

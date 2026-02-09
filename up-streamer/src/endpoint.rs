@@ -91,6 +91,10 @@ pub struct Endpoint {
 
 impl Endpoint {
     pub fn new(name: &str, authority: &str, transport: Arc<dyn UTransport>) -> Self {
-        crate::api::endpoint::build_endpoint(name, authority, transport)
+        Self {
+            name: name.to_string(),
+            authority: authority.to_string(),
+            transport,
+        }
     }
 }
