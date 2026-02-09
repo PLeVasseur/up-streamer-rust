@@ -7,16 +7,19 @@ use tokio::sync::Mutex;
 use tracing::warn;
 
 #[derive(Clone)]
+/// Route-subscriber directory facade over the subscription cache.
 pub(crate) struct SubscriptionDirectory {
     cache: Arc<Mutex<SubscriptionCache>>,
 }
 
 impl SubscriptionDirectory {
+    /// Creates a directory facade over a shared subscription cache.
     pub(crate) fn new(cache: Arc<Mutex<SubscriptionCache>>) -> Self {
         Self { cache }
     }
 
     #[allow(clippy::mutable_key_type)]
+    /// Looks up subscribers for one egress authority with wildcard matching.
     pub(crate) async fn lookup_route_subscribers(
         &self,
         out_authority: &str,

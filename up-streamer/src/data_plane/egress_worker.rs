@@ -10,11 +10,13 @@ use up_rust::{UMessage, UTransport, UUID};
 const EGRESS_ROUTE_WORKER_TAG: &str = "EgressRouteWorker:";
 const EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG: &str = "run_loop():";
 
+/// Worker state that owns the spawned route-dispatch thread handle.
 pub(crate) struct EgressRouteWorker {
     join_handle: std::thread::JoinHandle<()>,
 }
 
 impl EgressRouteWorker {
+    /// Spawns a dedicated runtime thread for one egress transport dispatch loop.
     pub(crate) fn new(
         out_transport: Arc<dyn UTransport>,
         message_receiver: Receiver<Arc<UMessage>>,
@@ -40,10 +42,12 @@ impl EgressRouteWorker {
         Self { join_handle }
     }
 
+    /// Returns the backing runtime thread ID for diagnostics.
     pub(crate) fn thread_id(&self) -> std::thread::ThreadId {
         self.join_handle.thread().id()
     }
 
+    /// Executes the dispatch loop by forwarding each received message to egress transport.
     pub(crate) async fn route_dispatch_loop(
         id: String,
         out_transport: Arc<dyn UTransport>,

@@ -75,12 +75,15 @@
 //! let right = Endpoint::new("right", "right-authority", right_transport);
 //!
 //! streamer
-//!     .add_forwarding_rule(left.clone(), right.clone())
+//!     .add_route(left.clone(), right.clone())
 //!     .await
 //!     .unwrap();
-//! streamer.delete_forwarding_rule(left, right).await.unwrap();
+//! streamer.delete_route(left, right).await.unwrap();
 //! # });
 //! ```
+//!
+//! Compatibility note: `add_forwarding_rule` / `delete_forwarding_rule` remain
+//! available and delegate to `add_route` / `delete_route`.
 //!
 //! ## Route contract
 //!
@@ -147,25 +150,25 @@
 //! );
 //!
 //! assert!(streamer
-//!     .add_forwarding_rule(left.clone(), left_again.clone())
+//!     .add_route(left.clone(), left_again.clone())
 //!     .await
 //!     .is_err());
 //!
 //! assert!(streamer
-//!     .add_forwarding_rule(left.clone(), right.clone())
+//!     .add_route(left.clone(), right.clone())
 //!     .await
 //!     .is_ok());
 //! assert!(streamer
-//!     .add_forwarding_rule(left.clone(), right.clone())
+//!     .add_route(left.clone(), right.clone())
 //!     .await
 //!     .is_err());
 //!
 //! assert!(streamer
-//!     .delete_forwarding_rule(left.clone(), right.clone())
+//!     .delete_route(left.clone(), right.clone())
 //!     .await
 //!     .is_ok());
 //! assert!(streamer
-//!     .delete_forwarding_rule(left, right)
+//!     .delete_route(left, right)
 //!     .await
 //!     .is_err());
 //! # });

@@ -39,6 +39,7 @@ pub struct UStreamer {
 }
 
 impl UStreamer {
+    /// Creates a streamer instance with preloaded subscription directory state.
     pub fn new(
         name: &str,
         message_queue_size: u16,
@@ -118,6 +119,7 @@ impl UStreamer {
         err
     }
 
+    /// Adds a unidirectional route between ingress and egress endpoints.
     pub async fn add_route(
         &mut self,
         r#in: Endpoint,
@@ -153,6 +155,7 @@ impl UStreamer {
         }
     }
 
+    /// Deletes a previously registered unidirectional route.
     pub async fn delete_route(
         &mut self,
         r#in: Endpoint,
@@ -185,6 +188,7 @@ impl UStreamer {
         }
     }
 
+    /// Backward-compatible API alias for [`UStreamer::add_route`].
     pub async fn add_forwarding_rule(
         &mut self,
         r#in: Endpoint,
@@ -193,6 +197,7 @@ impl UStreamer {
         self.add_route(r#in, out).await
     }
 
+    /// Backward-compatible API alias for [`UStreamer::delete_route`].
     pub async fn delete_forwarding_rule(
         &mut self,
         r#in: Endpoint,

@@ -6,17 +6,20 @@ use crate::data_plane::ingress_registry::{IngressRouteRegistrationError, Ingress
 use crate::endpoint::Endpoint;
 use crate::routing::subscription_directory::SubscriptionDirectory;
 
+/// Failures for route insertion orchestration.
 pub(crate) enum AddRouteError {
     SameAuthority,
     AlreadyExists,
     FailedToRegisterIngressRoute(IngressRouteRegistrationError),
 }
 
+/// Failures for route deletion orchestration.
 pub(crate) enum RemoveRouteError {
     SameAuthority,
     NotFound,
 }
 
+/// Orchestrates multi-owner route transitions across control, routing, and data planes.
 pub(crate) struct RouteLifecycle<'a> {
     route_table: &'a RouteTable,
     egress_route_pool: &'a mut EgressRoutePool,
@@ -25,6 +28,7 @@ pub(crate) struct RouteLifecycle<'a> {
 }
 
 impl<'a> RouteLifecycle<'a> {
+    /// Creates a lifecycle coordinator using existing domain owners.
     pub(crate) fn new(
         route_table: &'a RouteTable,
         egress_route_pool: &'a mut EgressRoutePool,
@@ -39,6 +43,7 @@ impl<'a> RouteLifecycle<'a> {
         }
     }
 
+    /// Registers a route and applies rollback when ingress registration fails.
     pub(crate) async fn add_route(
         &mut self,
         r#in: &Endpoint,
@@ -79,6 +84,7 @@ impl<'a> RouteLifecycle<'a> {
         Ok(())
     }
 
+    /// Removes a route and detaches ingress/egress resources when present.
     pub(crate) async fn remove_route(
         &mut self,
         r#in: &Endpoint,
