@@ -110,7 +110,10 @@ impl UStreamer {
     ) -> Result<(), UStatus> {
         let err = Err(UStatus::fail_with_code(
             UCode::INVALID_ARGUMENT,
-            format!("{} are the same. Unable to delete.", Self::route_label(r#in, out)),
+            format!(
+                "{} are the same. Unable to delete.",
+                Self::route_label(r#in, out)
+            ),
         ));
         error!(
             "{}:{}:{} route operation failed: {:?}",
@@ -120,18 +123,11 @@ impl UStreamer {
     }
 
     /// Adds a unidirectional route between ingress and egress endpoints.
-    pub async fn add_route(
-        &mut self,
-        r#in: Endpoint,
-        out: Endpoint,
-    ) -> Result<(), UStatus> {
+    pub async fn add_route(&mut self, r#in: Endpoint, out: Endpoint) -> Result<(), UStatus> {
         let route_label = Self::route_label(&r#in, &out);
         debug!(
             "{}:{}:{} Adding route for {}",
-            self.name,
-            USTREAMER_TAG,
-            USTREAMER_FN_ADD_ROUTE_TAG,
-            route_label
+            self.name, USTREAMER_TAG, USTREAMER_FN_ADD_ROUTE_TAG, route_label
         );
 
         let mut lifecycle = RouteLifecycle::new(
@@ -146,28 +142,23 @@ impl UStreamer {
             Err(AddRouteError::SameAuthority) => {
                 self.fail_due_to_same_authority(USTREAMER_FN_ADD_ROUTE_TAG, &r#in, &out)
             }
-            Err(AddRouteError::AlreadyExists) => {
-                Err(UStatus::fail_with_code(UCode::ALREADY_EXISTS, "already exists"))
-            }
-            Err(AddRouteError::FailedToRegisterIngressRoute(err)) => {
-                Err(UStatus::fail_with_code(UCode::INVALID_ARGUMENT, err.to_string()))
-            }
+            Err(AddRouteError::AlreadyExists) => Err(UStatus::fail_with_code(
+                UCode::ALREADY_EXISTS,
+                "already exists",
+            )),
+            Err(AddRouteError::FailedToRegisterIngressRoute(err)) => Err(UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                err.to_string(),
+            )),
         }
     }
 
     /// Deletes a previously registered unidirectional route.
-    pub async fn delete_route(
-        &mut self,
-        r#in: Endpoint,
-        out: Endpoint,
-    ) -> Result<(), UStatus> {
+    pub async fn delete_route(&mut self, r#in: Endpoint, out: Endpoint) -> Result<(), UStatus> {
         let route_label = Self::route_label(&r#in, &out);
         debug!(
             "{}:{}:{} Deleting route for {}",
-            self.name,
-            USTREAMER_TAG,
-            USTREAMER_FN_DELETE_ROUTE_TAG,
-            route_label
+            self.name, USTREAMER_TAG, USTREAMER_FN_DELETE_ROUTE_TAG, route_label
         );
 
         let mut lifecycle = RouteLifecycle::new(

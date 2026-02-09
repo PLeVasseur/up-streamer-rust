@@ -1,7 +1,7 @@
 //! Egress-route worker pool and refcounted transport ownership.
 
-use crate::data_plane::egress_worker::EgressRouteWorker;
 use crate::control_plane::transport_identity::TransportIdentityKey;
+use crate::data_plane::egress_worker::EgressRouteWorker;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::broadcast::Sender;
@@ -44,19 +44,15 @@ impl EgressRoutePool {
 
         let mut egress_workers = self.workers.lock().await;
 
-        let slot = egress_workers
-            .entry(out_transport_key)
-            .or_insert_with(|| {
-                debug!(
-                    "{EGRESS_ROUTE_POOL_TAG}:{EGRESS_ROUTE_POOL_FN_ATTACH_TAG} Inserting..."
-                );
-                let (tx, rx) = tokio::sync::broadcast::channel(self.message_queue_size);
-                EgressRouteBinding {
-                    ref_count: 0,
-                    worker: EgressRouteWorker::new(out_transport, rx),
-                    sender: tx,
-                }
-            });
+        let slot = egress_workers.entry(out_transport_key).or_insert_with(|| {
+            debug!("{EGRESS_ROUTE_POOL_TAG}:{EGRESS_ROUTE_POOL_FN_ATTACH_TAG} Inserting...");
+            let (tx, rx) = tokio::sync::broadcast::channel(self.message_queue_size);
+            EgressRouteBinding {
+                ref_count: 0,
+                worker: EgressRouteWorker::new(out_transport, rx),
+                sender: tx,
+            }
+        });
         slot.ref_count += 1;
         slot.sender.clone()
     }
@@ -87,7 +83,9 @@ impl EgressRoutePool {
                     binding.worker.thread_id()
                 );
             } else {
-                warn!("{EGRESS_ROUTE_POOL_TAG}:{EGRESS_ROUTE_POOL_FN_DETACH_TAG} was none to remove");
+                warn!(
+                    "{EGRESS_ROUTE_POOL_TAG}:{EGRESS_ROUTE_POOL_FN_DETACH_TAG} was none to remove"
+                );
             }
         }
     }

@@ -1,7 +1,7 @@
 //! Ingress-route listener registry and lifecycle management.
 
-use crate::data_plane::ingress_listener::IngressRouteListener;
 use crate::control_plane::transport_identity::TransportIdentityKey;
+use crate::data_plane::ingress_listener::IngressRouteListener;
 use crate::routing::authority_filter::authority_to_wildcard_filter;
 use crate::routing::publish_resolution::PublishRouteResolver;
 use crate::routing::subscription_directory::SubscriptionDirectory;
@@ -41,10 +41,17 @@ impl Display for IngressRouteRegistrationError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             IngressRouteRegistrationError::FailedToRegisterRequestRouteListener => {
-                write!(f, "Failed to register notification request/response listener")
+                write!(
+                    f,
+                    "Failed to register notification request/response listener"
+                )
             }
             IngressRouteRegistrationError::FailedToRegisterPublishRouteListener(uri) => {
-                write!(f, "Failed to register publish route listener for URI: {}", uri)
+                write!(
+                    f,
+                    "Failed to register publish route listener for URI: {}",
+                    uri
+                )
             }
         }
     }
@@ -90,9 +97,7 @@ async fn rollback_registered_filters(
         {
             warn!(
                 "{}:{} unable to unregister listener, error: {}",
-                INGRESS_ROUTE_REGISTRY_TAG,
-                INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
-                err
+                INGRESS_ROUTE_REGISTRY_TAG, INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG, err
             );
         }
     }
@@ -155,33 +160,26 @@ impl IngressRouteRegistry {
         {
             warn!(
                 "{}:{} unable to register request listener, error: {}",
-                INGRESS_ROUTE_REGISTRY_TAG,
-                INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
-                err
+                INGRESS_ROUTE_REGISTRY_TAG, INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG, err
             );
-            rollback_registered_filters(
-                &in_transport,
-                &rollback_filters,
-                route_listener.clone(),
-            )
-            .await;
+            rollback_registered_filters(&in_transport, &rollback_filters, route_listener.clone())
+                .await;
             return Err(IngressRouteRegistrationError::FailedToRegisterRequestRouteListener);
         }
 
         debug!(
             "{}:{} able to register request listener",
-            INGRESS_ROUTE_REGISTRY_TAG,
-            INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG
+            INGRESS_ROUTE_REGISTRY_TAG, INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG
         );
 
         #[allow(clippy::mutable_key_type)]
         let subscribers = subscription_directory
             .lookup_route_subscribers(
-            out_authority,
-            INGRESS_ROUTE_REGISTRY_TAG,
-            INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
-        )
-        .await;
+                out_authority,
+                INGRESS_ROUTE_REGISTRY_TAG,
+                INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
+            )
+            .await;
 
         let route_resolver = PublishRouteResolver::new(
             in_authority,
@@ -204,9 +202,7 @@ impl IngressRouteRegistry {
             {
                 warn!(
                     "{}:{} unable to register listener, error: {}",
-                    INGRESS_ROUTE_REGISTRY_TAG,
-                    INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
-                    err
+                    INGRESS_ROUTE_REGISTRY_TAG, INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG, err
                 );
                 rollback_registered_filters(
                     &in_transport,
@@ -214,9 +210,9 @@ impl IngressRouteRegistry {
                     route_listener.clone(),
                 )
                 .await;
-                return Err(IngressRouteRegistrationError::FailedToRegisterPublishRouteListener(
-                    source_uri,
-                ));
+                return Err(
+                    IngressRouteRegistrationError::FailedToRegisterPublishRouteListener(source_uri),
+                );
             }
 
             rollback_filters.insert((source_uri, None));
@@ -281,11 +277,11 @@ impl IngressRouteRegistry {
                 #[allow(clippy::mutable_key_type)]
                 let subscribers = subscription_directory
                     .lookup_route_subscribers(
-                    out_authority,
-                    INGRESS_ROUTE_REGISTRY_TAG,
-                    INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG,
-                )
-                .await;
+                        out_authority,
+                        INGRESS_ROUTE_REGISTRY_TAG,
+                        INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG,
+                    )
+                    .await;
 
                 let route_resolver = PublishRouteResolver::new(
                     in_authority,

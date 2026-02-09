@@ -51,9 +51,7 @@ impl UListener for IngressRouteListener {
         if let Err(e) = self.sender.send(Arc::new(msg)) {
             error!(
                 "{}:{}:{} Unable to send message to worker pool: {e:?}",
-                self.route_id,
-                INGRESS_ROUTE_LISTENER_TAG,
-                INGRESS_ROUTE_LISTENER_FN_ON_RECEIVE_TAG,
+                self.route_id, INGRESS_ROUTE_LISTENER_TAG, INGRESS_ROUTE_LISTENER_FN_ON_RECEIVE_TAG,
             );
         }
     }

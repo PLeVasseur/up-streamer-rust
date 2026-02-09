@@ -61,7 +61,10 @@ impl<'a> RouteLifecycle<'a> {
             return Err(AddRouteError::AlreadyExists);
         }
 
-        let out_sender = self.egress_route_pool.attach_route(out.transport.clone()).await;
+        let out_sender = self
+            .egress_route_pool
+            .attach_route(out.transport.clone())
+            .await;
 
         if let Err(err) = self
             .ingress_route_registry
@@ -76,7 +79,9 @@ impl<'a> RouteLifecycle<'a> {
             .await
         {
             self.route_table.remove_route(&route_key).await;
-            self.egress_route_pool.detach_route(out.transport.clone()).await;
+            self.egress_route_pool
+                .detach_route(out.transport.clone())
+                .await;
 
             return Err(AddRouteError::FailedToRegisterIngressRoute(err));
         }
@@ -101,7 +106,9 @@ impl<'a> RouteLifecycle<'a> {
             return Err(RemoveRouteError::NotFound);
         }
 
-        self.egress_route_pool.detach_route(out.transport.clone()).await;
+        self.egress_route_pool
+            .detach_route(out.transport.clone())
+            .await;
         self.ingress_route_registry
             .unregister_route(
                 r#in.transport.clone(),
