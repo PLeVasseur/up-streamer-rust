@@ -4,10 +4,8 @@
 //! behavior remains localized and predictable for the rest of the crate.
 //!
 //! ```ignore
-//! use up_streamer::UStreamer;
-//!
-//! // Runtime adapters isolate blocking/subscriber bootstrap details from API users.
-//! # let _ = UStreamer::new;
+//! // Runtime adapters are internal helpers and should not carry API/domain policy.
+//! // They expose focused spawn/bootstrap utilities for internal modules only.
 //! ```
 
 pub(crate) mod subscription_runtime;
