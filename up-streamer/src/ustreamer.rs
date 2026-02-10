@@ -135,12 +135,14 @@ impl UStreamer {
         route_label: &str,
         r#in: &Endpoint,
         out: &Endpoint,
+        action: &str,
     ) -> Result<(), UStatus> {
         let err = Err(UStatus::fail_with_code(
             UCode::INVALID_ARGUMENT,
             format!(
-                "{} are the same. Unable to delete.",
-                Self::route_label(r#in, out)
+                "{} are the same. Unable to {}.",
+                Self::route_label(r#in, out),
+                action,
             ),
         ));
         error!(
@@ -201,6 +203,7 @@ impl UStreamer {
                 &route_label,
                 in_ep,
                 out_ep,
+                "add",
             ),
             Err(AddRouteError::AlreadyExists) => {
                 error!(
@@ -287,6 +290,7 @@ impl UStreamer {
                 &route_label,
                 in_ep,
                 out_ep,
+                "delete",
             ),
             Err(RemoveRouteError::NotFound) => {
                 error!(

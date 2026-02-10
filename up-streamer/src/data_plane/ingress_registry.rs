@@ -79,6 +79,7 @@ impl IngressRouteBindingKey {
 struct IngressRouteBinding {
     ref_count: usize,
     listener: Arc<IngressRouteListener>,
+    registered_filters: Vec<ListenerFilter>,
 }
 
 type ListenerFilter = (UUri, Option<UUri>);
@@ -306,6 +307,7 @@ impl IngressRouteRegistry {
             IngressRouteBinding {
                 ref_count: 1,
                 listener: route_listener.clone(),
+                registered_filters: rollback_filters,
             },
         );
         Ok(Some(route_listener))
@@ -317,7 +319,7 @@ impl IngressRouteRegistry {
         in_transport: Arc<dyn UTransport>,
         in_authority: &str,
         out_authority: &str,
-        subscription_directory: &SubscriptionDirectory,
+        _subscription_directory: &SubscriptionDirectory,
     ) {
         let binding_key =
             IngressRouteBindingKey::new(in_transport.clone(), in_authority, out_authority);
@@ -350,81 +352,38 @@ impl IngressRouteRegistry {
 
         if let Some(binding) = removed_binding {
             let route_listener = binding.listener;
-            let request_source_filter = authority_to_wildcard_filter(in_authority);
-            let request_sink_filter = authority_to_wildcard_filter(out_authority);
-            let request_source = fields::format_uri(&request_source_filter);
-            let request_sink = fields::format_uri(&request_sink_filter);
-
-            let request_unreg_res = in_transport
-                .unregister_listener(
-                    &request_source_filter,
-                    Some(&request_sink_filter),
-                    route_listener.clone(),
-                )
-                .await;
-
-            if let Err(err) = request_unreg_res {
-                warn!(
-                    event = events::INGRESS_UNREGISTER_REQUEST_LISTENER_FAILED,
-                    component = COMPONENT,
-                    route_label = fields::NONE,
-                    in_authority,
-                    out_authority,
-                    source_filter = %request_source,
-                    sink_filter = %request_sink,
-                    err = %err,
-                    "unable to unregister request listener"
-                );
-            } else {
-                debug!(
-                    event = events::INGRESS_UNREGISTER_REQUEST_LISTENER_OK,
-                    component = COMPONENT,
-                    route_label = fields::NONE,
-                    in_authority,
-                    out_authority,
-                    source_filter = %request_source,
-                    sink_filter = %request_sink,
-                    "unregistered request listener"
-                );
-            }
-
-            let subscribers = subscription_directory
-                .lookup_route_subscribers(out_authority)
-                .await;
-
-            let publish_source_filters = PublishRouteResolver::derive_source_filters(
-                in_authority,
-                out_authority,
-                &subscribers,
-            );
-
-            for source_uri in publish_source_filters.into_values() {
-                let source_filter = fields::format_uri(&source_uri);
+            for (source_filter, sink_filter) in binding.registered_filters {
+                let source_filter_value = fields::format_uri(&source_filter);
+                let sink_filter_value = format_sink_filter(sink_filter.as_ref());
                 if let Err(err) = in_transport
-                    .unregister_listener(&source_uri, None, route_listener.clone())
+                    .unregister_listener(
+                        &source_filter,
+                        sink_filter.as_ref(),
+                        route_listener.clone(),
+                    )
                     .await
                 {
                     warn!(
-                        event = events::INGRESS_UNREGISTER_PUBLISH_LISTENER_FAILED,
+                        event = unregister_event_name(sink_filter.as_ref(), false),
                         component = COMPONENT,
                         route_label = fields::NONE,
                         in_authority,
                         out_authority,
-                        source_filter = %source_filter,
-                        sink_filter = fields::NONE,
+                        source_filter = %source_filter_value,
+                        sink_filter = %sink_filter_value,
                         err = %err,
-                        "unable to unregister publish listener"
+                        "unable to unregister ingress listener"
                     );
                 } else {
                     debug!(
-                        event = events::INGRESS_UNREGISTER_PUBLISH_LISTENER_OK,
+                        event = unregister_event_name(sink_filter.as_ref(), true),
                         component = COMPONENT,
                         route_label = fields::NONE,
                         in_authority,
                         out_authority,
-                        source_filter = %source_filter,
-                        sink_filter = fields::NONE,
-                        "unregistered publish listener"
+                        source_filter = %source_filter_value,
+                        sink_filter = %sink_filter_value,
+                        "unregistered ingress listener"
                     );
                 }
             }
@@ -573,6 +532,26 @@ mod tests {
         ))
     }
 
+    fn subscription_snapshot(entries: &[(&str, &str)]) -> FetchSubscriptionsResponse {
+        let subscriptions = entries
+            .iter()
+            .map(|(topic, subscriber)| Subscription {
+                topic: Some(UUri::from_str(topic).expect("valid topic UUri")).into(),
+                subscriber: Some(SubscriberInfo {
+                    uri: Some(UUri::from_str(subscriber).expect("valid subscriber UUri")).into(),
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            })
+            .collect();
+
+        FetchSubscriptionsResponse {
+            subscriptions,
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
     async fn register_and_unregister_route_registers_and_unregisters_request_and_publish_filters() {
         let route_registry = IngressRouteRegistry::new();
@@ -675,6 +654,66 @@ mod tests {
         assert_eq!(
             recording_transport.register_call_count(&publish_source, None),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn unregister_route_uses_registered_filters_after_snapshot_change() {
+        let route_registry = IngressRouteRegistry::new();
+        let recording_transport = Arc::new(RecordingTransport::default());
+        let in_transport: Arc<dyn UTransport> = recording_transport.clone();
+        let (out_sender, _) = tokio::sync::broadcast::channel(16);
+        let subscription_cache =
+            make_subscription_cache(&[("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234")]);
+        let subscription_directory = SubscriptionDirectory::new(subscription_cache);
+
+        route_registry
+            .register_route(
+                in_transport.clone(),
+                "authority-a",
+                "authority-b",
+                "test-route",
+                out_sender,
+                &subscription_directory,
+            )
+            .await
+            .expect("route register should succeed");
+
+        subscription_directory
+            .apply_snapshot(subscription_snapshot(&[(
+                "//authority-a/5BA1/1/8002",
+                "//authority-b/5678/1/1234",
+            )]))
+            .await
+            .expect("snapshot update should succeed");
+
+        route_registry
+            .unregister_route(
+                in_transport,
+                "authority-a",
+                "authority-b",
+                &subscription_directory,
+            )
+            .await;
+
+        let request_source = authority_to_wildcard_filter("authority-a");
+        let request_sink = authority_to_wildcard_filter("authority-b");
+        let registered_publish_source =
+            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).expect("valid publish source");
+        let updated_publish_source =
+            UUri::try_from_parts("authority-a", 0x5BA1, 0x1, 0x8002).expect("valid publish source");
+
+        assert_eq!(
+            recording_transport.unregister_call_count(&request_source, Some(&request_sink)),
+            1
+        );
+        assert_eq!(
+            recording_transport.unregister_call_count(&registered_publish_source, None),
+            1
+        );
+        assert_eq!(
+            recording_transport.unregister_call_count(&updated_publish_source, None),
+            0
         );
     }
 }
