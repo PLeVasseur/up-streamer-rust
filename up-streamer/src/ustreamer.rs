@@ -147,8 +147,12 @@ impl UStreamer {
     }
 
     /// Adds a unidirectional route between ingress and egress endpoints.
-    pub async fn add_route(&mut self, r#in: Endpoint, out: Endpoint) -> Result<(), UStatus> {
-        let route_label = Self::route_label(&r#in, &out);
+    pub async fn add_route_ref(
+        &mut self,
+        in_ep: &Endpoint,
+        out_ep: &Endpoint,
+    ) -> Result<(), UStatus> {
+        let route_label = Self::route_label(in_ep, out_ep);
         debug!(
             "{}:{}:{} Adding route for {}",
             self.name, USTREAMER_TAG, USTREAMER_FN_ADD_ROUTE_TAG, route_label
@@ -161,10 +165,10 @@ impl UStreamer {
             &self.subscription_directory,
         );
 
-        match lifecycle.add_route(&r#in, &out, &route_label).await {
+        match lifecycle.add_route(in_ep, out_ep, &route_label).await {
             Ok(()) => Ok(()),
             Err(AddRouteError::SameAuthority) => {
-                self.fail_due_to_same_authority(USTREAMER_FN_ADD_ROUTE_TAG, &r#in, &out)
+                self.fail_due_to_same_authority(USTREAMER_FN_ADD_ROUTE_TAG, in_ep, out_ep)
             }
             Err(AddRouteError::AlreadyExists) => Err(UStatus::fail_with_code(
                 UCode::ALREADY_EXISTS,
@@ -177,9 +181,18 @@ impl UStreamer {
         }
     }
 
+    /// Adds a unidirectional route between ingress and egress endpoints.
+    pub async fn add_route(&mut self, r#in: Endpoint, out: Endpoint) -> Result<(), UStatus> {
+        self.add_route_ref(&r#in, &out).await
+    }
+
     /// Deletes a previously registered unidirectional route.
-    pub async fn delete_route(&mut self, r#in: Endpoint, out: Endpoint) -> Result<(), UStatus> {
-        let route_label = Self::route_label(&r#in, &out);
+    pub async fn delete_route_ref(
+        &mut self,
+        in_ep: &Endpoint,
+        out_ep: &Endpoint,
+    ) -> Result<(), UStatus> {
+        let route_label = Self::route_label(in_ep, out_ep);
         debug!(
             "{}:{}:{} Deleting route for {}",
             self.name, USTREAMER_TAG, USTREAMER_FN_DELETE_ROUTE_TAG, route_label
@@ -192,15 +205,20 @@ impl UStreamer {
             &self.subscription_directory,
         );
 
-        match lifecycle.remove_route(&r#in, &out).await {
+        match lifecycle.remove_route(in_ep, out_ep).await {
             Ok(()) => Ok(()),
             Err(RemoveRouteError::SameAuthority) => {
-                self.fail_due_to_same_authority(USTREAMER_FN_DELETE_ROUTE_TAG, &r#in, &out)
+                self.fail_due_to_same_authority(USTREAMER_FN_DELETE_ROUTE_TAG, in_ep, out_ep)
             }
             Err(RemoveRouteError::NotFound) => {
                 Err(UStatus::fail_with_code(UCode::NOT_FOUND, "not found"))
             }
         }
+    }
+
+    /// Deletes a previously registered unidirectional route.
+    pub async fn delete_route(&mut self, r#in: Endpoint, out: Endpoint) -> Result<(), UStatus> {
+        self.delete_route_ref(&r#in, &out).await
     }
 }
 
