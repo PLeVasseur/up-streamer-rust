@@ -21,6 +21,7 @@ usage() {
 Usage:
   scripts/bench_streamer_criterion.sh baseline
   scripts/bench_streamer_criterion.sh candidate <phase_candidate>
+  scripts/bench_streamer_criterion.sh guardrail <phase_candidate> <report_path>
   scripts/bench_streamer_criterion.sh export
 USAGE
 }
@@ -43,6 +44,20 @@ candidate)
         exit 1
     fi
     run_bench --save-baseline "$1"
+    ;;
+guardrail)
+    if [[ $# -ne 2 ]]; then
+        usage
+        exit 1
+    fi
+    cargo run -p criterion-guardrail -- \
+      --criterion-root target/criterion \
+      --baseline ergonomics_baseline \
+      --candidate "$1" \
+      --throughput-threshold-pct 3 \
+      --latency-threshold-pct 5 \
+      --alloc-proxy-threshold-pct 5 \
+      --report "$2"
     ;;
 export)
     : "${OPENCODE_CONFIG_DIR:?OPENCODE_CONFIG_DIR must be set for export output path}"
