@@ -28,9 +28,42 @@ use up_rust::{UCode, UStatus, UUri};
 const STATIC_RESOURCE_ID: u32 = 0x8001;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct UriProjectionKey {
+    authority_name: String,
+    ue_id: u32,
+    ue_version_major: u8,
+    resource_id: u16,
+}
+
+impl From<UUri> for UriProjectionKey {
+    fn from(uri: UUri) -> Self {
+        let ue_version_major = uri.uentity_major_version();
+        let resource_id = uri.resource_id();
+
+        Self {
+            authority_name: uri.authority_name,
+            ue_id: uri.ue_id,
+            ue_version_major,
+            resource_id,
+        }
+    }
+}
+
+impl From<&UUri> for UriProjectionKey {
+    fn from(uri: &UUri) -> Self {
+        Self {
+            authority_name: uri.authority_name.clone(),
+            ue_id: uri.ue_id,
+            ue_version_major: uri.uentity_major_version(),
+            resource_id: uri.resource_id(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct SubscriptionIdentityKey {
-    topic: UUri,
-    subscriber: UUri,
+    topic: UriProjectionKey,
+    subscriber: UriProjectionKey,
 }
 
 pub struct USubscriptionStaticFile {
@@ -81,7 +114,6 @@ impl USubscriptionStaticFile {
         })
     }
 
-    #[allow(clippy::mutable_key_type)]
     fn parse_static_subscriptions(&self) -> Result<Vec<Subscription>, UStatus> {
         let value = self.read_static_config_json()?;
         let Some(entries) = value.as_object() else {
@@ -128,8 +160,8 @@ impl USubscriptionStaticFile {
                 };
 
                 let subscription_identity = SubscriptionIdentityKey {
-                    topic: topic.clone(),
-                    subscriber: subscriber_uri.clone(),
+                    topic: UriProjectionKey::from(&topic),
+                    subscriber: UriProjectionKey::from(&subscriber_uri),
                 };
 
                 subscriptions_by_key
@@ -192,7 +224,6 @@ impl USubscription for USubscriptionStaticFile {
         Ok(())
     }
 
-    #[allow(clippy::mutable_key_type)]
     async fn fetch_subscribers(
         &self,
         fetch_subscribers_request: FetchSubscribersRequest,
@@ -206,20 +237,20 @@ impl USubscription for USubscriptionStaticFile {
 
         let mut canonical_topic = requested_topic.clone();
         canonical_topic.resource_id = STATIC_RESOURCE_ID;
-        let requested_topic_identity = canonical_topic;
+        let requested_topic_identity = UriProjectionKey::from(canonical_topic);
 
         let subscriptions = self.parse_static_subscriptions()?;
-        let mut subscribers_by_key: HashMap<UUri, SubscriberInfo> = HashMap::new();
+        let mut subscribers_by_key: HashMap<UriProjectionKey, SubscriberInfo> = HashMap::new();
 
         for subscription in subscriptions {
-            let Some(topic) = subscription.topic.as_ref() else {
+            let Some(topic) = subscription.topic.into_option() else {
                 continue;
             };
-            if topic != &requested_topic_identity {
+            if UriProjectionKey::from(topic) != requested_topic_identity {
                 continue;
             }
 
-            let Some(subscriber) = subscription.subscriber.as_ref() else {
+            let Some(subscriber) = subscription.subscriber.into_option() else {
                 continue;
             };
             let Some(subscriber_uri) = subscriber.uri.as_ref() else {
@@ -227,8 +258,8 @@ impl USubscription for USubscriptionStaticFile {
             };
 
             subscribers_by_key
-                .entry(subscriber_uri.clone())
-                .or_insert_with(|| subscriber.clone());
+                .entry(UriProjectionKey::from(subscriber_uri))
+                .or_insert(subscriber);
         }
 
         Ok(FetchSubscribersResponse {
@@ -267,8 +298,41 @@ mod tests {
         path
     }
 
+    #[test]
+    fn uri_projection_key_owned_and_borrowed_conversion_match() {
+        let uri = UUri {
+            authority_name: "authority-a".to_string(),
+            ue_id: 0x5BA0,
+            ue_version_major: 0x1,
+            resource_id: 0x8001,
+            ..Default::default()
+        };
+
+        let key_from_borrowed = super::UriProjectionKey::from(&uri);
+        let key_from_owned = super::UriProjectionKey::from(uri.clone());
+
+        assert_eq!(key_from_owned, key_from_borrowed);
+    }
+
+    #[test]
+    fn uri_projection_key_uses_canonical_major_and_resource_semantics() {
+        let uri = UUri {
+            authority_name: "authority-a".to_string(),
+            ue_id: 0x5BA0,
+            ue_version_major: 0x1FF,
+            resource_id: 0x1_8001,
+            ..Default::default()
+        };
+
+        let key = super::UriProjectionKey::from(&uri);
+
+        assert_eq!(key.ue_version_major, uri.uentity_major_version());
+        assert_eq!(key.resource_id, uri.resource_id());
+        assert_eq!(key.ue_version_major, 0xFF);
+        assert_eq!(key.resource_id, 0x8001);
+    }
+
     #[tokio::test]
-    #[allow(clippy::mutable_key_type)]
     async fn fetch_subscribers_dedupes_duplicate_subscribers_after_topic_normalization() {
         let static_path = write_static_config(
             r#"{
@@ -296,18 +360,16 @@ mod tests {
 
         fs::remove_file(&static_path).expect("remove static config file");
 
-        let subscriber_uris: HashSet<UUri> = response
+        let subscriber_uris: HashSet<String> = response
             .subscribers
             .into_iter()
             .filter_map(|subscriber| subscriber.uri.into_option())
+            .map(|subscriber_uri| subscriber_uri.to_uri(false))
             .collect();
 
         assert_eq!(subscriber_uris.len(), 3);
-        assert!(subscriber_uris
-            .contains(&UUri::from_str("//authority-b/5678/1/1234").expect("valid subscriber")));
-        assert!(subscriber_uris
-            .contains(&UUri::from_str("//authority-c/5678/1/1234").expect("valid subscriber")));
-        assert!(subscriber_uris
-            .contains(&UUri::from_str("//authority-z/5678/1/1234").expect("valid subscriber")));
+        assert!(subscriber_uris.contains("//authority-b/5678/1/1234"));
+        assert!(subscriber_uris.contains("//authority-c/5678/1/1234"));
+        assert!(subscriber_uris.contains("//authority-z/5678/1/1234"));
     }
 }
