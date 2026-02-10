@@ -66,10 +66,7 @@ impl UStreamer {
         if let Err(err) = streamer.refresh_subscriptions().await {
             warn!(
                 "{}:{}:{} startup subscription bootstrap failed; deferred-refresh mode active: {}",
-                streamer.name,
-                USTREAMER_TAG,
-                USTREAMER_FN_NEW_TAG,
-                err,
+                streamer.name, USTREAMER_TAG, USTREAMER_FN_NEW_TAG, err,
             );
         }
 
@@ -366,10 +363,9 @@ mod tests {
     #[tokio::test]
     async fn startup_fetch_failure_is_non_fatal_and_sets_first_failed_attempt() {
         let usubscription: Arc<dyn USubscription> =
-            Arc::new(SequencedUSubscription::new(vec![Err(UStatus::fail_with_code(
-                UCode::UNAVAILABLE,
-                "simulated bootstrap failure",
-            ))]));
+            Arc::new(SequencedUSubscription::new(vec![Err(
+                UStatus::fail_with_code(UCode::UNAVAILABLE, "simulated bootstrap failure"),
+            )]));
 
         let streamer = UStreamer::new("startup-failure", 16, usubscription)
             .await
@@ -413,7 +409,10 @@ mod tests {
     async fn failed_refresh_updates_health_visible_via_accessor() {
         let usubscription: Arc<dyn USubscription> = Arc::new(SequencedUSubscription::new(vec![
             Ok(valid_snapshot()),
-            Err(UStatus::fail_with_code(UCode::UNAVAILABLE, "refresh failure")),
+            Err(UStatus::fail_with_code(
+                UCode::UNAVAILABLE,
+                "refresh failure",
+            )),
         ]));
 
         let mut streamer = UStreamer::new("refresh-failure", 16, usubscription)

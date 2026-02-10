@@ -57,18 +57,17 @@ async fn main() -> Result<(), UStatus> {
         )
     })?;
 
-    let usubscription: Arc<dyn USubscription> =
-        match config.usubscription_config.mode {
-            SubscriptionProviderMode::StaticFile => Arc::new(USubscriptionStaticFile::new(
-                config.usubscription_config.file_path.clone(),
-            )),
-            SubscriptionProviderMode::LiveUsubscription => {
-                return Err(UStatus::fail_with_code(
+    let usubscription: Arc<dyn USubscription> = match config.usubscription_config.mode {
+        SubscriptionProviderMode::StaticFile => Arc::new(USubscriptionStaticFile::new(
+            config.usubscription_config.file_path.clone(),
+        )),
+        SubscriptionProviderMode::LiveUsubscription => {
+            return Err(UStatus::fail_with_code(
                     UCode::UNIMPLEMENTED,
                     "live_usubscription mode is reserved in this phase; live runtime integration is deferred (see reports/usubscription-decoupled-pubsub-migration/05-live-integration-deferred.md)",
                 ));
-            }
-        };
+        }
+    };
 
     // Start the streamer instance.
     let mut streamer = UStreamer::new(
