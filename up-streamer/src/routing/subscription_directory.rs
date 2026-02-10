@@ -7,7 +7,10 @@ use tracing::warn;
 use up_rust::core::usubscription::FetchSubscriptionsResponse;
 use up_rust::UStatus;
 
+use crate::observability::events;
 use crate::routing::subscription_cache::{SubscriptionCache, SubscriptionLookup};
+
+const COMPONENT: &str = "subscription_directory";
 
 #[derive(Clone)]
 /// Route-subscriber directory facade over the subscription cache.
@@ -41,12 +44,7 @@ impl SubscriptionDirectory {
     }
 
     /// Looks up subscribers for one egress authority with wildcard matching.
-    pub(crate) async fn lookup_route_subscribers(
-        &self,
-        out_authority: &str,
-        tag: &str,
-        action: &str,
-    ) -> SubscriptionLookup {
+    pub(crate) async fn lookup_route_subscribers(&self, out_authority: &str) -> SubscriptionLookup {
         match self
             .cache
             .lock()
@@ -55,7 +53,12 @@ impl SubscriptionDirectory {
         {
             Some(subscribers) => subscribers,
             None => {
-                warn!("{tag}:{action} no subscribers found for out_authority: {out_authority:?}");
+                warn!(
+                    event = events::SUBSCRIPTION_LOOKUP_EMPTY,
+                    component = COMPONENT,
+                    out_authority,
+                    "no subscribers found for egress authority"
+                );
                 HashMap::new()
             }
         }
@@ -112,9 +115,7 @@ mod tests {
 
         assert!(directory.apply_snapshot(invalid_snapshot).await.is_err());
 
-        let remaining = directory
-            .lookup_route_subscribers("authority-b", "test", "lookup")
-            .await;
+        let remaining = directory.lookup_route_subscribers("authority-b").await;
         assert_eq!(remaining.len(), 1);
     }
 }
