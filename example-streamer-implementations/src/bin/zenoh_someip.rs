@@ -150,13 +150,13 @@ async fn main() -> Result<(), UStatus> {
 
     // Here we tell the streamer to forward any zenoh messages to the someip endpoint
     streamer
-        .add_forwarding_rule(zenoh_endpoint.clone(), someip_endpoint.clone())
+        .add_route(zenoh_endpoint.clone(), someip_endpoint.clone())
         .await
         .expect("Could not add zenoh -> someip forwarding rule");
 
     // And here we set up the forwarding in the other direction.
     streamer
-        .add_forwarding_rule(someip_endpoint.clone(), zenoh_endpoint.clone())
+        .add_route(someip_endpoint.clone(), zenoh_endpoint.clone())
         .await
         .expect("Could not add someip -> zenoh forwarding rule");
 

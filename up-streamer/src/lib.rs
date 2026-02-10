@@ -111,8 +111,7 @@
 //! Note for this migration phase: required streamer binaries expose `live_usubscription` as a
 //! reserved mode and fail fast with an explicit deferred-integration message.
 //!
-//! Compatibility note: `add_forwarding_rule` / `delete_forwarding_rule` remain
-//! available and delegate to `add_route` / `delete_route`.
+//! Route lifecycle APIs are `add_route` / `delete_route`.
 //!
 //! ## Route contract
 //!

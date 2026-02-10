@@ -40,11 +40,11 @@ async fn usubscription_bad_data() {
     let remote_endpoint = Endpoint::new("remote_endpoint", &remote_authority_a(), utransport_bar);
 
     // adding local to remote routing
-    let add_forwarding_rule_res = ustreamer
-        .add_forwarding_rule(local_endpoint.clone(), remote_endpoint.clone())
+    let add_route_res = ustreamer
+        .add_route(local_endpoint.clone(), remote_endpoint.clone())
         .await;
     assert_eq!(
-        add_forwarding_rule_res,
+        add_route_res,
         Err(UStatus::fail_with_code(
             UCode::INVALID_ARGUMENT,
             "Failed to register notification request/response listener"

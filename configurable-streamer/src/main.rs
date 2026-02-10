@@ -173,7 +173,7 @@ async fn main() -> Result<(), UStatus> {
             let left_endpoint = endpoints.get(&zenoh_endpoint.endpoint).unwrap();
             let right_endpoint = endpoints.get(&forwarding).unwrap();
             streamer
-                .add_forwarding_rule(left_endpoint.to_owned(), right_endpoint.to_owned())
+                .add_route(left_endpoint.to_owned(), right_endpoint.to_owned())
                 .await
                 .expect("Could not add forwarding rule from {zenoh.endpoint} to {forwarding}");
         }
@@ -185,7 +185,7 @@ async fn main() -> Result<(), UStatus> {
             let left_endpoint = endpoints.get(&mqtt5_endpoint.endpoint).unwrap();
             let right_endpoint = endpoints.get(&forwarding).unwrap();
             streamer
-                .add_forwarding_rule(left_endpoint.to_owned(), right_endpoint.to_owned())
+                .add_route(left_endpoint.to_owned(), right_endpoint.to_owned())
                 .await
                 .expect("Could not add forwarding rule from {mqtt.endpoint} to {forwarding}");
         }
