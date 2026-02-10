@@ -6,17 +6,23 @@ use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo};
 use up_rust::UUri;
 use up_rust::{UCode, UStatus};
 
+use crate::routing::uri_identity_key::UriIdentityKey;
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct SubscriptionIdentityKey {
-    topic: UUri,
-    subscriber: Option<UUri>,
+    topic: UriIdentityKey,
+    subscriber: Option<UriIdentityKey>,
 }
 
 impl From<&SubscriptionInformation> for SubscriptionIdentityKey {
     fn from(subscription_information: &SubscriptionInformation) -> Self {
         Self {
-            topic: subscription_information.topic.clone(),
-            subscriber: subscription_information.subscriber.uri.as_ref().cloned(),
+            topic: UriIdentityKey::from(&subscription_information.topic),
+            subscriber: subscription_information
+                .subscriber
+                .uri
+                .as_ref()
+                .map(UriIdentityKey::from),
         }
     }
 }
@@ -50,7 +56,6 @@ pub(crate) struct SubscriptionCache {
 }
 
 impl SubscriptionCache {
-    #[allow(clippy::mutable_key_type)]
     pub(crate) fn new(subscription_cache_map: FetchSubscriptionsResponse) -> Result<Self, UStatus> {
         let mut subscription_cache_hash_map = HashMap::new();
         for subscription in subscription_cache_map.subscriptions {
@@ -67,10 +72,7 @@ impl SubscriptionCache {
                 )
             })?;
 
-            let subscription_information = SubscriptionInformation {
-                topic: topic.clone(),
-                subscriber: subscriber.clone(),
-            };
+            let subscription_information = SubscriptionInformation { topic, subscriber };
             let subscriber_authority_name = match subscription_information.subscriber.uri.as_ref() {
                 Some(uri) => uri.authority_name.clone(),
                 None => {
@@ -99,7 +101,6 @@ impl SubscriptionCache {
         self.subscription_cache_map.get(entry).cloned()
     }
 
-    #[allow(clippy::mutable_key_type)]
     pub(crate) fn fetch_cache_entry_with_wildcard(
         &self,
         entry: &str,
@@ -126,8 +127,6 @@ impl SubscriptionCache {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::mutable_key_type)]
-
     use super::SubscriptionCache;
     use std::str::FromStr;
     use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo, Subscription};

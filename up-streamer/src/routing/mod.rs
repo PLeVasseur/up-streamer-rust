@@ -68,3 +68,4 @@ pub(crate) mod authority_filter;
 pub(crate) mod publish_resolution;
 pub(crate) mod subscription_cache;
 pub(crate) mod subscription_directory;
+pub(crate) mod uri_identity_key;
