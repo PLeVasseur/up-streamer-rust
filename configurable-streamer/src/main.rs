@@ -58,7 +58,12 @@ async fn main() -> Result<(), UStatus> {
             format!("Unable to parse config file: {e:?}"),
         )
     })?;
-    config.transports.mqtt.load_mqtt_details().unwrap();
+    config.transports.mqtt.load_mqtt_details().map_err(|e| {
+        UStatus::fail_with_code(
+            UCode::INVALID_ARGUMENT,
+            format!("Unable to load MQTT transport details: {e:?}"),
+        )
+    })?;
 
     let usubscription: Arc<dyn USubscription> = match config.usubscription_config.mode {
         SubscriptionProviderMode::StaticFile => Arc::new(USubscriptionStaticFile::new(
@@ -78,39 +83,46 @@ async fn main() -> Result<(), UStatus> {
         config.up_streamer_config.message_queue_size,
         usubscription,
     )
-    .await
-    .expect("Failed to create uStreamer");
+    .await?;
 
     let mut endpoints: HashMap<String, Endpoint> = HashMap::new();
 
     // build the zenoh transport
-    let zenoh_config = ZenohConfig::from_file(config.transports.zenoh.config_file).unwrap();
+    let zenoh_config =
+        ZenohConfig::from_file(config.transports.zenoh.config_file).map_err(|e| {
+            UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                format!("Unable to load Zenoh config file: {e:?}"),
+            )
+        })?;
     let zenoh_transport: Arc<dyn UTransport> = Arc::new(
         UPTransportZenoh::builder(config.streamer_uuri.authority.clone())
-            .expect("Unable to create Zenoh transport builder")
+            .map_err(|e| {
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("Unable to create Zenoh transport builder: {e:?}"),
+                )
+            })?
             .with_config(zenoh_config)
             .build()
             .await
-            .expect("Unable to initialize Zenoh UTransport"),
+            .map_err(|e| {
+                UStatus::fail_with_code(
+                    UCode::INTERNAL,
+                    format!("Unable to initialize Zenoh UTransport: {e:?}"),
+                )
+            })?,
     );
 
     // build the mqtt5 transport
+    let mqtt_details = config.transports.mqtt.mqtt_details.clone().ok_or_else(|| {
+        UStatus::fail_with_code(
+            UCode::INVALID_ARGUMENT,
+            "MQTT transport details are missing after load_mqtt_details",
+        )
+    })?;
     let mqtt_client_options = MqttClientOptions {
-        broker_uri: config
-            .transports
-            .mqtt
-            .mqtt_details
-            .clone()
-            .unwrap()
-            .hostname
-            + ":"
-            + &config
-                .transports
-                .mqtt
-                .mqtt_details
-                .unwrap()
-                .port
-                .to_string(),
+        broker_uri: format!("{}:{}", mqtt_details.hostname, mqtt_details.port),
         ..Default::default()
     };
     let mqtt_transport_options = Mqtt5TransportOptions {
@@ -170,24 +182,48 @@ async fn main() -> Result<(), UStatus> {
     // set up the endpoint forwarding for zenoh
     for zenoh_endpoint in config.transports.zenoh.endpoints {
         for forwarding in zenoh_endpoint.forwarding {
-            let left_endpoint = endpoints.get(&zenoh_endpoint.endpoint).unwrap();
-            let right_endpoint = endpoints.get(&forwarding).unwrap();
+            let left_endpoint = endpoints.get(&zenoh_endpoint.endpoint).ok_or_else(|| {
+                UStatus::fail_with_code(
+                    UCode::INVALID_ARGUMENT,
+                    format!(
+                        "Unknown endpoint in forwarding rules: {}",
+                        zenoh_endpoint.endpoint
+                    ),
+                )
+            })?;
+            let right_endpoint = endpoints.get(&forwarding).ok_or_else(|| {
+                UStatus::fail_with_code(
+                    UCode::INVALID_ARGUMENT,
+                    format!("Unknown forwarding target endpoint: {forwarding}"),
+                )
+            })?;
             streamer
                 .add_route_ref(left_endpoint, right_endpoint)
-                .await
-                .expect("Could not add forwarding rule from {zenoh.endpoint} to {forwarding}");
+                .await?;
         }
     }
 
     // set up the endpoint forwarding for mqtt
     for mqtt5_endpoint in config.transports.mqtt.endpoints {
         for forwarding in mqtt5_endpoint.forwarding {
-            let left_endpoint = endpoints.get(&mqtt5_endpoint.endpoint).unwrap();
-            let right_endpoint = endpoints.get(&forwarding).unwrap();
+            let left_endpoint = endpoints.get(&mqtt5_endpoint.endpoint).ok_or_else(|| {
+                UStatus::fail_with_code(
+                    UCode::INVALID_ARGUMENT,
+                    format!(
+                        "Unknown endpoint in forwarding rules: {}",
+                        mqtt5_endpoint.endpoint
+                    ),
+                )
+            })?;
+            let right_endpoint = endpoints.get(&forwarding).ok_or_else(|| {
+                UStatus::fail_with_code(
+                    UCode::INVALID_ARGUMENT,
+                    format!("Unknown forwarding target endpoint: {forwarding}"),
+                )
+            })?;
             streamer
                 .add_route_ref(left_endpoint, right_endpoint)
-                .await
-                .expect("Could not add forwarding rule from {mqtt.endpoint} to {forwarding}");
+                .await?;
         }
     }
 
