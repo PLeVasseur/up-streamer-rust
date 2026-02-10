@@ -4,7 +4,9 @@ use crate::control_plane::transport_identity::TransportIdentityKey;
 use crate::data_plane::ingress_listener::IngressRouteListener;
 use crate::observability::{events, fields};
 use crate::routing::authority_filter::authority_to_wildcard_filter;
-use crate::routing::publish_resolution::PublishRouteResolver;
+use crate::routing::publish_resolution::{
+    PublishRouteResolver, PublishSourceFilterCacheKey, SourceFilterLookup,
+};
 use crate::routing::subscription_directory::SubscriptionDirectory;
 use std::collections::HashMap;
 use std::error::Error;
@@ -146,6 +148,8 @@ async fn rollback_registered_filters(
 /// Refcounted ingress listener registry keyed by route binding identity.
 pub(crate) struct IngressRouteRegistry {
     bindings: tokio::sync::Mutex<HashMap<IngressRouteBindingKey, IngressRouteBinding>>,
+    publish_filter_cache:
+        tokio::sync::Mutex<HashMap<PublishSourceFilterCacheKey, SourceFilterLookup>>,
 }
 
 impl IngressRouteRegistry {
@@ -153,7 +157,40 @@ impl IngressRouteRegistry {
     pub(crate) fn new() -> Self {
         Self {
             bindings: tokio::sync::Mutex::new(HashMap::new()),
+            publish_filter_cache: tokio::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    async fn derive_publish_filters_cached(
+        &self,
+        in_authority: &str,
+        out_authority: &str,
+        subscription_directory: &SubscriptionDirectory,
+    ) -> SourceFilterLookup {
+        let (snapshot_version, subscribers) = subscription_directory
+            .lookup_route_subscribers_with_version(out_authority)
+            .await;
+        let cache_key =
+            PublishSourceFilterCacheKey::new(in_authority, out_authority, snapshot_version);
+
+        if let Some(cached) = self
+            .publish_filter_cache
+            .lock()
+            .await
+            .get(&cache_key)
+            .cloned()
+        {
+            return cached;
+        }
+
+        let derived =
+            PublishRouteResolver::derive_source_filters(in_authority, out_authority, &subscribers);
+
+        let mut publish_filter_cache = self.publish_filter_cache.lock().await;
+        publish_filter_cache
+            .entry(cache_key)
+            .or_insert_with(|| derived.clone())
+            .clone()
     }
 
     pub(crate) async fn register_route(
@@ -234,12 +271,9 @@ impl IngressRouteRegistry {
             "registered request listener"
         );
 
-        let subscribers = subscription_directory
-            .lookup_route_subscribers(out_authority)
+        let publish_source_filters = self
+            .derive_publish_filters_cached(in_authority, out_authority, subscription_directory)
             .await;
-
-        let publish_source_filters =
-            PublishRouteResolver::derive_source_filters(in_authority, out_authority, &subscribers);
 
         for source_uri in publish_source_filters.into_values() {
             let source_filter = fields::format_uri(&source_uri);
@@ -413,7 +447,6 @@ mod tests {
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::{Arc, Mutex as StdMutex};
-    use tokio::sync::Mutex;
     use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo, Subscription};
     use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
 
@@ -509,7 +542,7 @@ mod tests {
         }
     }
 
-    fn make_subscription_cache(entries: &[(&str, &str)]) -> Arc<Mutex<SubscriptionCache>> {
+    fn make_subscription_cache(entries: &[(&str, &str)]) -> SubscriptionCache {
         let subscriptions = entries
             .iter()
             .map(|(topic, subscriber)| Subscription {
@@ -523,13 +556,11 @@ mod tests {
             })
             .collect();
 
-        Arc::new(Mutex::new(
-            SubscriptionCache::new(FetchSubscriptionsResponse {
-                subscriptions,
-                ..Default::default()
-            })
-            .expect("valid subscription cache"),
-        ))
+        SubscriptionCache::new(FetchSubscriptionsResponse {
+            subscriptions,
+            ..Default::default()
+        })
+        .expect("valid subscription cache")
     }
 
     fn subscription_snapshot(entries: &[(&str, &str)]) -> FetchSubscriptionsResponse {
@@ -714,6 +745,72 @@ mod tests {
         assert_eq!(
             recording_transport.unregister_call_count(&updated_publish_source, None),
             0
+        );
+    }
+
+    #[tokio::test]
+    async fn register_route_cache_key_uses_snapshot_version() {
+        let route_registry = IngressRouteRegistry::new();
+        let recording_transport = Arc::new(RecordingTransport::default());
+        let in_transport: Arc<dyn UTransport> = recording_transport.clone();
+        let (out_sender, _) = tokio::sync::broadcast::channel(16);
+        let subscription_cache =
+            make_subscription_cache(&[("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234")]);
+        let subscription_directory = SubscriptionDirectory::new(subscription_cache);
+
+        route_registry
+            .register_route(
+                in_transport.clone(),
+                "authority-a",
+                "authority-b",
+                "test-route",
+                out_sender.clone(),
+                &subscription_directory,
+            )
+            .await
+            .expect("first route register should succeed");
+
+        route_registry
+            .unregister_route(
+                in_transport.clone(),
+                "authority-a",
+                "authority-b",
+                &subscription_directory,
+            )
+            .await;
+
+        subscription_directory
+            .apply_snapshot(subscription_snapshot(&[(
+                "//authority-a/5BA1/1/8002",
+                "//authority-b/5678/1/1234",
+            )]))
+            .await
+            .expect("snapshot update should succeed");
+
+        route_registry
+            .register_route(
+                in_transport,
+                "authority-a",
+                "authority-b",
+                "test-route",
+                out_sender,
+                &subscription_directory,
+            )
+            .await
+            .expect("second route register should succeed");
+
+        let first_publish_source =
+            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).expect("valid publish source");
+        let second_publish_source =
+            UUri::try_from_parts("authority-a", 0x5BA1, 0x1, 0x8002).expect("valid publish source");
+
+        assert_eq!(
+            recording_transport.register_call_count(&first_publish_source, None),
+            1
+        );
+        assert_eq!(
+            recording_transport.register_call_count(&second_publish_source, None),
+            1
         );
     }
 }

@@ -5027,6 +5027,7 @@ dependencies = [
 name = "up-streamer"
 version = "0.1.0"
 dependencies = [
+ "arc-swap",
  "async-broadcast",
  "async-trait",
  "chrono",

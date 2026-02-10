@@ -1,6 +1,6 @@
 //! Publish-source filter derivation and dedupe policy.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tracing::{debug, warn};
 use up_rust::UUri;
 
@@ -12,10 +12,39 @@ pub(crate) type SourceFilterLookup = HashMap<UriIdentityKey, UUri>;
 
 const COMPONENT: &str = "publish_resolution";
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct PublishSourceFilterCacheKey {
+    ingress_authority: String,
+    egress_authority: String,
+    snapshot_version: u64,
+}
+
+impl PublishSourceFilterCacheKey {
+    pub(crate) fn new(
+        ingress_authority: &str,
+        egress_authority: &str,
+        snapshot_version: u64,
+    ) -> Self {
+        Self {
+            ingress_authority: ingress_authority.to_string(),
+            egress_authority: egress_authority.to_string(),
+            snapshot_version,
+        }
+    }
+}
+
 /// Resolves publish source filters for route listeners under one ingress->egress pair.
 pub(crate) struct PublishRouteResolver;
 
 impl PublishRouteResolver {
+    fn topic_projection_key(topic: &UUri) -> (u32, u8, u16) {
+        (
+            topic.ue_id,
+            topic.uentity_major_version(),
+            topic.resource_id(),
+        )
+    }
+
     /// Returns `true` when a subscription topic can originate from the ingress authority.
     fn topic_matches_ingress_authority(ingress_authority: &str, topic: &UUri) -> bool {
         topic.authority_name == "*" || topic.authority_name == ingress_authority
@@ -68,9 +97,15 @@ impl PublishRouteResolver {
         egress_authority: &str,
         subscribers: &SubscriptionLookup,
     ) -> SourceFilterLookup {
-        let mut source_filters = HashMap::new();
+        let mut source_filters = HashMap::with_capacity(subscribers.len());
+        let mut seen_topics: HashSet<(u32, u8, u16)> = HashSet::with_capacity(subscribers.len());
 
         for subscriber in subscribers.values() {
+            let topic_key = Self::topic_projection_key(&subscriber.topic);
+            if !seen_topics.insert(topic_key) {
+                continue;
+            }
+
             if let Some(source_uri) = Self::derive_source_filter_for_topic(
                 ingress_authority,
                 egress_authority,
@@ -88,7 +123,7 @@ impl PublishRouteResolver {
 
 #[cfg(test)]
 mod tests {
-    use super::PublishRouteResolver;
+    use super::{PublishRouteResolver, PublishSourceFilterCacheKey};
     use crate::routing::subscription_cache::{
         SubscriptionIdentityKey, SubscriptionInformation, SubscriptionLookup,
     };
@@ -167,5 +202,13 @@ mod tests {
         assert!(filters
             .values()
             .any(|source_filter| source_filter == &expected));
+    }
+
+    #[test]
+    fn cache_key_is_version_sensitive() {
+        let v1 = PublishSourceFilterCacheKey::new("authority-a", "authority-b", 1);
+        let v2 = PublishSourceFilterCacheKey::new("authority-a", "authority-b", 2);
+
+        assert_ne!(v1, v2);
     }
 }

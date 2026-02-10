@@ -57,9 +57,29 @@ impl Hash for SubscriptionInformation {
 #[derive(Default)]
 pub(crate) struct SubscriptionCache {
     subscription_cache_map: HashMap<String, SubscriptionLookup>,
+    wildcard_merged_cache_map: HashMap<String, SubscriptionLookup>,
 }
 
 impl SubscriptionCache {
+    fn build_wildcard_merged_cache(
+        subscription_cache_map: &HashMap<String, SubscriptionLookup>,
+    ) -> HashMap<String, SubscriptionLookup> {
+        let wildcard_rows = subscription_cache_map.get("*");
+        let mut merged_cache_map = HashMap::with_capacity(subscription_cache_map.len());
+
+        for (authority, exact_rows) in subscription_cache_map {
+            let mut merged_rows = exact_rows.clone();
+            if authority != "*" {
+                if let Some(wildcard_rows) = wildcard_rows {
+                    merged_rows.extend(wildcard_rows.clone());
+                }
+            }
+            merged_cache_map.insert(authority.clone(), merged_rows);
+        }
+
+        merged_cache_map
+    }
+
     pub(crate) fn new(subscription_cache_map: FetchSubscriptionsResponse) -> Result<Self, UStatus> {
         let input_rows = subscription_cache_map.subscriptions.len();
         debug!(
@@ -146,8 +166,12 @@ impl SubscriptionCache {
             "subscription snapshot rebuild succeeded"
         );
 
+        let wildcard_merged_cache_map =
+            Self::build_wildcard_merged_cache(&subscription_cache_hash_map);
+
         Ok(Self {
             subscription_cache_map: subscription_cache_hash_map,
+            wildcard_merged_cache_map,
         })
     }
 
@@ -174,19 +198,16 @@ impl SubscriptionCache {
                 .unwrap_or(0)
         };
 
-        let mut merged: SubscriptionLookup = HashMap::new();
+        let merged = if entry == "*" {
+            self.wildcard_merged_cache_map.get("*").cloned()
+        } else {
+            self.wildcard_merged_cache_map
+                .get(entry)
+                .cloned()
+                .or_else(|| self.subscription_cache_map.get("*").cloned())
+        };
 
-        if let Some(exact_subscribers) = self.subscription_cache_map.get(entry) {
-            merged.extend(exact_subscribers.clone());
-        }
-
-        if entry != "*" {
-            if let Some(wildcard_subscribers) = self.subscription_cache_map.get("*") {
-                merged.extend(wildcard_subscribers.clone());
-            }
-        }
-
-        let merged_count = merged.len();
+        let merged_count = merged.as_ref().map(HashMap::len).unwrap_or(0);
         debug!(
             event = events::SUBSCRIPTION_WILDCARD_MERGE_SUMMARY,
             component = COMPONENT,
@@ -197,11 +218,7 @@ impl SubscriptionCache {
             "subscription wildcard merge summary"
         );
 
-        if merged.is_empty() {
-            None
-        } else {
-            Some(merged)
-        }
+        merged.filter(|rows| !rows.is_empty())
     }
 }
 
