@@ -3,19 +3,23 @@
 use crate::runtime::worker_runtime::{
     spawn_route_dispatch_loop, DEFAULT_EGRESS_ROUTE_RUNTIME_THREAD_NAME,
 };
+use crate::{
+    observability::events,
+    observability::fields::{self, WorkerContext},
+};
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::broadcast::{error::RecvError, Receiver};
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, info, warn};
 use up_rust::{UMessage, UTransport, UUID};
 
-const EGRESS_ROUTE_WORKER_TAG: &str = "EgressRouteWorker:";
-const EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG: &str = "run_loop():";
 const EGRESS_ROUTE_RUNTIME_THREAD_NAME_PREFIX: &str = "up-egress-";
 const EGRESS_ROUTE_RUNTIME_THREAD_NAME_MAX_LEN: usize = 15;
+const COMPONENT: &str = "egress_worker";
 
 /// Worker state that owns the spawned route-dispatch thread handle.
 pub(crate) struct EgressRouteWorker {
+    worker_id: String,
     join_handle: std::thread::JoinHandle<()>,
 }
 
@@ -27,25 +31,34 @@ impl EgressRouteWorker {
     ) -> Self {
         let out_transport_clone = out_transport.clone();
         let message_receiver_clone = message_receiver.resubscribe();
-        let route_id = UUID::build().to_hyphenated_string();
-        let runtime_thread_name = Self::build_runtime_thread_name(&route_id);
-        let route_id_for_loop = route_id.clone();
+        let worker_id = UUID::build().to_hyphenated_string();
+        let runtime_thread_name = Self::build_runtime_thread_name(&worker_id);
+        let worker_id_for_loop = worker_id.clone();
 
         let join_handle = spawn_route_dispatch_loop(
             runtime_thread_name,
             out_transport_clone,
             message_receiver_clone,
             move |out_transport, message_receiver| async move {
-                trace!("Within blocked runtime");
-                Self::route_dispatch_loop(route_id_for_loop, out_transport, message_receiver).await;
+                Self::route_dispatch_loop(worker_id_for_loop, out_transport, message_receiver)
+                    .await;
             },
         );
 
-        Self { join_handle }
+        Self {
+            worker_id,
+            join_handle,
+        }
+    }
+
+    /// Returns the unique worker identifier for correlation logs.
+    pub(crate) fn worker_id(&self) -> &str {
+        &self.worker_id
     }
 
     /// Returns the backing runtime thread ID for diagnostics.
     pub(crate) fn thread_id(&self) -> std::thread::ThreadId {
+        let _ = self.worker_id();
         self.join_handle.thread().id()
     }
 
@@ -67,40 +80,73 @@ impl EgressRouteWorker {
 
     /// Executes the dispatch loop by forwarding each received message to egress transport.
     pub(crate) async fn route_dispatch_loop(
-        id: String,
+        worker_id: String,
         out_transport: Arc<dyn UTransport>,
         mut message_receiver: Receiver<Arc<UMessage>>,
     ) {
+        let worker_context = WorkerContext::new(worker_id, std::thread::current().name());
+
         loop {
             match message_receiver.recv().await {
                 Ok(msg) => {
+                    let message = msg.deref();
                     debug!(
-                        "{}:{}:{} Attempting send of message: {:?}",
-                        id, EGRESS_ROUTE_WORKER_TAG, EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG, msg
+                        event = events::EGRESS_SEND_ATTEMPT,
+                        component = COMPONENT,
+                        worker_id = worker_context.worker_id.as_str(),
+                        worker_thread = worker_context.worker_thread.as_str(),
+                        msg_id = %fields::format_message_id(message),
+                        msg_type = %fields::format_message_type(message),
+                        src = %fields::format_source_uri(message),
+                        sink = %fields::format_sink_uri(message),
+                        "attempting egress send"
                     );
-                    let send_res = out_transport.send(msg.deref().clone()).await;
+                    let send_res = out_transport.send(message.clone()).await;
                     if let Err(err) = send_res {
                         warn!(
-                            "{}:{}:{} Sending on out_transport failed: {:?}",
-                            id, EGRESS_ROUTE_WORKER_TAG, EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG, err
+                            event = events::EGRESS_SEND_FAILED,
+                            component = COMPONENT,
+                            worker_id = worker_context.worker_id.as_str(),
+                            worker_thread = worker_context.worker_thread.as_str(),
+                            msg_id = %fields::format_message_id(message),
+                            msg_type = %fields::format_message_type(message),
+                            src = %fields::format_source_uri(message),
+                            sink = %fields::format_sink_uri(message),
+                            err = ?err,
+                            "egress send failed"
                         );
                     } else {
                         debug!(
-                            "{}:{}:{} Sending on out_transport succeeded",
-                            id, EGRESS_ROUTE_WORKER_TAG, EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG
+                            event = events::EGRESS_SEND_OK,
+                            component = COMPONENT,
+                            worker_id = worker_context.worker_id.as_str(),
+                            worker_thread = worker_context.worker_thread.as_str(),
+                            msg_id = %fields::format_message_id(message),
+                            msg_type = %fields::format_message_type(message),
+                            src = %fields::format_source_uri(message),
+                            sink = %fields::format_sink_uri(message),
+                            "egress send succeeded"
                         );
                     }
                 }
                 Err(RecvError::Lagged(skipped)) => {
                     warn!(
-                        "{}:{}:{} Receiver lagged and skipped {} queued messages",
-                        id, EGRESS_ROUTE_WORKER_TAG, EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG, skipped
+                        event = events::EGRESS_RECV_LAGGED,
+                        component = COMPONENT,
+                        worker_id = worker_context.worker_id.as_str(),
+                        worker_thread = worker_context.worker_thread.as_str(),
+                        skipped,
+                        "receiver lagged"
                     );
                 }
                 Err(RecvError::Closed) => {
                     info!(
-                        "{}:{}:{} Receiver closed; stopping dispatch loop",
-                        id, EGRESS_ROUTE_WORKER_TAG, EGRESS_ROUTE_WORKER_FN_RUN_LOOP_TAG
+                        event = events::EGRESS_RECV_CLOSED,
+                        component = COMPONENT,
+                        worker_id = worker_context.worker_id.as_str(),
+                        worker_thread = worker_context.worker_thread.as_str(),
+                        reason = fields::REASON_BROADCAST_CLOSED,
+                        "receiver closed; stopping dispatch loop"
                     );
                     break;
                 }
