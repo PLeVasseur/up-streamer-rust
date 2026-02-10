@@ -5,8 +5,9 @@ use tracing::{debug, warn};
 use up_rust::UUri;
 
 use crate::routing::subscription_cache::SubscriptionLookup;
+use crate::routing::uri_identity_key::UriIdentityKey;
 
-pub(crate) type SourceFilterLookup = HashMap<UUri, UUri>;
+pub(crate) type SourceFilterLookup = HashMap<UriIdentityKey, UUri>;
 
 /// Resolves publish source filters for route listeners under one ingress->egress pair.
 pub(crate) struct PublishRouteResolver<'a> {
@@ -74,7 +75,6 @@ impl<'a> PublishRouteResolver<'a> {
     }
 
     /// Derives deduplicated publish source filters for all matching subscribers.
-    #[allow(clippy::mutable_key_type)]
     pub(crate) fn derive_source_filters(
         &self,
         subscribers: &SubscriptionLookup,
@@ -84,7 +84,7 @@ impl<'a> PublishRouteResolver<'a> {
         for subscriber in subscribers.values() {
             if let Some(source_uri) = self.derive_source_filter_for_topic(&subscriber.topic) {
                 source_filters
-                    .entry(source_uri.clone())
+                    .entry(UriIdentityKey::from(&source_uri))
                     .or_insert(source_uri);
             }
         }
@@ -95,8 +95,6 @@ impl<'a> PublishRouteResolver<'a> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::mutable_key_type)]
-
     use super::PublishRouteResolver;
     use crate::routing::subscription_cache::{
         SubscriptionIdentityKey, SubscriptionInformation, SubscriptionLookup,
