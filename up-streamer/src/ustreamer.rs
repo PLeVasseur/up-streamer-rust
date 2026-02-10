@@ -267,7 +267,7 @@ impl UStreamer {
         );
 
         match lifecycle
-            .remove_route(&mut self.egress_route_pool, in_ep, out_ep)
+            .remove_route(&mut self.egress_route_pool, in_ep, out_ep, &route_label)
             .await
         {
             Ok(()) => {
