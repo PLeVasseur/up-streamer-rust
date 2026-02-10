@@ -202,24 +202,6 @@ impl UStreamer {
             }
         }
     }
-
-    /// Backward-compatible API alias for [`UStreamer::add_route`].
-    pub async fn add_forwarding_rule(
-        &mut self,
-        r#in: Endpoint,
-        out: Endpoint,
-    ) -> Result<(), UStatus> {
-        self.add_route(r#in, out).await
-    }
-
-    /// Backward-compatible API alias for [`UStreamer::delete_route`].
-    pub async fn delete_forwarding_rule(
-        &mut self,
-        r#in: Endpoint,
-        out: Endpoint,
-    ) -> Result<(), UStatus> {
-        self.delete_route(r#in, out).await
-    }
 }
 
 #[cfg(test)]

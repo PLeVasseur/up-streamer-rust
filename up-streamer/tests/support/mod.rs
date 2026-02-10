@@ -14,10 +14,7 @@ pub(crate) async fn make_streamer(name: &str, message_queue_size: u16) -> UStrea
 }
 
 pub(crate) async fn assert_add_rule_ok(streamer: &mut UStreamer, r#in: &Endpoint, out: &Endpoint) {
-    assert!(streamer
-        .add_forwarding_rule(r#in.clone(), out.clone())
-        .await
-        .is_ok());
+    assert!(streamer.add_route(r#in.clone(), out.clone()).await.is_ok());
 }
 
 #[allow(dead_code)]
@@ -27,7 +24,7 @@ pub(crate) async fn assert_delete_rule_ok(
     out: &Endpoint,
 ) {
     assert!(streamer
-        .delete_forwarding_rule(r#in.clone(), out.clone())
+        .delete_route(r#in.clone(), out.clone())
         .await
         .is_ok());
 }

@@ -230,7 +230,7 @@ pub mod plugin {
                 someip_transport.clone(),
             );
             let forwarding_res = streamer
-                .add_forwarding_rule(mechatronics_endpoint.clone(), host_endpoint.clone())
+                .add_route(mechatronics_endpoint.clone(), host_endpoint.clone())
                 .await;
 
             if let Err(err) = forwarding_res {
@@ -238,7 +238,7 @@ pub mod plugin {
             }
 
             let forwarding_res = streamer
-                .add_forwarding_rule(host_endpoint.clone(), mechatronics_endpoint.clone())
+                .add_route(host_endpoint.clone(), mechatronics_endpoint.clone())
                 .await;
 
             if let Err(err) = forwarding_res {
