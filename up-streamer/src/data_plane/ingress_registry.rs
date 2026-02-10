@@ -115,6 +115,7 @@ impl IngressRouteRegistry {
         }
     }
 
+    #[allow(clippy::mutable_key_type)]
     pub(crate) async fn register_route(
         &self,
         in_transport: Arc<dyn UTransport>,
@@ -226,6 +227,7 @@ impl IngressRouteRegistry {
     }
 
     /// Unregisters ingress route listeners when the binding refcount reaches zero.
+    #[allow(clippy::mutable_key_type)]
     pub(crate) async fn unregister_route(
         &self,
         in_transport: Arc<dyn UTransport>,

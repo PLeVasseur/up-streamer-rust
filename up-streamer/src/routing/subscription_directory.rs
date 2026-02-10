@@ -41,6 +41,7 @@ impl SubscriptionDirectory {
     }
 
     /// Looks up subscribers for one egress authority with wildcard matching.
+    #[allow(clippy::mutable_key_type)]
     pub(crate) async fn lookup_route_subscribers(
         &self,
         out_authority: &str,
@@ -64,6 +65,8 @@ impl SubscriptionDirectory {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::mutable_key_type)]
+
     use super::SubscriptionDirectory;
     use crate::routing::subscription_cache::SubscriptionCache;
     use std::str::FromStr;

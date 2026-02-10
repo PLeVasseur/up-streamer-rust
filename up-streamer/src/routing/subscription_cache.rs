@@ -7,39 +7,16 @@ use up_rust::UUri;
 use up_rust::{UCode, UStatus};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct UUriIdentityKey {
-    authority_name: String,
-    ue_id: u32,
-    ue_version_major: u8,
-    resource_id: u16,
-}
-
-impl From<&UUri> for UUriIdentityKey {
-    fn from(uri: &UUri) -> Self {
-        Self {
-            authority_name: uri.authority_name.clone(),
-            ue_id: uri.ue_id,
-            ue_version_major: uri.uentity_major_version(),
-            resource_id: uri.resource_id(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct SubscriptionIdentityKey {
-    topic: UUriIdentityKey,
-    subscriber: Option<UUriIdentityKey>,
+    topic: UUri,
+    subscriber: Option<UUri>,
 }
 
 impl From<&SubscriptionInformation> for SubscriptionIdentityKey {
     fn from(subscription_information: &SubscriptionInformation) -> Self {
         Self {
-            topic: UUriIdentityKey::from(&subscription_information.topic),
-            subscriber: subscription_information
-                .subscriber
-                .uri
-                .as_ref()
-                .map(UUriIdentityKey::from),
+            topic: subscription_information.topic.clone(),
+            subscriber: subscription_information.subscriber.uri.as_ref().cloned(),
         }
     }
 }
@@ -73,6 +50,7 @@ pub(crate) struct SubscriptionCache {
 }
 
 impl SubscriptionCache {
+    #[allow(clippy::mutable_key_type)]
     pub(crate) fn new(subscription_cache_map: FetchSubscriptionsResponse) -> Result<Self, UStatus> {
         let mut subscription_cache_hash_map = HashMap::new();
         for subscription in subscription_cache_map.subscriptions {
@@ -121,6 +99,7 @@ impl SubscriptionCache {
         self.subscription_cache_map.get(entry).cloned()
     }
 
+    #[allow(clippy::mutable_key_type)]
     pub(crate) fn fetch_cache_entry_with_wildcard(
         &self,
         entry: &str,
@@ -147,6 +126,8 @@ impl SubscriptionCache {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::mutable_key_type)]
+
     use super::SubscriptionCache;
     use std::str::FromStr;
     use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo, Subscription};
