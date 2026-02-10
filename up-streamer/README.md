@@ -100,7 +100,7 @@ After following along with the [cargo docs](#generating-cargo-docs-locally) gene
 
 - `up-streamer/benches/streamer_criterion.rs`
 
-The helper script is orchestration-only (runs canonical bench commands and baseline naming):
+The helper script runs canonical benchmark commands and can invoke the Rust guardrail CLI:
 
 ```bash
 export CRITERION_ARGS="--sample-size 60 --warm-up-time 3 --measurement-time 12 --noise-threshold 0.02"
@@ -108,6 +108,7 @@ if command -v taskset >/dev/null; then export BENCH_PIN_PREFIX="taskset -c 2"; e
 
 scripts/bench_streamer_criterion.sh baseline
 scripts/bench_streamer_criterion.sh candidate ergonomics_candidate_slice_a
+scripts/bench_streamer_criterion.sh guardrail ergonomics_candidate_slice_a "$OPENCODE_CONFIG_DIR/reports/ergonomics-perf/bench-data/criterion-guardrail.json"
 scripts/bench_streamer_criterion.sh export
 ```
 
