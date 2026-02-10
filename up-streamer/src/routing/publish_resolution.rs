@@ -4,10 +4,13 @@ use std::collections::HashMap;
 use tracing::{debug, warn};
 use up_rust::UUri;
 
+use crate::observability::{events, fields};
 use crate::routing::subscription_cache::SubscriptionLookup;
 use crate::routing::uri_identity_key::UriIdentityKey;
 
 pub(crate) type SourceFilterLookup = HashMap<UriIdentityKey, UUri>;
+
+const COMPONENT: &str = "publish_resolution";
 
 /// Resolves publish source filters for route listeners under one ingress->egress pair.
 pub(crate) struct PublishRouteResolver;
@@ -22,19 +25,17 @@ impl PublishRouteResolver {
     fn derive_source_filter_for_topic(
         ingress_authority: &str,
         egress_authority: &str,
-        tag: &str,
-        action: &str,
         topic: &UUri,
     ) -> Option<UUri> {
         if !Self::topic_matches_ingress_authority(ingress_authority, topic) {
             debug!(
-                "{}:{} skipping publish listener {} for in_authority='{}', out_authority='{}', topic_authority='{}', topic={topic:?}",
-                tag,
-                action,
-                action,
-                ingress_authority,
-                egress_authority,
-                topic.authority_name,
+                event = events::PUBLISH_SOURCE_FILTER_SKIPPED,
+                component = COMPONENT,
+                in_authority = ingress_authority,
+                out_authority = egress_authority,
+                source_filter = %fields::format_uri(topic),
+                reason = "topic_authority_mismatch",
+                "skipping publish source filter due to topic authority mismatch"
             );
             return None;
         }
@@ -48,12 +49,13 @@ impl PublishRouteResolver {
             Ok(source_uri) => Some(source_uri),
             Err(err) => {
                 warn!(
-                    "{}:{} unable to build publish source URI for in_authority='{}', out_authority='{}', topic={topic:?}: {}",
-                    tag,
-                    action,
-                    ingress_authority,
-                    egress_authority,
-                    err,
+                    event = events::PUBLISH_SOURCE_FILTER_BUILD_FAILED,
+                    component = COMPONENT,
+                    in_authority = ingress_authority,
+                    out_authority = egress_authority,
+                    source_filter = %fields::format_uri(topic),
+                    err = %err,
+                    "unable to build publish source filter"
                 );
                 None
             }
@@ -64,8 +66,6 @@ impl PublishRouteResolver {
     pub(crate) fn derive_source_filters(
         ingress_authority: &str,
         egress_authority: &str,
-        tag: &str,
-        action: &str,
         subscribers: &SubscriptionLookup,
     ) -> SourceFilterLookup {
         let mut source_filters = HashMap::new();
@@ -74,8 +74,6 @@ impl PublishRouteResolver {
             if let Some(source_uri) = Self::derive_source_filter_for_topic(
                 ingress_authority,
                 egress_authority,
-                tag,
-                action,
                 &subscriber.topic,
             ) {
                 source_filters
@@ -126,8 +124,6 @@ mod tests {
         let source = PublishRouteResolver::derive_source_filter_for_topic(
             "authority-c",
             "authority-b",
-            "routing-test",
-            "insert",
             &topic,
         );
 
@@ -141,8 +137,6 @@ mod tests {
         let source = PublishRouteResolver::derive_source_filter_for_topic(
             "authority-c",
             "authority-b",
-            "routing-test",
-            "insert",
             &topic,
         )
         .expect("wildcard topic should resolve");
@@ -164,13 +158,8 @@ mod tests {
             subscription_info("//authority-z/5BA0/1/8001", "//authority-b/567A/1/1234"),
         ]);
 
-        let filters = PublishRouteResolver::derive_source_filters(
-            "authority-a",
-            "authority-b",
-            "routing-test",
-            "insert",
-            &subscribers,
-        );
+        let filters =
+            PublishRouteResolver::derive_source_filters("authority-a", "authority-b", &subscribers);
 
         assert_eq!(filters.len(), 1);
         let expected =

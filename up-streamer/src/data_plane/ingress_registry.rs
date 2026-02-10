@@ -2,6 +2,7 @@
 
 use crate::control_plane::transport_identity::TransportIdentityKey;
 use crate::data_plane::ingress_listener::IngressRouteListener;
+use crate::observability::{events, fields};
 use crate::routing::authority_filter::authority_to_wildcard_filter;
 use crate::routing::publish_resolution::PublishRouteResolver;
 use crate::routing::subscription_directory::SubscriptionDirectory;
@@ -11,12 +12,10 @@ use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
 use tokio::sync::broadcast::Sender;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 use up_rust::{UMessage, UTransport, UUri};
 
-const INGRESS_ROUTE_REGISTRY_TAG: &str = "IngressRouteRegistry:";
-const INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG: &str = "register_route:";
-const INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG: &str = "unregister_route:";
+const COMPONENT: &str = "ingress_registry";
 
 /// Ingress route registration failures.
 pub enum IngressRouteRegistrationError {
@@ -84,19 +83,60 @@ struct IngressRouteBinding {
 
 type ListenerFilter = (UUri, Option<UUri>);
 
+fn format_sink_filter(sink_filter: Option<&UUri>) -> String {
+    sink_filter
+        .map(fields::format_uri)
+        .unwrap_or_else(|| fields::NONE.to_string())
+}
+
+fn unregister_event_name(sink_filter: Option<&UUri>, success: bool) -> &'static str {
+    match (sink_filter.is_some(), success) {
+        (true, true) => events::INGRESS_UNREGISTER_REQUEST_LISTENER_OK,
+        (true, false) => events::INGRESS_UNREGISTER_REQUEST_LISTENER_FAILED,
+        (false, true) => events::INGRESS_UNREGISTER_PUBLISH_LISTENER_OK,
+        (false, false) => events::INGRESS_UNREGISTER_PUBLISH_LISTENER_FAILED,
+    }
+}
+
 async fn rollback_registered_filters(
     in_transport: &Arc<dyn UTransport>,
     rollback_filters: &[ListenerFilter],
     route_listener: Arc<IngressRouteListener>,
+    route_label: &str,
+    in_authority: &str,
+    out_authority: &str,
 ) {
     for (source_filter, sink_filter) in rollback_filters {
+        let source_filter_value = fields::format_uri(source_filter);
+        let sink_filter_value = format_sink_filter(sink_filter.as_ref());
+
         if let Err(err) = in_transport
             .unregister_listener(source_filter, sink_filter.as_ref(), route_listener.clone())
             .await
         {
             warn!(
-                "{}:{} unable to unregister listener, error: {}",
-                INGRESS_ROUTE_REGISTRY_TAG, INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG, err
+                event = unregister_event_name(sink_filter.as_ref(), false),
+                component = COMPONENT,
+                route_label,
+                in_authority,
+                out_authority,
+                source_filter = %source_filter_value,
+                sink_filter = %sink_filter_value,
+                err = %err,
+                reason = "rollback_after_register_failure",
+                "unable to unregister listener during rollback"
+            );
+        } else {
+            debug!(
+                event = unregister_event_name(sink_filter.as_ref(), true),
+                component = COMPONENT,
+                route_label,
+                in_authority,
+                out_authority,
+                source_filter = %source_filter_value,
+                sink_filter = %sink_filter_value,
+                reason = "rollback_after_register_failure",
+                "rollback listener unregister succeeded"
             );
         }
     }
@@ -120,7 +160,7 @@ impl IngressRouteRegistry {
         in_transport: Arc<dyn UTransport>,
         in_authority: &str,
         out_authority: &str,
-        route_id: &str,
+        route_label: &str,
         out_sender: Sender<Arc<UMessage>>,
         subscription_directory: &SubscriptionDirectory,
     ) -> Result<Option<Arc<IngressRouteListener>>, IngressRouteRegistrationError> {
@@ -135,7 +175,7 @@ impl IngressRouteRegistry {
             }
         }
 
-        let route_listener = Arc::new(IngressRouteListener::new(route_id, out_sender.clone()));
+        let route_listener = Arc::new(IngressRouteListener::new(route_label, out_sender.clone()));
 
         let mut rollback_filters: Vec<ListenerFilter> = Vec::new();
 
@@ -155,54 +195,76 @@ impl IngressRouteRegistry {
             )
             .await
         {
+            let request_source = fields::format_uri(&request_source_filter);
+            let request_sink = fields::format_uri(&request_sink_filter);
             warn!(
-                "{}:{} unable to register request listener, error: {}",
-                INGRESS_ROUTE_REGISTRY_TAG, INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG, err
+                event = events::INGRESS_REGISTER_REQUEST_LISTENER_FAILED,
+                component = COMPONENT,
+                route_label,
+                in_authority,
+                out_authority,
+                source_filter = %request_source,
+                sink_filter = %request_sink,
+                err = %err,
+                "unable to register request listener"
             );
-            rollback_registered_filters(&in_transport, &rollback_filters, route_listener.clone())
-                .await;
+            rollback_registered_filters(
+                &in_transport,
+                &rollback_filters,
+                route_listener.clone(),
+                route_label,
+                in_authority,
+                out_authority,
+            )
+            .await;
             return Err(IngressRouteRegistrationError::FailedToRegisterRequestRouteListener);
         }
 
+        let request_source = fields::format_uri(&request_source_filter);
+        let request_sink = fields::format_uri(&request_sink_filter);
         debug!(
-            "{}:{} able to register request listener",
-            INGRESS_ROUTE_REGISTRY_TAG, INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG
+            event = events::INGRESS_REGISTER_REQUEST_LISTENER_OK,
+            component = COMPONENT,
+            route_label,
+            in_authority,
+            out_authority,
+            source_filter = %request_source,
+            sink_filter = %request_sink,
+            "registered request listener"
         );
 
         let subscribers = subscription_directory
-            .lookup_route_subscribers(
-                out_authority,
-                INGRESS_ROUTE_REGISTRY_TAG,
-                INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
-            )
+            .lookup_route_subscribers(out_authority)
             .await;
 
-        let publish_source_filters = PublishRouteResolver::derive_source_filters(
-            in_authority,
-            out_authority,
-            INGRESS_ROUTE_REGISTRY_TAG,
-            INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
-            &subscribers,
-        );
+        let publish_source_filters =
+            PublishRouteResolver::derive_source_filters(in_authority, out_authority, &subscribers);
 
         for source_uri in publish_source_filters.into_values() {
-            info!(
-                "in authority: {}, out authority: {}, source URI filter: {:?}",
-                in_authority, out_authority, source_uri
-            );
+            let source_filter = fields::format_uri(&source_uri);
 
             if let Err(err) = in_transport
                 .register_listener(&source_uri, None, route_listener.clone())
                 .await
             {
                 warn!(
-                    "{}:{} unable to register listener, error: {}",
-                    INGRESS_ROUTE_REGISTRY_TAG, INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG, err
+                    event = events::INGRESS_REGISTER_PUBLISH_LISTENER_FAILED,
+                    component = COMPONENT,
+                    route_label,
+                    in_authority,
+                    out_authority,
+                    source_filter = %source_filter,
+                    sink_filter = fields::NONE,
+                    err = %err,
+                    "unable to register publish listener"
                 );
                 rollback_registered_filters(
                     &in_transport,
                     &rollback_filters,
                     route_listener.clone(),
+                    route_label,
+                    in_authority,
+                    out_authority,
                 )
                 .await;
                 return Err(
@@ -211,14 +273,31 @@ impl IngressRouteRegistry {
             }
 
             rollback_filters.push((source_uri, None));
-            debug!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG} able to register listener");
+            debug!(
+                event = events::INGRESS_REGISTER_PUBLISH_LISTENER_OK,
+                component = COMPONENT,
+                route_label,
+                in_authority,
+                out_authority,
+                source_filter = %source_filter,
+                sink_filter = fields::NONE,
+                "registered publish listener"
+            );
         }
 
         let mut route_bindings = self.bindings.lock().await;
         if let Some(binding) = route_bindings.get_mut(&binding_key) {
             binding.ref_count += 1;
             drop(route_bindings);
-            rollback_registered_filters(&in_transport, &rollback_filters, route_listener).await;
+            rollback_registered_filters(
+                &in_transport,
+                &rollback_filters,
+                route_listener,
+                route_label,
+                in_authority,
+                out_authority,
+            )
+            .await;
             return Ok(None);
         }
 
@@ -248,7 +327,15 @@ impl IngressRouteRegistry {
 
             let Some(binding) = route_bindings.get_mut(&binding_key) else {
                 warn!(
-                    "{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} no such in_transport_key, out_authority: {out_authority:?}"
+                    event = events::INGRESS_UNREGISTER_REQUEST_LISTENER_FAILED,
+                    component = COMPONENT,
+                    route_label = fields::NONE,
+                    in_authority,
+                    out_authority,
+                    source_filter = fields::NONE,
+                    sink_filter = fields::NONE,
+                    reason = "missing_transport_binding",
+                    "unable to unregister route for missing transport binding"
                 );
                 return;
             };
@@ -265,6 +352,8 @@ impl IngressRouteRegistry {
             let route_listener = binding.listener;
             let request_source_filter = authority_to_wildcard_filter(in_authority);
             let request_sink_filter = authority_to_wildcard_filter(out_authority);
+            let request_source = fields::format_uri(&request_source_filter);
+            let request_sink = fields::format_uri(&request_sink_filter);
 
             let request_unreg_res = in_transport
                 .unregister_listener(
@@ -275,39 +364,82 @@ impl IngressRouteRegistry {
                 .await;
 
             if let Err(err) = request_unreg_res {
-                warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} unable to unregister request listener, error: {err}");
+                warn!(
+                    event = events::INGRESS_UNREGISTER_REQUEST_LISTENER_FAILED,
+                    component = COMPONENT,
+                    route_label = fields::NONE,
+                    in_authority,
+                    out_authority,
+                    source_filter = %request_source,
+                    sink_filter = %request_sink,
+                    err = %err,
+                    "unable to unregister request listener"
+                );
             } else {
-                debug!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} able to unregister request listener");
+                debug!(
+                    event = events::INGRESS_UNREGISTER_REQUEST_LISTENER_OK,
+                    component = COMPONENT,
+                    route_label = fields::NONE,
+                    in_authority,
+                    out_authority,
+                    source_filter = %request_source,
+                    sink_filter = %request_sink,
+                    "unregistered request listener"
+                );
             }
 
             let subscribers = subscription_directory
-                .lookup_route_subscribers(
-                    out_authority,
-                    INGRESS_ROUTE_REGISTRY_TAG,
-                    INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG,
-                )
+                .lookup_route_subscribers(out_authority)
                 .await;
 
             let publish_source_filters = PublishRouteResolver::derive_source_filters(
                 in_authority,
                 out_authority,
-                INGRESS_ROUTE_REGISTRY_TAG,
-                INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG,
                 &subscribers,
             );
 
             for source_uri in publish_source_filters.into_values() {
+                let source_filter = fields::format_uri(&source_uri);
                 if let Err(err) = in_transport
                     .unregister_listener(&source_uri, None, route_listener.clone())
                     .await
                 {
-                    warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} unable to unregister publish listener, error: {err}");
+                    warn!(
+                        event = events::INGRESS_UNREGISTER_PUBLISH_LISTENER_FAILED,
+                        component = COMPONENT,
+                        route_label = fields::NONE,
+                        in_authority,
+                        out_authority,
+                        source_filter = %source_filter,
+                        sink_filter = fields::NONE,
+                        err = %err,
+                        "unable to unregister publish listener"
+                    );
                 } else {
-                    debug!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} able to unregister publish listener");
+                    debug!(
+                        event = events::INGRESS_UNREGISTER_PUBLISH_LISTENER_OK,
+                        component = COMPONENT,
+                        route_label = fields::NONE,
+                        in_authority,
+                        out_authority,
+                        source_filter = %source_filter,
+                        sink_filter = fields::NONE,
+                        "unregistered publish listener"
+                    );
                 }
             }
         } else {
-            warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} none found we can remove, out_authority: {out_authority:?}");
+            warn!(
+                event = events::INGRESS_UNREGISTER_REQUEST_LISTENER_FAILED,
+                component = COMPONENT,
+                route_label = fields::NONE,
+                in_authority,
+                out_authority,
+                source_filter = fields::NONE,
+                sink_filter = fields::NONE,
+                reason = "missing_transport_binding",
+                "route binding remove returned none"
+            );
         }
     }
 }

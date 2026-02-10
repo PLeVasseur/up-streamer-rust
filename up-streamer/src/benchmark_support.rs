@@ -12,10 +12,6 @@ use tokio::sync::broadcast;
 use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo, Subscription};
 use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
 
-const BENCH_TAG: &str = "benchmark_support";
-const LOOKUP_ACTION: &str = "routing_lookup";
-const PUBLISH_ACTION: &str = "publish_resolution";
-
 fn subscription(topic: UUri, subscriber: UUri) -> Subscription {
     Subscription {
         topic: Some(topic).into(),
@@ -114,7 +110,7 @@ impl RoutingLookupFixture {
 
     pub async fn lookup_count(&self) -> usize {
         self.directory
-            .lookup_route_subscribers(&self.out_authority, BENCH_TAG, LOOKUP_ACTION)
+            .lookup_route_subscribers(&self.out_authority)
             .await
             .len()
     }
@@ -146,9 +142,7 @@ impl PublishResolutionFixture {
         }
 
         let directory = directory_from_subscriptions(subscriptions).await?;
-        let subscribers = directory
-            .lookup_route_subscribers(&egress_authority, BENCH_TAG, PUBLISH_ACTION)
-            .await;
+        let subscribers = directory.lookup_route_subscribers(&egress_authority).await;
 
         Ok(Self {
             subscribers,
@@ -161,8 +155,6 @@ impl PublishResolutionFixture {
         PublishRouteResolver::derive_source_filters(
             &self.ingress_authority,
             &self.egress_authority,
-            BENCH_TAG,
-            PUBLISH_ACTION,
             &self.subscribers,
         )
         .len()
