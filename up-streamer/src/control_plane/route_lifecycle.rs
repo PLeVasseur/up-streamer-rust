@@ -4,9 +4,13 @@ use crate::control_plane::route_table::{RouteKey, RouteTable};
 use crate::data_plane::egress_pool::EgressRoutePool;
 use crate::data_plane::ingress_registry::{IngressRouteRegistrationError, IngressRouteRegistry};
 use crate::endpoint::Endpoint;
+use crate::observability::events;
 use crate::routing::subscription_directory::SubscriptionDirectory;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
+use tracing::{debug, error};
+
+const COMPONENT: &str = "route_lifecycle";
 
 /// Failures for route insertion orchestration.
 #[derive(Debug)]
@@ -88,7 +92,25 @@ impl<'a> RouteLifecycle<'a> {
         out: &Endpoint,
         route_label: &str,
     ) -> Result<(), AddRouteError> {
+        debug!(
+            event = events::ROUTE_ADD_START,
+            component = COMPONENT,
+            route_label,
+            in_authority = r#in.authority.as_str(),
+            out_authority = out.authority.as_str(),
+            "starting route add lifecycle"
+        );
+
         if r#in.authority == out.authority {
+            error!(
+                event = events::ROUTE_ADD_FAILED,
+                component = COMPONENT,
+                route_label,
+                in_authority = r#in.authority.as_str(),
+                out_authority = out.authority.as_str(),
+                reason = "same_authority",
+                "route add rejected because authorities are equal"
+            );
             return Err(AddRouteError::SameAuthority);
         }
 
@@ -96,6 +118,15 @@ impl<'a> RouteLifecycle<'a> {
         let inserted = self.route_table.insert_route(route_key.clone()).await;
 
         if !inserted {
+            error!(
+                event = events::ROUTE_ADD_FAILED,
+                component = COMPONENT,
+                route_label,
+                in_authority = r#in.authority.as_str(),
+                out_authority = out.authority.as_str(),
+                reason = "already_exists",
+                "route add failed because route already exists"
+            );
             return Err(AddRouteError::AlreadyExists);
         }
 
@@ -118,8 +149,28 @@ impl<'a> RouteLifecycle<'a> {
             self.route_table.remove_route(&route_key).await;
             egress_route_pool.detach_route(out.transport.clone()).await;
 
+            error!(
+                event = events::ROUTE_ADD_FAILED,
+                component = COMPONENT,
+                route_label,
+                in_authority = r#in.authority.as_str(),
+                out_authority = out.authority.as_str(),
+                reason = "ingress_registration_failed",
+                err = %err,
+                "route add failed while registering ingress listener"
+            );
+
             return Err(AddRouteError::FailedToRegisterIngressRoute(err));
         }
+
+        debug!(
+            event = events::ROUTE_ADD_OK,
+            component = COMPONENT,
+            route_label,
+            in_authority = r#in.authority.as_str(),
+            out_authority = out.authority.as_str(),
+            "route add lifecycle completed"
+        );
 
         Ok(())
     }
@@ -130,8 +181,27 @@ impl<'a> RouteLifecycle<'a> {
         egress_route_pool: &mut EgressRoutePool,
         r#in: &Endpoint,
         out: &Endpoint,
+        route_label: &str,
     ) -> Result<(), RemoveRouteError> {
+        debug!(
+            event = events::ROUTE_DELETE_START,
+            component = COMPONENT,
+            route_label,
+            in_authority = r#in.authority.as_str(),
+            out_authority = out.authority.as_str(),
+            "starting route delete lifecycle"
+        );
+
         if r#in.authority == out.authority {
+            error!(
+                event = events::ROUTE_DELETE_FAILED,
+                component = COMPONENT,
+                route_label,
+                in_authority = r#in.authority.as_str(),
+                out_authority = out.authority.as_str(),
+                reason = "same_authority",
+                "route delete rejected because authorities are equal"
+            );
             return Err(RemoveRouteError::SameAuthority);
         }
 
@@ -139,6 +209,15 @@ impl<'a> RouteLifecycle<'a> {
         let removed = self.route_table.remove_route(&route_key).await;
 
         if !removed {
+            error!(
+                event = events::ROUTE_DELETE_FAILED,
+                component = COMPONENT,
+                route_label,
+                in_authority = r#in.authority.as_str(),
+                out_authority = out.authority.as_str(),
+                reason = "not_found",
+                "route delete failed because route was not found"
+            );
             return Err(RemoveRouteError::NotFound);
         }
 
@@ -151,6 +230,15 @@ impl<'a> RouteLifecycle<'a> {
                 self.subscription_directory,
             )
             .await;
+
+        debug!(
+            event = events::ROUTE_DELETE_OK,
+            component = COMPONENT,
+            route_label,
+            in_authority = r#in.authority.as_str(),
+            out_authority = out.authority.as_str(),
+            "route delete lifecycle completed"
+        );
 
         Ok(())
     }
