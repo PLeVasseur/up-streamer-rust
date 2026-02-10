@@ -28,28 +28,9 @@ use up_rust::{UCode, UStatus, UUri};
 const STATIC_RESOURCE_ID: u32 = 0x8001;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct UUriIdentityKey {
-    authority_name: String,
-    ue_id: u32,
-    ue_version_major: u8,
-    resource_id: u32,
-}
-
-impl From<&UUri> for UUriIdentityKey {
-    fn from(uri: &UUri) -> Self {
-        Self {
-            authority_name: uri.authority_name.clone(),
-            ue_id: uri.ue_id,
-            ue_version_major: uri.uentity_major_version(),
-            resource_id: uri.resource_id,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct SubscriptionIdentityKey {
-    topic: UUriIdentityKey,
-    subscriber: UUriIdentityKey,
+    topic: UUri,
+    subscriber: UUri,
 }
 
 pub struct USubscriptionStaticFile {
@@ -100,6 +81,7 @@ impl USubscriptionStaticFile {
         })
     }
 
+    #[allow(clippy::mutable_key_type)]
     fn parse_static_subscriptions(&self) -> Result<Vec<Subscription>, UStatus> {
         let value = self.read_static_config_json()?;
         let Some(entries) = value.as_object() else {
@@ -146,8 +128,8 @@ impl USubscriptionStaticFile {
                 };
 
                 let subscription_identity = SubscriptionIdentityKey {
-                    topic: UUriIdentityKey::from(&topic),
-                    subscriber: UUriIdentityKey::from(&subscriber_uri),
+                    topic: topic.clone(),
+                    subscriber: subscriber_uri.clone(),
                 };
 
                 subscriptions_by_key
@@ -210,6 +192,7 @@ impl USubscription for USubscriptionStaticFile {
         Ok(())
     }
 
+    #[allow(clippy::mutable_key_type)]
     async fn fetch_subscribers(
         &self,
         fetch_subscribers_request: FetchSubscribersRequest,
@@ -223,16 +206,16 @@ impl USubscription for USubscriptionStaticFile {
 
         let mut canonical_topic = requested_topic.clone();
         canonical_topic.resource_id = STATIC_RESOURCE_ID;
-        let requested_topic_identity = UUriIdentityKey::from(&canonical_topic);
+        let requested_topic_identity = canonical_topic;
 
         let subscriptions = self.parse_static_subscriptions()?;
-        let mut subscribers_by_key: HashMap<UUriIdentityKey, SubscriberInfo> = HashMap::new();
+        let mut subscribers_by_key: HashMap<UUri, SubscriberInfo> = HashMap::new();
 
         for subscription in subscriptions {
             let Some(topic) = subscription.topic.as_ref() else {
                 continue;
             };
-            if UUriIdentityKey::from(topic) != requested_topic_identity {
+            if topic != &requested_topic_identity {
                 continue;
             }
 
@@ -244,7 +227,7 @@ impl USubscription for USubscriptionStaticFile {
             };
 
             subscribers_by_key
-                .entry(UUriIdentityKey::from(subscriber_uri))
+                .entry(subscriber_uri.clone())
                 .or_insert_with(|| subscriber.clone());
         }
 
@@ -256,5 +239,75 @@ impl USubscription for USubscriptionStaticFile {
 
     async fn reset(&self, _reset_request: ResetRequest) -> Result<ResetResponse, UStatus> {
         Ok(ResetResponse::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::USubscriptionStaticFile;
+    use std::collections::HashSet;
+    use std::fs;
+    use std::str::FromStr;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use up_rust::core::usubscription::{FetchSubscribersRequest, USubscription};
+    use up_rust::UUri;
+
+    static TEST_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    fn write_static_config(contents: &str) -> std::path::PathBuf {
+        let mut path = std::env::temp_dir();
+        let counter = TEST_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        path.push(format!(
+            "usubscription-static-file-test-{}-{}.json",
+            std::process::id(),
+            counter
+        ));
+
+        fs::write(&path, contents).expect("static test config written");
+        path
+    }
+
+    #[tokio::test]
+    #[allow(clippy::mutable_key_type)]
+    async fn fetch_subscribers_dedupes_duplicate_subscribers_after_topic_normalization() {
+        let static_path = write_static_config(
+            r#"{
+                "//authority-a/5BA0/1/8001": [
+                    "//authority-b/5678/1/1234",
+                    "//authority-b/5678/1/1234",
+                    "//authority-c/5678/1/1234"
+                ],
+                "//authority-a/5BA0/1/8002": [
+                    "//authority-z/5678/1/1234"
+                ]
+            }"#,
+        );
+
+        let backend = USubscriptionStaticFile::new(static_path.to_string_lossy().to_string());
+
+        let response = backend
+            .fetch_subscribers(FetchSubscribersRequest {
+                topic: Some(UUri::from_str("//authority-a/5BA0/1/FFFF").expect("valid topic"))
+                    .into(),
+                ..Default::default()
+            })
+            .await
+            .expect("fetch_subscribers should succeed");
+
+        fs::remove_file(&static_path).expect("remove static config file");
+
+        let subscriber_uris: HashSet<UUri> = response
+            .subscribers
+            .into_iter()
+            .filter_map(|subscriber| subscriber.uri.into_option())
+            .collect();
+
+        assert_eq!(subscriber_uris.len(), 3);
+        assert!(subscriber_uris
+            .contains(&UUri::from_str("//authority-b/5678/1/1234").expect("valid subscriber")));
+        assert!(subscriber_uris
+            .contains(&UUri::from_str("//authority-c/5678/1/1234").expect("valid subscriber")));
+        assert!(subscriber_uris
+            .contains(&UUri::from_str("//authority-z/5678/1/1234").expect("valid subscriber")));
     }
 }
