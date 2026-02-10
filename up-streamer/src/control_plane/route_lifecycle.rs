@@ -62,7 +62,6 @@ impl Error for RemoveRouteError {}
 /// Orchestrates multi-owner route transitions across control, routing, and data planes.
 pub(crate) struct RouteLifecycle<'a> {
     route_table: &'a RouteTable,
-    egress_route_pool: &'a mut EgressRoutePool,
     ingress_route_registry: &'a IngressRouteRegistry,
     subscription_directory: &'a SubscriptionDirectory,
 }
@@ -71,13 +70,11 @@ impl<'a> RouteLifecycle<'a> {
     /// Creates a lifecycle coordinator using existing domain owners.
     pub(crate) fn new(
         route_table: &'a RouteTable,
-        egress_route_pool: &'a mut EgressRoutePool,
         ingress_route_registry: &'a IngressRouteRegistry,
         subscription_directory: &'a SubscriptionDirectory,
     ) -> Self {
         Self {
             route_table,
-            egress_route_pool,
             ingress_route_registry,
             subscription_directory,
         }
@@ -85,7 +82,8 @@ impl<'a> RouteLifecycle<'a> {
 
     /// Registers a route and applies rollback when ingress registration fails.
     pub(crate) async fn add_route(
-        &mut self,
+        &self,
+        egress_route_pool: &mut EgressRoutePool,
         r#in: &Endpoint,
         out: &Endpoint,
         route_label: &str,
@@ -101,10 +99,7 @@ impl<'a> RouteLifecycle<'a> {
             return Err(AddRouteError::AlreadyExists);
         }
 
-        let out_sender = self
-            .egress_route_pool
-            .attach_route(out.transport.clone())
-            .await;
+        let out_sender = egress_route_pool.attach_route(out.transport.clone()).await;
 
         if let Err(err) = self
             .ingress_route_registry
@@ -119,9 +114,7 @@ impl<'a> RouteLifecycle<'a> {
             .await
         {
             self.route_table.remove_route(&route_key).await;
-            self.egress_route_pool
-                .detach_route(out.transport.clone())
-                .await;
+            egress_route_pool.detach_route(out.transport.clone()).await;
 
             return Err(AddRouteError::FailedToRegisterIngressRoute(err));
         }
@@ -131,7 +124,8 @@ impl<'a> RouteLifecycle<'a> {
 
     /// Removes a route and detaches ingress/egress resources when present.
     pub(crate) async fn remove_route(
-        &mut self,
+        &self,
+        egress_route_pool: &mut EgressRoutePool,
         r#in: &Endpoint,
         out: &Endpoint,
     ) -> Result<(), RemoveRouteError> {
@@ -146,9 +140,7 @@ impl<'a> RouteLifecycle<'a> {
             return Err(RemoveRouteError::NotFound);
         }
 
-        self.egress_route_pool
-            .detach_route(out.transport.clone())
-            .await;
+        egress_route_pool.detach_route(out.transport.clone()).await;
         self.ingress_route_registry
             .unregister_route(
                 r#in.transport.clone(),
