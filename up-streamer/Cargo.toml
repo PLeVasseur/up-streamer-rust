@@ -31,6 +31,7 @@ uuid = { workspace = true }
 serde_json = { workspace = true }
 up-rust = { workspace = true, features = ["usubscription"] }
 protobuf = { version = "3.3", features = ["with-bytes"] }
+arc-swap = "1.7"
 
 [dev-dependencies]
 async-broadcast = { version = "0.7.0" }
