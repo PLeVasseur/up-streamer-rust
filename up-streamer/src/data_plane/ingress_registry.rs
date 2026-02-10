@@ -178,13 +178,13 @@ impl IngressRouteRegistry {
             )
             .await;
 
-        let route_resolver = PublishRouteResolver::new(
+        let publish_source_filters = PublishRouteResolver::derive_source_filters(
             in_authority,
             out_authority,
             INGRESS_ROUTE_REGISTRY_TAG,
             INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG,
+            &subscribers,
         );
-        let publish_source_filters = route_resolver.derive_source_filters(&subscribers);
 
         for source_uri in publish_source_filters.into_values() {
             info!(
@@ -278,13 +278,13 @@ impl IngressRouteRegistry {
                     )
                     .await;
 
-                let route_resolver = PublishRouteResolver::new(
+                let publish_source_filters = PublishRouteResolver::derive_source_filters(
                     in_authority,
                     out_authority,
                     INGRESS_ROUTE_REGISTRY_TAG,
                     INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG,
+                    &subscribers,
                 );
-                let publish_source_filters = route_resolver.derive_source_filters(&subscribers);
 
                 for source_uri in publish_source_filters.into_values() {
                     if let Err(err) = in_transport

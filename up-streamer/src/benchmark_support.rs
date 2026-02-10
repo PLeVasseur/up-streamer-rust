@@ -158,13 +158,14 @@ impl PublishResolutionFixture {
     }
 
     pub fn derive_source_filter_count(&self) -> usize {
-        let resolver = PublishRouteResolver::new(
+        PublishRouteResolver::derive_source_filters(
             &self.ingress_authority,
             &self.egress_authority,
             BENCH_TAG,
             PUBLISH_ACTION,
-        );
-        resolver.derive_source_filters(&self.subscribers).len()
+            &self.subscribers,
+        )
+        .len()
     }
 }
 

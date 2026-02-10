@@ -158,14 +158,16 @@ impl UStreamer {
             self.name, USTREAMER_TAG, USTREAMER_FN_ADD_ROUTE_TAG, route_label
         );
 
-        let mut lifecycle = RouteLifecycle::new(
+        let lifecycle = RouteLifecycle::new(
             &self.route_table,
-            &mut self.egress_route_pool,
             &self.ingress_route_registry,
             &self.subscription_directory,
         );
 
-        match lifecycle.add_route(in_ep, out_ep, &route_label).await {
+        match lifecycle
+            .add_route(&mut self.egress_route_pool, in_ep, out_ep, &route_label)
+            .await
+        {
             Ok(()) => Ok(()),
             Err(AddRouteError::SameAuthority) => {
                 self.fail_due_to_same_authority(USTREAMER_FN_ADD_ROUTE_TAG, in_ep, out_ep)
@@ -198,14 +200,16 @@ impl UStreamer {
             self.name, USTREAMER_TAG, USTREAMER_FN_DELETE_ROUTE_TAG, route_label
         );
 
-        let mut lifecycle = RouteLifecycle::new(
+        let lifecycle = RouteLifecycle::new(
             &self.route_table,
-            &mut self.egress_route_pool,
             &self.ingress_route_registry,
             &self.subscription_directory,
         );
 
-        match lifecycle.remove_route(in_ep, out_ep).await {
+        match lifecycle
+            .remove_route(&mut self.egress_route_pool, in_ep, out_ep)
+            .await
+        {
             Ok(()) => Ok(()),
             Err(RemoveRouteError::SameAuthority) => {
                 self.fail_due_to_same_authority(USTREAMER_FN_DELETE_ROUTE_TAG, in_ep, out_ep)
