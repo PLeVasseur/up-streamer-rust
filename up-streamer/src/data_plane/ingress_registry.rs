@@ -126,14 +126,13 @@ impl IngressRouteRegistry {
     ) -> Result<Option<Arc<IngressRouteListener>>, IngressRouteRegistrationError> {
         let binding_key =
             IngressRouteBindingKey::new(in_transport.clone(), in_authority, out_authority);
-        let mut route_bindings = self.bindings.lock().await;
 
-        if let Some(binding) = route_bindings.get_mut(&binding_key) {
-            binding.ref_count += 1;
-            if binding.ref_count > 1 {
+        {
+            let mut route_bindings = self.bindings.lock().await;
+            if let Some(binding) = route_bindings.get_mut(&binding_key) {
+                binding.ref_count += 1;
                 return Ok(None);
             }
-            return Ok(Some(binding.listener.clone()));
         }
 
         let route_listener = Arc::new(IngressRouteListener::new(route_id, out_sender.clone()));
@@ -215,6 +214,14 @@ impl IngressRouteRegistry {
             debug!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_REGISTER_ROUTE_TAG} able to register listener");
         }
 
+        let mut route_bindings = self.bindings.lock().await;
+        if let Some(binding) = route_bindings.get_mut(&binding_key) {
+            binding.ref_count += 1;
+            drop(route_bindings);
+            rollback_registered_filters(&in_transport, &rollback_filters, route_listener).await;
+            return Ok(None);
+        }
+
         route_bindings.insert(
             binding_key,
             IngressRouteBinding {
@@ -236,69 +243,71 @@ impl IngressRouteRegistry {
         let binding_key =
             IngressRouteBindingKey::new(in_transport.clone(), in_authority, out_authority);
 
-        let mut route_bindings = self.bindings.lock().await;
+        let removed_binding = {
+            let mut route_bindings = self.bindings.lock().await;
 
-        let active_num = {
             let Some(binding) = route_bindings.get_mut(&binding_key) else {
                 warn!(
                     "{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} no such in_transport_key, out_authority: {out_authority:?}"
                 );
                 return;
             };
+
             binding.ref_count -= 1;
-            binding.ref_count
+            if binding.ref_count > 0 {
+                return;
+            }
+
+            route_bindings.remove(&binding_key)
         };
 
-        if active_num == 0 {
-            let removed = route_bindings.remove(&binding_key);
-            if let Some(binding) = removed {
-                let route_listener = binding.listener;
-                let request_source_filter = authority_to_wildcard_filter(in_authority);
-                let request_sink_filter = authority_to_wildcard_filter(out_authority);
+        if let Some(binding) = removed_binding {
+            let route_listener = binding.listener;
+            let request_source_filter = authority_to_wildcard_filter(in_authority);
+            let request_sink_filter = authority_to_wildcard_filter(out_authority);
 
-                let request_unreg_res = in_transport
-                    .unregister_listener(
-                        &request_source_filter,
-                        Some(&request_sink_filter),
-                        route_listener.clone(),
-                    )
-                    .await;
+            let request_unreg_res = in_transport
+                .unregister_listener(
+                    &request_source_filter,
+                    Some(&request_sink_filter),
+                    route_listener.clone(),
+                )
+                .await;
 
-                if let Err(err) = request_unreg_res {
-                    warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} unable to unregister request listener, error: {err}");
-                } else {
-                    debug!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} able to unregister request listener");
-                }
+            if let Err(err) = request_unreg_res {
+                warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} unable to unregister request listener, error: {err}");
+            } else {
+                debug!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} able to unregister request listener");
+            }
 
-                let subscribers = subscription_directory
-                    .lookup_route_subscribers(
-                        out_authority,
-                        INGRESS_ROUTE_REGISTRY_TAG,
-                        INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG,
-                    )
-                    .await;
-
-                let publish_source_filters = PublishRouteResolver::derive_source_filters(
-                    in_authority,
+            let subscribers = subscription_directory
+                .lookup_route_subscribers(
                     out_authority,
                     INGRESS_ROUTE_REGISTRY_TAG,
                     INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG,
-                    &subscribers,
-                );
+                )
+                .await;
 
-                for source_uri in publish_source_filters.into_values() {
-                    if let Err(err) = in_transport
-                        .unregister_listener(&source_uri, None, route_listener.clone())
-                        .await
-                    {
-                        warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} unable to unregister publish listener, error: {err}");
-                    } else {
-                        debug!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} able to unregister publish listener");
-                    }
+            let publish_source_filters = PublishRouteResolver::derive_source_filters(
+                in_authority,
+                out_authority,
+                INGRESS_ROUTE_REGISTRY_TAG,
+                INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG,
+                &subscribers,
+            );
+
+            for source_uri in publish_source_filters.into_values() {
+                if let Err(err) = in_transport
+                    .unregister_listener(&source_uri, None, route_listener.clone())
+                    .await
+                {
+                    warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} unable to unregister publish listener, error: {err}");
+                } else {
+                    debug!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} able to unregister publish listener");
                 }
-            } else {
-                warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} none found we can remove, out_authority: {out_authority:?}");
             }
+        } else {
+            warn!("{INGRESS_ROUTE_REGISTRY_TAG}:{INGRESS_ROUTE_REGISTRY_FN_UNREGISTER_ROUTE_TAG} none found we can remove, out_authority: {out_authority:?}");
         }
     }
 }
