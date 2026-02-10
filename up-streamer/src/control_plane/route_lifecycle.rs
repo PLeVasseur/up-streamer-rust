@@ -99,7 +99,9 @@ impl<'a> RouteLifecycle<'a> {
             return Err(AddRouteError::AlreadyExists);
         }
 
-        let out_sender = egress_route_pool.attach_route(out.transport.clone()).await;
+        let out_sender = egress_route_pool
+            .attach_route(out.transport.clone(), route_label)
+            .await;
 
         if let Err(err) = self
             .ingress_route_registry
