@@ -263,9 +263,7 @@ async fn run_single_scenario(
             .arg(scenario_timeout_secs.to_string());
     }
     if let Some(expected_branch) = expected_branch {
-        command
-            .arg("--expected-branch")
-            .arg(expected_branch.to_string());
+        command.arg("--expected-branch").arg(expected_branch);
     }
 
     let output = command.output().await.map_err(|error| {

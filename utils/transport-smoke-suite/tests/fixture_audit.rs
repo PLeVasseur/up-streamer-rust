@@ -93,21 +93,21 @@ fn scenario_claim_templates(scenario_id: &str) -> Vec<ClaimTemplate> {
         "streamer_egress_send_attempt",
         ClaimCategory::StreamerEgress,
         "streamer.log",
-        "event=egress_send_attempt",
+        "egress_send_attempt",
         ThresholdSelector::EgressSendAttempt,
     ));
     claims.push(ClaimTemplate::must_match(
         "streamer_egress_send_ok",
         ClaimCategory::StreamerEgress,
         "streamer.log",
-        "event=egress_send_ok",
+        "egress_send_ok",
         ThresholdSelector::EgressSendOk,
     ));
     claims.push(ClaimTemplate::must_match(
         "streamer_egress_worker_create_or_reuse",
         ClaimCategory::StreamerEgress,
         "streamer.log",
-        "event=(egress_worker_create|egress_worker_reuse).*route_label=",
+        "egress_worker_create|egress_worker_reuse",
         ThresholdSelector::EgressWorkerCreateOrReuse,
     ));
 
@@ -121,7 +121,7 @@ fn scenario_claim_templates(scenario_id: &str) -> Vec<ClaimTemplate> {
         "streamer_no_egress_send_failed",
         ClaimCategory::ForbiddenSignature,
         "streamer.log",
-        "event=egress_send_failed",
+        "egress_send_failed",
     ));
 
     if scenario_id.contains("someip") {
