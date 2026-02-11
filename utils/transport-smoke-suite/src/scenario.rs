@@ -1,6 +1,4 @@
-use crate::claims::{
-    evaluate_claims, materialize_claims, split_claim_outcomes, ClaimTemplate, Thresholds,
-};
+use crate::claims::{evaluate_claims, load_claims_for_scenario, split_claim_outcomes, Thresholds};
 use crate::env;
 use crate::logs;
 use crate::process::{run_shell_command, shell_escape, ManagedProcess, ProcessSpec};
@@ -563,6 +561,9 @@ pub struct ScenarioCliArgs {
     #[arg(long)]
     pub artifacts_root: Option<PathBuf>,
 
+    #[arg(long)]
+    pub claims_path: Option<PathBuf>,
+
     #[arg(long, default_value_t = env::DEFAULT_SEND_COUNT)]
     pub send_count: u64,
 
@@ -637,7 +638,6 @@ pub fn scenario_template(scenario_id: &str) -> Option<&'static ScenarioTemplate>
 
 pub async fn run_scenario(
     scenario_id: &str,
-    claim_templates: &[ClaimTemplate],
     cli_args: ScenarioCliArgs,
 ) -> Result<ScenarioRunResult> {
     let template = scenario_template(scenario_id)
@@ -670,6 +670,8 @@ pub async fn run_scenario(
     let mut failure_reason = None;
     let mut claim_outcomes = Vec::new();
     let mut forbidden_claim_outcomes = Vec::new();
+    let mut loaded_claims = Vec::new();
+    let mut claims_source_path: Option<PathBuf> = None;
 
     let mut streamer_process: Option<ManagedProcess> = None;
     let mut passive_process: Option<ManagedProcess> = None;
@@ -682,6 +684,15 @@ pub async fn run_scenario(
 
         env::enforce_expected_branch(&repo_root, expected_branch.as_deref()).await?;
         env::ensure_paths_exist(&repo_root, template.required_paths)?;
+
+        let loaded = load_claims_for_scenario(
+            &repo_root,
+            template.id,
+            cli_args.claims_path.as_deref(),
+            thresholds,
+        )?;
+        claims_source_path = Some(loaded.source_path.clone());
+        loaded_claims = loaded.claims;
 
         ensure_no_stale_processes(template.stale_process_signatures).await?;
 
@@ -903,8 +914,14 @@ pub async fn run_scenario(
             execute_phase("ValidateClaims", &mut phase_timings, || async {
                 ensure_remaining_timeout(scenario_deadline, "ValidateClaims")?;
 
-                let claims = materialize_claims(claim_templates, thresholds);
-                let outcomes = evaluate_claims(&artifact_dir, &claims);
+                if loaded_claims.is_empty() {
+                    return Err(anyhow!(
+                        "no claims were loaded before validation for scenario '{}'",
+                        template.id
+                    ));
+                }
+
+                let outcomes = evaluate_claims(&artifact_dir, &loaded_claims);
                 let (must_outcomes, forbidden_outcomes, first_failed_claim_reason) =
                     split_claim_outcomes(outcomes);
 
@@ -1019,7 +1036,7 @@ pub async fn run_scenario(
     let repro_command = render_repro_command(template.id, &cli_args, &artifact_dir);
 
     let scenario_report = ScenarioReport {
-        schema_version: "1.0".to_string(),
+        schema_version: report::SCENARIO_REPORT_SCHEMA_VERSION.to_string(),
         scenario_id: template.id.to_string(),
         transport_family: template.transport_family.as_str().to_string(),
         pass,
@@ -1031,6 +1048,9 @@ pub async fn run_scenario(
         failure_reason: failure_reason.clone(),
         repro_command,
         artifact_dir: artifact_dir.display().to_string(),
+        claims_source_path: claims_source_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
         start_ts: report::timestamp_to_string(scenario_start_wall),
         end_ts: report::timestamp_to_string(scenario_end_wall),
         duration_ms: scenario_duration_ms,
@@ -1046,6 +1066,13 @@ pub async fn run_scenario(
     );
     println!("SCENARIO_ARTIFACT_DIR={}", artifact_dir.display());
     println!("SCENARIO_REPORT_JSON={}", scenario_report_json.display());
+    println!(
+        "SCENARIO_CLAIMS_SOURCE_PATH={}",
+        scenario_report
+            .claims_source_path
+            .as_deref()
+            .unwrap_or("<not-resolved>")
+    );
 
     Ok(ScenarioRunResult {
         pass: scenario_report.pass,
@@ -1086,6 +1113,12 @@ fn render_repro_command(
     }
     if cli_args.no_bootstrap {
         args.push("--no-bootstrap".to_string());
+    }
+    if let Some(claims_path) = &cli_args.claims_path {
+        args.push(format!(
+            "--claims-path {}",
+            shell_escape(claims_path.display().to_string().as_str())
+        ));
     }
     if let Some(expected_branch) = &cli_args.expected_branch {
         args.push(format!(

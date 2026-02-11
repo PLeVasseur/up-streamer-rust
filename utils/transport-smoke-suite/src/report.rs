@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+pub const SCENARIO_REPORT_SCHEMA_VERSION: &str = "1.1";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PhaseTiming {
     pub phase: String,
@@ -38,6 +40,8 @@ pub struct ScenarioReport {
     pub failure_reason: Option<String>,
     pub repro_command: String,
     pub artifact_dir: String,
+    #[serde(default)]
+    pub claims_source_path: Option<String>,
     pub start_ts: String,
     pub end_ts: String,
     pub duration_ms: u128,
@@ -147,6 +151,13 @@ fn render_scenario_summary_text(report: &ScenarioReport) -> String {
         format!("status: {}", if report.pass { "PASS" } else { "FAIL" }),
         format!("exit_code: {}", report.exit_code),
         format!("artifact_dir: {}", report.artifact_dir),
+        format!(
+            "claims_source_path: {}",
+            report
+                .claims_source_path
+                .as_deref()
+                .unwrap_or("<not available>")
+        ),
         format!("duration_ms: {}", report.duration_ms),
         format!("repro_command: {}", report.repro_command),
     ];

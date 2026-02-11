@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 use tokio::process::Command;
+use transport_smoke_suite::claims::{claims_override_kind, ClaimsPathKind};
 use transport_smoke_suite::env;
 use transport_smoke_suite::process::{run_shell_command, shell_escape};
 use transport_smoke_suite::report::{
@@ -26,6 +27,9 @@ struct Cli {
 
     #[arg(long)]
     artifacts_root: Option<PathBuf>,
+
+    #[arg(long)]
+    claims_path: Option<PathBuf>,
 
     #[arg(long, default_value_t = env::DEFAULT_SEND_COUNT)]
     send_count: u64,
@@ -80,6 +84,17 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
     env::enforce_expected_branch(&repo_root, expected_branch.as_deref()).await?;
 
     let selected_scenarios = resolve_selected_scenarios(&cli.only)?;
+    if let Some(claims_path) = cli.claims_path.as_deref() {
+        if claims_override_kind(&repo_root, claims_path)? == ClaimsPathKind::File
+            && selected_scenarios.len() > 1
+        {
+            anyhow::bail!(
+                "--claims-path points to a file but {} scenarios are selected. Use a directory override for multi-scenario matrix runs or select a single scenario with --only",
+                selected_scenarios.len()
+            );
+        }
+    }
+
     let artifacts_root = env::resolve_artifacts_root(&repo_root, cli.artifacts_root.clone());
     let matrix_artifact_dir = artifacts_root
         .join("matrix")
@@ -238,6 +253,9 @@ async fn run_single_scenario(
     command
         .arg("--send-interval-ms")
         .arg(cli.send_interval_ms.to_string());
+    if let Some(claims_path) = &cli.claims_path {
+        command.arg("--claims-path").arg(claims_path);
+    }
     command
         .arg("--endpoint-claim-min-count")
         .arg(cli.endpoint_claim_min_count.to_string());
