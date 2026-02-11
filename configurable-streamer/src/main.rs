@@ -13,11 +13,10 @@
 
 mod config;
 
-use crate::config::{Config, SubscriptionProviderMode};
+use crate::config::{Config, EndpointConfig, SubscriptionProviderMode};
 use clap::Parser;
 use std::io::Read;
 use std::sync::Arc;
-use std::thread;
 use std::{collections::HashMap, fs::File};
 use tracing::info;
 use up_rust::core::usubscription::USubscription;
@@ -32,6 +31,76 @@ use usubscription_static_file::USubscriptionStaticFile;
 struct StreamerArgs {
     #[arg(short, long, value_name = "FILE")]
     config: String,
+}
+
+fn register_transport_endpoints(
+    endpoints: &mut HashMap<String, Endpoint>,
+    endpoint_configs: &[EndpointConfig],
+    transport: Arc<dyn UTransport>,
+) -> Result<(), UStatus> {
+    for endpoint_config in endpoint_configs {
+        let endpoint = Endpoint::new(
+            &endpoint_config.endpoint,
+            &endpoint_config.authority,
+            transport.clone(),
+        );
+
+        if endpoints
+            .insert(endpoint_config.endpoint.clone(), endpoint)
+            .is_some()
+        {
+            return Err(UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                format!(
+                    "Duplicate endpoint name found: {}",
+                    endpoint_config.endpoint
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+async fn wire_forwarding_rules(
+    streamer: &mut UStreamer,
+    endpoints: &HashMap<String, Endpoint>,
+    endpoint_configs: &[EndpointConfig],
+) -> Result<(), UStatus> {
+    for endpoint_config in endpoint_configs {
+        for forwarding_target in &endpoint_config.forwarding {
+            let left_endpoint = endpoints.get(&endpoint_config.endpoint).ok_or_else(|| {
+                UStatus::fail_with_code(
+                    UCode::INVALID_ARGUMENT,
+                    format!(
+                        "Unknown endpoint in forwarding rules: {}",
+                        endpoint_config.endpoint
+                    ),
+                )
+            })?;
+            let right_endpoint = endpoints.get(forwarding_target).ok_or_else(|| {
+                UStatus::fail_with_code(
+                    UCode::INVALID_ARGUMENT,
+                    format!("Unknown forwarding target endpoint: {forwarding_target}"),
+                )
+            })?;
+
+            streamer
+                .add_route_ref(left_endpoint, right_endpoint)
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn wait_for_shutdown_signal() -> Result<(), UStatus> {
+    tokio::signal::ctrl_c().await.map_err(|error| {
+        UStatus::fail_with_code(
+            UCode::INTERNAL,
+            format!("Unable to wait for shutdown signal: {error:?}"),
+        )
+    })
 }
 
 #[tokio::main]
@@ -137,97 +206,28 @@ async fn main() -> Result<(), UStatus> {
     mqtt5_transport.connect().await?;
     let mqtt5_transport: Arc<dyn UTransport> = Arc::new(mqtt5_transport);
 
-    // build all zenoh endpoints
-    for zenoh_endpoint_config in config.transports.zenoh.endpoints.clone() {
-        let endpoint = Endpoint::new(
-            &zenoh_endpoint_config.endpoint,
-            &zenoh_endpoint_config.authority,
-            zenoh_transport.clone(),
-        );
-        if endpoints
-            .insert(zenoh_endpoint_config.endpoint.clone(), endpoint)
-            .is_some()
-        {
-            return Err(UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
-                format!(
-                    "Duplicate endpoint name found: {}",
-                    zenoh_endpoint_config.endpoint
-                ),
-            ));
-        }
-    }
+    register_transport_endpoints(
+        &mut endpoints,
+        &config.transports.zenoh.endpoints,
+        zenoh_transport,
+    )?;
+    register_transport_endpoints(
+        &mut endpoints,
+        &config.transports.mqtt.endpoints,
+        mqtt5_transport,
+    )?;
 
-    // build all mqtt endpoints
-    for mqtt_endpoint_config in config.transports.mqtt.endpoints.clone() {
-        let endpoint = Endpoint::new(
-            &mqtt_endpoint_config.endpoint,
-            &mqtt_endpoint_config.authority,
-            mqtt5_transport.clone(),
-        );
-        if endpoints
-            .insert(mqtt_endpoint_config.endpoint.clone(), endpoint)
-            .is_some()
-        {
-            return Err(UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
-                format!(
-                    "Duplicate endpoint name found: {}",
-                    mqtt_endpoint_config.endpoint
-                ),
-            ));
-        }
-    }
+    wire_forwarding_rules(
+        &mut streamer,
+        &endpoints,
+        &config.transports.zenoh.endpoints,
+    )
+    .await?;
+    wire_forwarding_rules(&mut streamer, &endpoints, &config.transports.mqtt.endpoints).await?;
 
-    // set up the endpoint forwarding for zenoh
-    for zenoh_endpoint in config.transports.zenoh.endpoints {
-        for forwarding in zenoh_endpoint.forwarding {
-            let left_endpoint = endpoints.get(&zenoh_endpoint.endpoint).ok_or_else(|| {
-                UStatus::fail_with_code(
-                    UCode::INVALID_ARGUMENT,
-                    format!(
-                        "Unknown endpoint in forwarding rules: {}",
-                        zenoh_endpoint.endpoint
-                    ),
-                )
-            })?;
-            let right_endpoint = endpoints.get(&forwarding).ok_or_else(|| {
-                UStatus::fail_with_code(
-                    UCode::INVALID_ARGUMENT,
-                    format!("Unknown forwarding target endpoint: {forwarding}"),
-                )
-            })?;
-            streamer
-                .add_route_ref(left_endpoint, right_endpoint)
-                .await?;
-        }
-    }
-
-    // set up the endpoint forwarding for mqtt
-    for mqtt5_endpoint in config.transports.mqtt.endpoints {
-        for forwarding in mqtt5_endpoint.forwarding {
-            let left_endpoint = endpoints.get(&mqtt5_endpoint.endpoint).ok_or_else(|| {
-                UStatus::fail_with_code(
-                    UCode::INVALID_ARGUMENT,
-                    format!(
-                        "Unknown endpoint in forwarding rules: {}",
-                        mqtt5_endpoint.endpoint
-                    ),
-                )
-            })?;
-            let right_endpoint = endpoints.get(&forwarding).ok_or_else(|| {
-                UStatus::fail_with_code(
-                    UCode::INVALID_ARGUMENT,
-                    format!("Unknown forwarding target endpoint: {forwarding}"),
-                )
-            })?;
-            streamer
-                .add_route_ref(left_endpoint, right_endpoint)
-                .await?;
-        }
-    }
-
-    thread::park();
+    info!("Streamer initialized; waiting for shutdown signal");
+    wait_for_shutdown_signal().await?;
+    info!("Shutdown signal received; exiting");
 
     Ok(())
 }
