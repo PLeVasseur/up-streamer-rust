@@ -114,7 +114,7 @@ impl EgressRoutePool {
                     component = COMPONENT,
                     worker_id = binding.worker.worker_id(),
                     ref_count = 0,
-                    worker_thread = ?binding.worker.thread_id(),
+                    worker_thread = binding.worker.runtime_thread(),
                     "removed pooled egress worker"
                 );
             } else {
