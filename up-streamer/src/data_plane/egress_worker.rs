@@ -1,7 +1,7 @@
 //! Egress worker abstraction that forwards queued messages on output transports.
 
 use crate::runtime::worker_runtime::{
-    spawn_route_dispatch_loop, DEFAULT_EGRESS_ROUTE_RUNTIME_THREAD_NAME,
+    spawn_route_dispatch_loop, RouteDispatchLoopHandle, DEFAULT_EGRESS_ROUTE_RUNTIME_THREAD_NAME,
 };
 use crate::{
     observability::events,
@@ -10,17 +10,35 @@ use crate::{
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::broadcast::{error::RecvError, Receiver};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, warn, Level};
 use up_rust::{UMessage, UTransport, UUID};
 
 const EGRESS_ROUTE_RUNTIME_THREAD_NAME_PREFIX: &str = "up-egress-";
 const EGRESS_ROUTE_RUNTIME_THREAD_NAME_MAX_LEN: usize = 15;
 const COMPONENT: &str = "egress_worker";
 
+struct FormattedMessageFields {
+    msg_id: String,
+    msg_type: String,
+    src: String,
+    sink: String,
+}
+
+impl FormattedMessageFields {
+    fn from_message(message: &UMessage) -> Self {
+        Self {
+            msg_id: fields::format_message_id(message),
+            msg_type: fields::format_message_type(message),
+            src: fields::format_source_uri(message),
+            sink: fields::format_sink_uri(message),
+        }
+    }
+}
+
 /// Worker state that owns the spawned route-dispatch thread handle.
 pub(crate) struct EgressRouteWorker {
     worker_id: String,
-    join_handle: std::thread::JoinHandle<()>,
+    dispatch_handle: RouteDispatchLoopHandle,
 }
 
 impl EgressRouteWorker {
@@ -30,15 +48,14 @@ impl EgressRouteWorker {
         message_receiver: Receiver<Arc<UMessage>>,
     ) -> Self {
         let out_transport_clone = out_transport.clone();
-        let message_receiver_clone = message_receiver.resubscribe();
         let worker_id = UUID::build().to_hyphenated_string();
         let runtime_thread_name = Self::build_runtime_thread_name(&worker_id);
         let worker_id_for_loop = worker_id.clone();
 
-        let join_handle = spawn_route_dispatch_loop(
+        let dispatch_handle = spawn_route_dispatch_loop(
             runtime_thread_name,
             out_transport_clone,
-            message_receiver_clone,
+            message_receiver,
             move |out_transport, message_receiver| async move {
                 Self::route_dispatch_loop(worker_id_for_loop, out_transport, message_receiver)
                     .await;
@@ -47,7 +64,7 @@ impl EgressRouteWorker {
 
         Self {
             worker_id,
-            join_handle,
+            dispatch_handle,
         }
     }
 
@@ -56,10 +73,9 @@ impl EgressRouteWorker {
         &self.worker_id
     }
 
-    /// Returns the backing runtime thread ID for diagnostics.
-    pub(crate) fn thread_id(&self) -> std::thread::ThreadId {
-        let _ = self.worker_id();
-        self.join_handle.thread().id()
+    /// Returns the worker runtime thread label for diagnostics.
+    pub(crate) fn runtime_thread(&self) -> &str {
+        self.dispatch_handle.worker_thread()
     }
 
     fn build_runtime_thread_name(route_id: &str) -> String {
@@ -84,47 +100,59 @@ impl EgressRouteWorker {
         out_transport: Arc<dyn UTransport>,
         mut message_receiver: Receiver<Arc<UMessage>>,
     ) {
-        let worker_context = WorkerContext::new(worker_id, std::thread::current().name());
+        let worker_context = WorkerContext::with_current_thread(worker_id);
 
         loop {
             match message_receiver.recv().await {
                 Ok(msg) => {
                     let message = msg.deref();
-                    debug!(
-                        event = events::EGRESS_SEND_ATTEMPT,
-                        component = COMPONENT,
-                        worker_id = worker_context.worker_id.as_str(),
-                        worker_thread = worker_context.worker_thread.as_str(),
-                        msg_id = %fields::format_message_id(message),
-                        msg_type = %fields::format_message_type(message),
-                        src = %fields::format_source_uri(message),
-                        sink = %fields::format_sink_uri(message),
-                        "attempting egress send"
-                    );
-                    let send_res = out_transport.send(message.clone()).await;
-                    if let Err(err) = send_res {
-                        warn!(
-                            event = events::EGRESS_SEND_FAILED,
+                    let mut message_fields = tracing::enabled!(Level::DEBUG)
+                        .then(|| FormattedMessageFields::from_message(message));
+
+                    if let Some(fields) = message_fields.as_ref() {
+                        debug!(
+                            event = events::EGRESS_SEND_ATTEMPT,
                             component = COMPONENT,
                             worker_id = worker_context.worker_id.as_str(),
                             worker_thread = worker_context.worker_thread.as_str(),
-                            msg_id = %fields::format_message_id(message),
-                            msg_type = %fields::format_message_type(message),
-                            src = %fields::format_source_uri(message),
-                            sink = %fields::format_sink_uri(message),
-                            err = ?err,
-                            "egress send failed"
+                            msg_id = fields.msg_id.as_str(),
+                            msg_type = fields.msg_type.as_str(),
+                            src = fields.src.as_str(),
+                            sink = fields.sink.as_str(),
+                            "attempting egress send"
                         );
-                    } else {
+                    }
+
+                    let send_res = out_transport.send(message.clone()).await;
+                    if let Err(err) = send_res {
+                        if tracing::enabled!(Level::WARN) {
+                            let fields = message_fields.get_or_insert_with(|| {
+                                FormattedMessageFields::from_message(message)
+                            });
+
+                            warn!(
+                                event = events::EGRESS_SEND_FAILED,
+                                component = COMPONENT,
+                                worker_id = worker_context.worker_id.as_str(),
+                                worker_thread = worker_context.worker_thread.as_str(),
+                                msg_id = fields.msg_id.as_str(),
+                                msg_type = fields.msg_type.as_str(),
+                                src = fields.src.as_str(),
+                                sink = fields.sink.as_str(),
+                                err = ?err,
+                                "egress send failed"
+                            );
+                        }
+                    } else if let Some(fields) = message_fields.as_ref() {
                         debug!(
                             event = events::EGRESS_SEND_OK,
                             component = COMPONENT,
                             worker_id = worker_context.worker_id.as_str(),
                             worker_thread = worker_context.worker_thread.as_str(),
-                            msg_id = %fields::format_message_id(message),
-                            msg_type = %fields::format_message_type(message),
-                            src = %fields::format_source_uri(message),
-                            sink = %fields::format_sink_uri(message),
+                            msg_id = fields.msg_id.as_str(),
+                            msg_type = fields.msg_type.as_str(),
+                            src = fields.src.as_str(),
+                            sink = fields.sink.as_str(),
                             "egress send succeeded"
                         );
                     }

@@ -3,14 +3,36 @@
 use crate::observability::{events, fields};
 use std::sync::Arc;
 use std::thread;
-use tokio::runtime::Builder;
+use tokio::runtime::{Builder, Handle};
 use tokio::sync::broadcast::Receiver;
+use tokio::task::JoinHandle as TokioJoinHandle;
 use tracing::{debug, error, warn};
 use up_rust::{UMessage, UTransport};
 
 const LINUX_THREAD_NAME_MAX_LEN: usize = 15;
 pub(crate) const DEFAULT_EGRESS_ROUTE_RUNTIME_THREAD_NAME: &str = "up-egress-route";
 const COMPONENT: &str = "worker_runtime";
+
+/// Runtime handle backing one egress dispatch loop.
+pub(crate) enum RouteDispatchLoopHandle {
+    SharedTask {
+        worker_thread: String,
+        _join_handle: TokioJoinHandle<()>,
+    },
+    DedicatedThread {
+        worker_thread: String,
+        _join_handle: thread::JoinHandle<()>,
+    },
+}
+
+impl RouteDispatchLoopHandle {
+    pub(crate) fn worker_thread(&self) -> &str {
+        match self {
+            Self::SharedTask { worker_thread, .. } => worker_thread,
+            Self::DedicatedThread { worker_thread, .. } => worker_thread,
+        }
+    }
+}
 
 fn sanitize_runtime_thread_name(thread_name: String) -> String {
     if thread_name.is_empty() || thread_name.len() > LINUX_THREAD_NAME_MAX_LEN {
@@ -32,7 +54,7 @@ pub(crate) fn spawn_route_dispatch_loop<F, Fut>(
     out_transport: Arc<dyn UTransport>,
     message_receiver: Receiver<Arc<UMessage>>,
     run_loop: F,
-) -> thread::JoinHandle<()>
+) -> RouteDispatchLoopHandle
 where
     F: FnOnce(Arc<dyn UTransport>, Receiver<Arc<UMessage>>) -> Fut + Send + 'static,
     Fut: std::future::Future<Output = ()> + Send + 'static,
@@ -45,6 +67,21 @@ where
         "spawning egress route runtime thread"
     );
 
+    if let Ok(runtime_handle) = Handle::try_current() {
+        let join_handle = runtime_handle.spawn(run_loop(out_transport, message_receiver));
+        debug!(
+            event = events::RUNTIME_SPAWN_OK,
+            component = COMPONENT,
+            worker_thread = runtime_thread_name.as_str(),
+            runtime_strategy = "shared_runtime_task",
+            "spawned egress route runtime task"
+        );
+        return RouteDispatchLoopHandle::SharedTask {
+            worker_thread: runtime_thread_name,
+            _join_handle: join_handle,
+        };
+    }
+
     let builder_thread_name = runtime_thread_name.clone();
     let spawn_result = thread::Builder::new()
         .name(builder_thread_name)
@@ -53,15 +90,15 @@ where
                 Ok(runtime) => runtime,
                 Err(err) => {
                     error!(
-                        event = events::RUNTIME_SPAWN_FAILED,
-                        component = COMPONENT,
-                        worker_thread = std::thread::current()
-                            .name()
-                            .unwrap_or(DEFAULT_EGRESS_ROUTE_RUNTIME_THREAD_NAME),
-                        reason = "tokio_runtime_build_failed",
-                        err = %err,
-                        "failed to build egress route runtime"
-                    );
+                            event = events::RUNTIME_SPAWN_FAILED,
+                            component = COMPONENT,
+                            worker_thread = std::thread::current()
+                                .name()
+                                .unwrap_or(DEFAULT_EGRESS_ROUTE_RUNTIME_THREAD_NAME),
+                            reason = "tokio_runtime_build_failed",
+                            err = %err,
+                    "failed to build egress route runtime"
+                        );
                     panic!("Failed to create egress route Tokio runtime: {err}");
                 }
             };
@@ -75,9 +112,13 @@ where
                 event = events::RUNTIME_SPAWN_OK,
                 component = COMPONENT,
                 worker_thread = runtime_thread_name.as_str(),
+                runtime_strategy = "dedicated_thread",
                 "spawned egress route runtime thread"
             );
-            join_handle
+            RouteDispatchLoopHandle::DedicatedThread {
+                worker_thread: runtime_thread_name,
+                _join_handle: join_handle,
+            }
         }
         Err(err) => {
             error!(
