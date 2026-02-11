@@ -65,3 +65,74 @@ Please reference the documentation for [vsomeip-sys](https://github.com/eclipse-
 * the build requirements for vsomeip in the linked documentation in the COVESA repo
 * the environment variables which must be set
 
+## Deterministic transport smoke capstone
+
+The workspace includes a deterministic smoke runner crate at `utils/transport-smoke-suite`.
+
+Run all 8 canonical scenarios with one command:
+
+```bash
+cargo run -p transport-smoke-suite --bin transport-smoke-matrix -- --all
+```
+
+Run a single deterministic scenario:
+
+```bash
+cargo run -p transport-smoke-suite --bin smoke-zenoh-mqtt-rr-mqtt-client-zenoh-service -- --send-count 12 --send-interval-ms 1000
+```
+
+Scenario binaries:
+
+- `smoke-zenoh-mqtt-rr-zenoh-client-mqtt-service`
+- `smoke-zenoh-mqtt-rr-mqtt-client-zenoh-service`
+- `smoke-zenoh-mqtt-ps-zenoh-publisher-mqtt-subscriber`
+- `smoke-zenoh-mqtt-ps-mqtt-publisher-zenoh-subscriber`
+- `smoke-zenoh-someip-rr-zenoh-client-someip-service`
+- `smoke-zenoh-someip-rr-someip-client-zenoh-service`
+- `smoke-zenoh-someip-ps-zenoh-publisher-someip-subscriber`
+- `smoke-zenoh-someip-ps-someip-publisher-zenoh-subscriber`
+
+Default artifacts are written under:
+
+- Scenario run: `target/transport-smoke/<scenario-id>/<timestamp>/`
+- Matrix run: `target/transport-smoke/matrix/<timestamp>/`
+
+Each scenario artifact directory includes:
+
+- `streamer.log`
+- endpoint logs (`client.log`/`service.log`/`publisher.log`/`subscriber.log`)
+- `scenario-report.json`
+- `scenario-report.txt`
+
+Matrix output includes:
+
+- `matrix-summary.json`
+- `matrix-summary.txt`
+
+Failure triage order:
+
+1. preflight (missing tools/config/build prerequisites)
+2. readiness (missing `READY streamer_initialized` or `READY listener_registered`)
+3. claims (required evidence below thresholds or forbidden signatures)
+4. teardown (processes failing to stop cleanly)
+
+Rerun one scenario deterministically:
+
+```bash
+cargo run -p transport-smoke-suite --bin <scenario-id> -- --send-count 12 --send-interval-ms 1000
+```
+
+Rerun only failed scenarios from a prior matrix summary:
+
+```bash
+for s in $(jq -r '.failed_scenarios[].scenario_id' target/transport-smoke/matrix/<timestamp>/matrix-summary.json); do
+  cargo run -p transport-smoke-suite --bin "$s" -- --send-count 12 --send-interval-ms 1000
+done
+```
+
+When filing regressions, include:
+
+- the failing scenario ID(s)
+- the exact repro command
+- `scenario-report.json` and `matrix-summary.json`
+- relevant excerpts from `streamer.log` and endpoint logs
