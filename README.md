@@ -81,6 +81,35 @@ Run a single deterministic scenario:
 cargo run -p transport-smoke-suite --bin smoke-zenoh-mqtt-rr-mqtt-client-zenoh-service -- --send-count 12 --send-interval-ms 1000
 ```
 
+Scenario claims are file-backed and loaded strictly from JSON:
+
+- Default claims directory: `utils/transport-smoke-suite/claims/`
+- Default per-scenario file: `utils/transport-smoke-suite/claims/<scenario-id>.json`
+- Missing, malformed, or scenario-id-mismatched claim files fail the run (no in-code fallback)
+
+`--claims-path <path>` behavior for scenario and matrix binaries:
+
+- Omitted: use the default per-scenario file in `utils/transport-smoke-suite/claims/`
+- Directory path: load `<path>/<scenario-id>.json`
+- File path: use that exact file for the selected scenario
+
+Matrix restriction:
+
+- `transport-smoke-matrix` rejects `--claims-path <file>` when multiple scenarios are selected
+- Use a directory override for multi-scenario matrix runs, or `--only <scenario-id>` for a single scenario
+
+Single-scenario custom claims file example:
+
+```bash
+cargo run -p transport-smoke-suite --bin smoke-zenoh-mqtt-rr-mqtt-client-zenoh-service -- --claims-path utils/transport-smoke-suite/tests/fixtures/custom-claims/smoke-zenoh-mqtt-rr-mqtt-client-zenoh-service.json --send-count 12 --send-interval-ms 1000
+```
+
+Matrix custom claims directory example:
+
+```bash
+cargo run -p transport-smoke-suite --bin transport-smoke-matrix -- --all --claims-path utils/transport-smoke-suite/claims
+```
+
 Scenario binaries:
 
 - `smoke-zenoh-mqtt-rr-zenoh-client-mqtt-service`
