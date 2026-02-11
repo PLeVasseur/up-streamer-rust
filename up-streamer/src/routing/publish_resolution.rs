@@ -102,7 +102,7 @@ impl PublishRouteResolver {
 
         for subscriber in subscribers.values() {
             let topic_key = Self::topic_projection_key(&subscriber.topic);
-            if !seen_topics.insert(topic_key) {
+            if seen_topics.contains(&topic_key) {
                 continue;
             }
 
@@ -111,6 +111,7 @@ impl PublishRouteResolver {
                 egress_authority,
                 &subscriber.topic,
             ) {
+                seen_topics.insert(topic_key);
                 source_filters
                     .entry(UriIdentityKey::from(&source_uri))
                     .or_insert(source_uri);
