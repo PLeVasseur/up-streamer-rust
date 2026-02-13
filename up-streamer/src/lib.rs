@@ -187,5 +187,8 @@ pub mod observability;
 mod routing;
 mod runtime;
 
+#[doc(hidden)]
+pub mod benchmark_support;
+
 mod ustreamer;
 pub use ustreamer::UStreamer;
