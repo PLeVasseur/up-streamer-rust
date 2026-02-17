@@ -13,13 +13,13 @@
 
 use async_broadcast::{Receiver, Sender};
 use async_trait::async_trait;
-use log::{debug, error};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use tokio::runtime::Builder;
 use tokio::sync::Mutex;
+use tracing::{debug, error};
 use up_rust::{
     ComparableListener, UAttributes, UCode, UListener, UMessage, UMessageType, UStatus, UTransport,
     UUri,
@@ -80,13 +80,15 @@ impl UPClientFoo {
                 while let Ok(received) = protocol_receiver.recv().await {
                     match &received {
                         Ok(msg) => {
-                            let UMessage { attributes, .. } = &msg;
-                            let Some(attr) = attributes.as_ref() else {
+                            let Some(attr) = msg.attributes() else {
                                 debug!("{}: No UAttributes!", &name);
                                 continue;
                             };
 
-                            match attr.type_.enum_value().unwrap_or_default() {
+                            match attr
+                                .type_()
+                                .unwrap_or(UMessageType::UMESSAGE_TYPE_UNSPECIFIED)
+                            {
                                 UMessageType::UMESSAGE_TYPE_NOTIFICATION => {
                                     UPClientFoo::process_message(
                                         &name,
@@ -149,14 +151,14 @@ impl UPClientFoo {
         authority_listeners: AuthorityListenerMap,
         times_received: Arc<AtomicU64>,
     ) {
-        let sink_uuri = attr.sink.as_ref();
+        let sink_uuri = attr.sink();
         debug!("{}: {msg_type} sink uuri: {sink_uuri:?}", name);
         match sink_uuri {
             None => {
                 debug!("{}: No source uuri!", name);
             }
             Some(sink) => {
-                let authority_name = sink.authority_name.clone();
+                let authority_name = sink.authority_name();
                 let authority_listeners = authority_listeners.lock().await;
                 debug!("{}: {msg_type}: authority_name: {authority_name}", name);
 
@@ -182,17 +184,15 @@ impl UPClientFoo {
                 }
 
                 let listeners = listeners.lock().await;
-                let topic_listeners = listeners.get(&(
-                    attr.source.as_ref().cloned().unwrap(),
-                    attr.sink.as_ref().cloned(),
-                ));
+                let topic_listeners =
+                    listeners.get(&(attr.source().cloned().unwrap(), attr.sink().cloned()));
 
                 if let Some(topic_listeners) = topic_listeners {
                     debug!(
                         "{}: {msg_type}: source: {:?} sink: {:?} -- topic listeners found",
                         name,
-                        attr.source.as_ref(),
-                        attr.sink.as_ref()
+                        attr.source(),
+                        attr.sink()
                     );
                     times_received.fetch_add(1, Ordering::SeqCst);
                     for tl in topic_listeners.iter() {
@@ -202,12 +202,16 @@ impl UPClientFoo {
                     debug!(
                         "{}: {msg_type}: source: {:?} sink: {:?} -- listeners not found",
                         name,
-                        attr.source.as_ref(),
-                        attr.sink.as_ref()
+                        attr.source(),
+                        attr.sink()
                     );
                 }
             }
         }
+    }
+
+    fn comparable_listener(listener: Arc<dyn UListener>) -> ComparableListener {
+        ComparableListener::new(listener)
     }
 }
 
@@ -243,7 +247,7 @@ impl UTransport for UPClientFoo {
             self.name, source_filter, sink_filter
         );
         if let Some(sink_filter) = sink_filter {
-            let sink_authority = sink_filter.authority_name.clone();
+            let sink_authority = sink_filter.authority_name();
             let mut authority_listeners = self.authority_listeners.lock().await;
             debug!(
                 "{}: registering authority listener on authority: {}",
@@ -253,7 +257,7 @@ impl UTransport for UPClientFoo {
             let authority_listeners = authority_listeners
                 .entry(sink_authority.clone())
                 .or_default();
-            let comparable_listener = ComparableListener::new(listener);
+            let comparable_listener = Self::comparable_listener(listener);
             let inserted = authority_listeners.insert(comparable_listener);
 
             match inserted {
@@ -278,7 +282,7 @@ impl UTransport for UPClientFoo {
             let topic_listeners = listeners
                 .entry((source_filter.clone(), None))
                 .or_insert_with(HashSet::new);
-            let comparable_listener = ComparableListener::new(listener);
+            let comparable_listener = Self::comparable_listener(listener);
 
             if topic_listeners.insert(comparable_listener) {
                 Ok(())
@@ -307,10 +311,10 @@ impl UTransport for UPClientFoo {
 
             let mut authority_listeners = self.authority_listeners.lock().await;
 
-            let authority = if sink.authority_name == "*" {
-                source_filter.authority_name.clone()
+            let authority = if sink.has_wildcard_authority() {
+                source_filter.authority_name()
             } else {
-                sink.authority_name.clone()
+                sink.authority_name()
             };
 
             let Some(authority_listeners) = authority_listeners.get_mut(&authority) else {
@@ -322,7 +326,7 @@ impl UTransport for UPClientFoo {
                 return Err(err);
             };
 
-            let comparable_listener = ComparableListener::new(listener);
+            let comparable_listener = Self::comparable_listener(listener);
             let removed = authority_listeners.remove(&comparable_listener);
             match removed {
                 true => Ok(()),
@@ -345,7 +349,7 @@ impl UTransport for UPClientFoo {
                     "No listeners registered for topic!",
                 ));
             };
-            let comparable_listener = ComparableListener::new(listener);
+            let comparable_listener = Self::comparable_listener(listener);
             let removed = topic_listeners.remove(&comparable_listener);
 
             match removed {

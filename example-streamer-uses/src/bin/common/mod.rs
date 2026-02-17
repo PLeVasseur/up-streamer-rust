@@ -5,9 +5,9 @@ use hello_world_protos::{
     hello_world_service::{HelloRequest, HelloResponse},
     hello_world_topics::Timer,
 };
-use log::{debug, error, info};
 use protobuf::Message;
 use std::sync::Arc;
+use tracing::{debug, error, info};
 use up_rust::{UListener, UMessage, UMessageBuilder, UTransport};
 
 #[allow(dead_code)]
@@ -46,10 +46,10 @@ impl UListener for ServiceRequestResponder {
     async fn on_receive(&self, msg: UMessage) {
         info!("ServiceResponseListener: Received a message: {msg:?}");
 
-        let Some(payload_bytes) = msg.payload else {
+        let Some(payload_bytes) = msg.payload.as_ref() else {
             panic!("No bytes available");
         };
-        let hello_request = match HelloRequest::parse_from_bytes(&payload_bytes) {
+        let hello_request = match HelloRequest::parse_from_bytes(payload_bytes) {
             Ok(hello_request) => {
                 debug!("hello_request: {hello_request:?}");
                 hello_request
@@ -65,7 +65,12 @@ impl UListener for ServiceRequestResponder {
             ..Default::default()
         };
 
-        let response_msg = UMessageBuilder::response_for_request(msg.attributes.as_ref().unwrap())
+        let Some(attributes) = msg.attributes() else {
+            error!("Unable to build response: request message has no attributes");
+            return;
+        };
+
+        let response_msg = UMessageBuilder::response_for_request(attributes)
             .build_with_protobuf_payload(&hello_response)
             .unwrap();
         info!("Sending Response message:\n{:?}", &response_msg);
