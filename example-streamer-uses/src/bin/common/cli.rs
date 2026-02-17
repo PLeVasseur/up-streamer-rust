@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn build_uuri_from_parts() {
         let uuri = build_uuri("authority-a", 0x5BA0, 0x1, 0x8001).unwrap();
-        assert_eq!(uuri.authority_name, "authority-a");
+        assert_eq!(uuri.authority_name(), "authority-a");
         assert_eq!(uuri.ue_id, 0x5BA0);
         assert_eq!(uuri.uentity_major_version(), 0x1);
         assert_eq!(uuri.resource_id(), 0x8001);

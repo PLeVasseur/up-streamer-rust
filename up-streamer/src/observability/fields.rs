@@ -13,7 +13,7 @@
 
 //! Canonical structured field keys and value-format helpers.
 
-use up_rust::{UAttributes, UMessage, UUri};
+use up_rust::{UAttributes, UMessage, UUri, UUID};
 
 pub const EVENT: &str = "event";
 pub const COMPONENT: &str = "component";
@@ -72,37 +72,24 @@ pub fn current_thread_name_or_default() -> String {
 
 pub fn format_message_id(message: &UMessage) -> String {
     message
-        .attributes
-        .as_ref()
-        .and_then(|attributes| attributes.id.as_ref())
-        .map(|id| id.to_hyphenated_string())
+        .id()
+        .map(UUID::to_hyphenated_string)
         .unwrap_or_else(|| NONE.to_string())
 }
 
 pub fn format_message_type(message: &UMessage) -> String {
     message
-        .attributes
-        .as_ref()
-        .map(|attributes| format!("{:?}", attributes.type_.enum_value_or_default()))
+        .type_()
+        .map(|message_type| format!("{message_type:?}"))
         .unwrap_or_else(|| "UMESSAGE_TYPE_UNSPECIFIED".to_string())
 }
 
 pub fn format_source_uri(message: &UMessage) -> String {
-    format_optional_uri(
-        message
-            .attributes
-            .as_ref()
-            .and_then(|attributes| attributes.source.as_ref()),
-    )
+    format_optional_uri(message.source())
 }
 
 pub fn format_sink_uri(message: &UMessage) -> String {
-    format_optional_uri(
-        message
-            .attributes
-            .as_ref()
-            .and_then(|attributes| attributes.sink.as_ref()),
-    )
+    format_optional_uri(message.sink())
 }
 
 pub fn format_uri(uri: &UUri) -> String {
@@ -115,23 +102,24 @@ fn format_optional_uri(uri: Option<&UUri>) -> String {
 
 pub fn format_attributes_message_id(attributes: Option<&UAttributes>) -> String {
     attributes
-        .and_then(|attrs| attrs.id.as_ref())
-        .map(|id| id.to_hyphenated_string())
+        .and_then(UAttributes::id)
+        .map(UUID::to_hyphenated_string)
         .unwrap_or_else(|| NONE.to_string())
 }
 
 pub fn format_attributes_message_type(attributes: Option<&UAttributes>) -> String {
     attributes
-        .map(|attrs| format!("{:?}", attrs.type_.enum_value_or_default()))
+        .and_then(UAttributes::type_)
+        .map(|message_type| format!("{message_type:?}"))
         .unwrap_or_else(|| "UMESSAGE_TYPE_UNSPECIFIED".to_string())
 }
 
 pub fn format_attributes_source_uri(attributes: Option<&UAttributes>) -> String {
-    format_optional_uri(attributes.and_then(|attrs| attrs.source.as_ref()))
+    format_optional_uri(attributes.and_then(UAttributes::source))
 }
 
 pub fn format_attributes_sink_uri(attributes: Option<&UAttributes>) -> String {
-    format_optional_uri(attributes.and_then(|attrs| attrs.sink.as_ref()))
+    format_optional_uri(attributes.and_then(UAttributes::sink))
 }
 
 #[cfg(test)]

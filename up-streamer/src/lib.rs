@@ -28,40 +28,18 @@
 //! use usubscription_static_file::USubscriptionStaticFile;
 //! use up_rust::UTransport;
 //!
-//! # pub mod mock_transport {
-//! #     use std::sync::Arc;
-//! #     use async_trait::async_trait;
-//! #     use up_rust::{UListener, UMessage, UStatus, UTransport, UUri};
+//! # use up_rust::MockTransport;
 //! #
-//! #     pub struct MockTransport;
-//! #
-//! #     #[async_trait]
-//! #     impl UTransport for MockTransport {
-//! #         async fn send(&self, _message: UMessage) -> Result<(), UStatus> { Ok(()) }
-//! #         async fn receive(
-//! #             &self,
-//! #             _source_filter: &UUri,
-//! #             _sink_filter: Option<&UUri>,
-//! #         ) -> Result<UMessage, UStatus> {
-//! #             unimplemented!("not needed for this doctest")
-//! #         }
-//! #         async fn register_listener(
-//! #             &self,
-//! #             _source_filter: &UUri,
-//! #             _sink_filter: Option<&UUri>,
-//! #             _listener: Arc<dyn UListener>,
-//! #         ) -> Result<(), UStatus> {
-//! #             Ok(())
-//! #         }
-//! #         async fn unregister_listener(
-//! #             &self,
-//! #             _source_filter: &UUri,
-//! #             _sink_filter: Option<&UUri>,
-//! #             _listener: Arc<dyn UListener>,
-//! #         ) -> Result<(), UStatus> {
-//! #             Ok(())
-//! #         }
-//! #     }
+//! # fn mock_transport() -> Arc<dyn UTransport> {
+//! #     let mut transport = MockTransport::default();
+//! #     transport.expect_do_send().returning(|_message| Ok(()));
+//! #     transport
+//! #         .expect_do_register_listener()
+//! #         .returning(|_source_filter, _sink_filter, _listener| Ok(()));
+//! #     transport
+//! #         .expect_do_unregister_listener()
+//! #         .returning(|_source_filter, _sink_filter, _listener| Ok(()));
+//! #     Arc::new(transport)
 //! # }
 //!
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
@@ -70,8 +48,8 @@
 //! ));
 //! let mut streamer = UStreamer::new("quick-start", 16, usubscription).await.unwrap();
 //!
-//! let left_transport: Arc<dyn UTransport> = Arc::new(mock_transport::MockTransport);
-//! let right_transport: Arc<dyn UTransport> = Arc::new(mock_transport::MockTransport);
+//! let left_transport: Arc<dyn UTransport> = mock_transport();
+//! let right_transport: Arc<dyn UTransport> = mock_transport();
 //! let left = Endpoint::new("left", "left-authority", left_transport);
 //! let right = Endpoint::new("right", "right-authority", right_transport);
 //!
@@ -126,40 +104,18 @@
 //! use usubscription_static_file::USubscriptionStaticFile;
 //! use up_rust::UTransport;
 //!
-//! # pub mod mock_transport {
-//! #     use std::sync::Arc;
-//! #     use async_trait::async_trait;
-//! #     use up_rust::{UListener, UMessage, UStatus, UTransport, UUri};
+//! # use up_rust::MockTransport;
 //! #
-//! #     pub struct MockTransport;
-//! #
-//! #     #[async_trait]
-//! #     impl UTransport for MockTransport {
-//! #         async fn send(&self, _message: UMessage) -> Result<(), UStatus> { Ok(()) }
-//! #         async fn receive(
-//! #             &self,
-//! #             _source_filter: &UUri,
-//! #             _sink_filter: Option<&UUri>,
-//! #         ) -> Result<UMessage, UStatus> {
-//! #             unimplemented!("not needed for this doctest")
-//! #         }
-//! #         async fn register_listener(
-//! #             &self,
-//! #             _source_filter: &UUri,
-//! #             _sink_filter: Option<&UUri>,
-//! #             _listener: Arc<dyn UListener>,
-//! #         ) -> Result<(), UStatus> {
-//! #             Ok(())
-//! #         }
-//! #         async fn unregister_listener(
-//! #             &self,
-//! #             _source_filter: &UUri,
-//! #             _sink_filter: Option<&UUri>,
-//! #             _listener: Arc<dyn UListener>,
-//! #         ) -> Result<(), UStatus> {
-//! #             Ok(())
-//! #         }
-//! #     }
+//! # fn mock_transport() -> Arc<dyn UTransport> {
+//! #     let mut transport = MockTransport::default();
+//! #     transport.expect_do_send().returning(|_message| Ok(()));
+//! #     transport
+//! #         .expect_do_register_listener()
+//! #         .returning(|_source_filter, _sink_filter, _listener| Ok(()));
+//! #     transport
+//! #         .expect_do_unregister_listener()
+//! #         .returning(|_source_filter, _sink_filter, _listener| Ok(()));
+//! #     Arc::new(transport)
 //! # }
 //!
 //! # tokio::runtime::Runtime::new().unwrap().block_on(async {
@@ -168,14 +124,14 @@
 //! ));
 //! let mut streamer = UStreamer::new("contract", 16, usubscription).await.unwrap();
 //!
-//! let left_transport: Arc<dyn UTransport> = Arc::new(mock_transport::MockTransport);
-//! let right_transport: Arc<dyn UTransport> = Arc::new(mock_transport::MockTransport);
+//! let left_transport: Arc<dyn UTransport> = mock_transport();
+//! let right_transport: Arc<dyn UTransport> = mock_transport();
 //! let left = Endpoint::new("left", "left-authority", left_transport);
 //! let right = Endpoint::new("right", "right-authority", right_transport);
 //! let left_again = Endpoint::new(
 //!     "left-again",
 //!     "left-authority",
-//!     Arc::new(mock_transport::MockTransport),
+//!     mock_transport(),
 //! );
 //!
 //! assert!(streamer

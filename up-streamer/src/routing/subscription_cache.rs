@@ -141,7 +141,7 @@ impl SubscriptionCache {
 
             let subscription_information = SubscriptionInformation { topic, subscriber };
             let subscriber_authority_name = match subscription_information.subscriber.uri.as_ref() {
-                Some(uri) => uri.authority_name.clone(),
+                Some(uri) => uri.authority_name(),
                 None => {
                     let err = UStatus::fail_with_code(
                         UCode::INVALID_ARGUMENT,

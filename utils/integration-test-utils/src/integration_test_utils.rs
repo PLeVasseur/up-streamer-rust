@@ -143,9 +143,7 @@ pub async fn check_messages_in_order(messages: Arc<Mutex<Vec<UMessage>>>) {
     let mut grouped_messages: HashMap<UUri, Vec<(usize, &UMessage)>> = HashMap::new();
     for (index, msg) in messages.iter().enumerate() {
         let source_uuri = msg
-            .attributes
-            .as_ref()
-            .and_then(|attributes| attributes.source.as_ref())
+            .source()
             .cloned()
             .unwrap_or_else(|| panic!("message index {index} missing source URI"));
 
@@ -159,30 +157,20 @@ pub async fn check_messages_in_order(messages: Arc<Mutex<Vec<UMessage>>>) {
     for (source_uuri, group) in grouped_messages {
         debug!("source_uuri: {source_uuri}");
         if let Some((first_index, first_msg)) = group.first() {
-            let mut prev_timestamp = first_msg
-                .attributes
-                .as_ref()
-                .and_then(|attributes| attributes.id.as_ref())
-                .map(|id| id.msb >> 16)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "message index {} for source {} missing message id",
-                        first_index, source_uuri
-                    )
-                });
+            let mut prev_timestamp = first_msg.id().map(|id| id.msb >> 16).unwrap_or_else(|| {
+                panic!(
+                    "message index {} for source {} missing message id",
+                    first_index, source_uuri
+                )
+            });
 
             for (msg_index, msg) in group.iter().skip(1) {
-                let curr_timestamp = msg
-                    .attributes
-                    .as_ref()
-                    .and_then(|attributes| attributes.id.as_ref())
-                    .map(|id| id.msb >> 16)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "message index {} for source {} missing message id",
-                            msg_index, source_uuri
-                        )
-                    });
+                let curr_timestamp = msg.id().map(|id| id.msb >> 16).unwrap_or_else(|| {
+                    panic!(
+                        "message index {} for source {} missing message id",
+                        msg_index, source_uuri
+                    )
+                });
 
                 debug!("prev_timestamp: {prev_timestamp}, curr_timestamp: {curr_timestamp}");
                 // relaxing to < instead of <= since we now do not have the counter for tie breaker

@@ -75,9 +75,7 @@ impl UListener for IngressRouteListener {
             );
         }
 
-        if msg.attributes.payload_format.enum_value_or_default()
-            == UPayloadFormat::UPAYLOAD_FORMAT_SHM
-        {
+        if msg.payload_format().unwrap_or_default() == UPayloadFormat::UPAYLOAD_FORMAT_SHM {
             if let Some(fields) = formatted_fields.as_ref() {
                 debug!(
                     event = events::INGRESS_DROP_UNSUPPORTED_PAYLOAD,

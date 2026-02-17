@@ -60,7 +60,7 @@ impl PublishRouteResolver {
 
     /// Returns `true` when a subscription topic can originate from the ingress authority.
     fn topic_matches_ingress_authority(ingress_authority: &str, topic: &UUri) -> bool {
-        topic.authority_name == "*" || topic.authority_name == ingress_authority
+        topic.has_wildcard_authority() || topic.authority_name().as_str() == ingress_authority
     }
 
     /// Builds a single publish source filter for a subscriber topic when applicable.
@@ -190,7 +190,7 @@ mod tests {
         )
         .expect("wildcard topic should resolve");
 
-        assert_eq!(source.authority_name, "authority-c");
+        assert_eq!(source.authority_name(), "authority-c");
         assert_eq!(source.ue_id, topic.ue_id);
         assert_eq!(
             source.uentity_major_version(),

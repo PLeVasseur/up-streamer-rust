@@ -40,7 +40,7 @@ impl From<UUri> for UriIdentityKey {
 impl From<&UUri> for UriIdentityKey {
     fn from(uri: &UUri) -> Self {
         Self {
-            authority_name: uri.authority_name.clone(),
+            authority_name: uri.authority_name(),
             ue_id: uri.ue_id,
             ue_version_major: uri.uentity_major_version(),
             resource_id: uri.resource_id(),
