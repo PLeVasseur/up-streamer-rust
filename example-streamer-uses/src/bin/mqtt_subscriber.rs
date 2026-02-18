@@ -97,11 +97,8 @@ async fn main() -> Result<(), UStatus> {
         mqtt_client_options,
         ..Default::default()
     };
-    let mqtt5_transport = Mqtt5Transport::new(
-        mqtt_transport_options,
-        local_uuri.authority_name().to_string(),
-    )
-    .await?;
+    let mqtt5_transport =
+        Mqtt5Transport::new(mqtt_transport_options, local_uuri.authority_name()).await?;
     mqtt5_transport.connect().await?;
 
     let subscriber: Arc<dyn UTransport> = Arc::new(mqtt5_transport);
