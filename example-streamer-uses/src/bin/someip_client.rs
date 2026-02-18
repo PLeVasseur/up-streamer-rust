@@ -146,7 +146,7 @@ async fn main() -> Result<(), UStatus> {
         tokio::time::sleep(Duration::from_millis(args.send_interval_ms)).await;
 
         let hello_request = HelloRequest {
-            name: format!("me_client@i={}", i).to_string(),
+            name: format!("me_client@i={}", i),
             ..Default::default()
         };
         i += 1;
