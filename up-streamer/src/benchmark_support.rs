@@ -37,28 +37,28 @@ fn subscription(topic: UUri, subscriber: UUri) -> Subscription {
     }
 }
 
-fn topic_uri(authority: &str, index: usize) -> UUri {
+fn topic_uri(authority: Option<&str>, index: usize) -> UUri {
     let ue_id = 0x5BA0 + (index as u32 % 0x1F0);
     let resource_id = 0x8001 + (index as u16 % 0x01F0);
 
-    if authority == "*" {
-        return UUri::from_str(&format!("//*/{ue_id:X}/1/{resource_id:X}"))
-            .expect("wildcard topic URI should parse");
+    match authority {
+        Some(authority) => UUri::try_from_parts(authority, ue_id, 0x1, resource_id)
+            .expect("topic URI should build"),
+        None => UUri::from_str(&format!("//*/{ue_id:X}/1/{resource_id:X}"))
+            .expect("wildcard topic URI should parse"),
     }
-
-    UUri::try_from_parts(authority, ue_id, 0x1, resource_id).expect("topic URI should build")
 }
 
-fn subscriber_uri(authority: &str, index: usize) -> UUri {
+fn subscriber_uri(authority: Option<&str>, index: usize) -> UUri {
     let ue_id = 0x7000 + (index as u32 % 0x200);
     let resource_id = 0x9000 + (index as u16 % 0x200);
 
-    if authority == "*" {
-        return UUri::from_str(&format!("//*/{ue_id:X}/1/{resource_id:X}"))
-            .expect("wildcard subscriber URI should parse");
+    match authority {
+        Some(authority) => UUri::try_from_parts(authority, ue_id, 0x1, resource_id)
+            .expect("subscriber URI should build"),
+        None => UUri::from_str(&format!("//*/{ue_id:X}/1/{resource_id:X}"))
+            .expect("wildcard subscriber URI should parse"),
     }
-
-    UUri::try_from_parts(authority, ue_id, 0x1, resource_id).expect("subscriber URI should build")
 }
 
 async fn directory_from_subscriptions(
@@ -75,8 +75,8 @@ async fn directory_from_subscriptions(
 }
 
 fn build_subscriptions(
-    topic_authority: &str,
-    subscriber_authority: &str,
+    topic_authority: Option<&str>,
+    subscriber_authority: Option<&str>,
     rows: usize,
 ) -> Vec<Subscription> {
     let total_rows = rows.max(1);
@@ -101,7 +101,8 @@ pub struct RoutingLookupFixture {
 impl RoutingLookupFixture {
     pub async fn exact_authority(rows: usize) -> Result<Self, UStatus> {
         let out_authority = "authority-b".to_string();
-        let subscriptions = build_subscriptions("authority-a", &out_authority, rows);
+        let subscriptions =
+            build_subscriptions(Some("authority-a"), Some(out_authority.as_str()), rows);
         let directory = directory_from_subscriptions(subscriptions).await?;
 
         Ok(Self {
@@ -112,7 +113,7 @@ impl RoutingLookupFixture {
 
     pub async fn wildcard_authority(rows: usize) -> Result<Self, UStatus> {
         let out_authority = "authority-b".to_string();
-        let subscriptions = build_subscriptions("authority-a", "*", rows);
+        let subscriptions = build_subscriptions(Some("authority-a"), None, rows);
         let directory = directory_from_subscriptions(subscriptions).await?;
 
         Ok(Self {
@@ -146,12 +147,12 @@ impl PublishResolutionFixture {
 
         for index in 0..total_rows {
             let topic_authority = if index % 3 == 0 {
-                "*"
+                None
             } else {
-                ingress_authority.as_str()
+                Some(ingress_authority.as_str())
             };
             let topic = topic_uri(topic_authority, index % 64);
-            let subscriber = subscriber_uri(&egress_authority, index);
+            let subscriber = subscriber_uri(Some(egress_authority.as_str()), index);
             subscriptions.push(subscription(topic, subscriber));
         }
 
@@ -232,8 +233,8 @@ impl IngressRegistryFixture {
         let ingress_authority = "authority-a".to_string();
         let egress_authority = "authority-b".to_string();
         let directory = directory_from_subscriptions(build_subscriptions(
-            &ingress_authority,
-            &egress_authority,
+            Some(ingress_authority.as_str()),
+            Some(egress_authority.as_str()),
             subscription_rows,
         ))
         .await?;
