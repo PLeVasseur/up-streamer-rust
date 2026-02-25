@@ -583,7 +583,10 @@ pub struct ScenarioCliArgs {
     #[arg(long, default_value_t = env::DEFAULT_SEND_INTERVAL_MS)]
     pub send_interval_ms: u64,
 
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Runtime hard timeout in seconds; budget starts after preflight"
+    )]
     pub scenario_timeout_secs: Option<u64>,
 
     #[arg(long)]
@@ -670,7 +673,7 @@ pub async fn run_scenario(
     let hard_timeout_secs = cli_args
         .scenario_timeout_secs
         .unwrap_or(template.hard_timeout_secs_default);
-    let scenario_deadline = scenario_start_instant + Duration::from_secs(hard_timeout_secs);
+    let runtime_timeout_budget = Duration::from_secs(hard_timeout_secs);
 
     let thresholds = Thresholds {
         endpoint_communication_min_count: cli_args.endpoint_claim_min_count,
@@ -693,8 +696,6 @@ pub async fn run_scenario(
     let mut vsomeip_runtime_lib: Option<PathBuf> = None;
 
     let preflight_result = execute_phase("Preflight", &mut phase_timings, || async {
-        ensure_remaining_timeout(scenario_deadline, "Preflight")?;
-
         env::enforce_expected_branch(&repo_root, expected_branch.as_deref()).await?;
         env::ensure_paths_exist(&repo_root, template.required_paths)?;
 
@@ -720,10 +721,6 @@ pub async fn run_scenario(
             )?;
         }
 
-        if template.requires_vsomeip_runtime {
-            vsomeip_runtime_lib = Some(env::detect_vsomeip_runtime_lib(&repo_root)?);
-        }
-
         if !cli_args.skip_build {
             for build_command in template.build_commands {
                 let outcome =
@@ -731,6 +728,10 @@ pub async fn run_scenario(
                         .await?;
                 assert_command_success(outcome, build_command)?;
             }
+        }
+
+        if template.requires_vsomeip_runtime {
+            vsomeip_runtime_lib = Some(env::detect_vsomeip_runtime_lib(&repo_root)?);
         }
 
         Ok(())
@@ -741,12 +742,14 @@ pub async fn run_scenario(
         failure_reason = Some(error.to_string());
     }
 
+    let runtime_deadline = Instant::now() + runtime_timeout_budget;
+
     if failure_reason.is_none() {
         let start_infra_result = execute_phase("StartInfra", &mut phase_timings, || async {
-            ensure_remaining_timeout(scenario_deadline, "StartInfra")?;
+            ensure_remaining_timeout(runtime_deadline, "StartInfra")?;
 
             if template.requires_docker {
-                start_mqtt_broker(&repo_root, cli_args.no_bootstrap, scenario_deadline).await?;
+                start_mqtt_broker(&repo_root, cli_args.no_bootstrap, runtime_deadline).await?;
                 mqtt_broker_started = true;
             }
 
@@ -774,7 +777,7 @@ pub async fn run_scenario(
     if failure_reason.is_none() {
         let wait_streamer_ready_result =
             execute_phase("WaitStreamerReady", &mut phase_timings, || async {
-                ensure_remaining_timeout(scenario_deadline, "WaitStreamerReady")?;
+                ensure_remaining_timeout(runtime_deadline, "WaitStreamerReady")?;
 
                 let streamer = streamer_process
                     .as_ref()
@@ -792,7 +795,7 @@ pub async fn run_scenario(
                 );
                 let timeout = min(
                     marker_timeout,
-                    ensure_remaining_timeout(scenario_deadline, "WaitStreamerReady")?,
+                    ensure_remaining_timeout(runtime_deadline, "WaitStreamerReady")?,
                 );
 
                 logs::wait_for_exact_marker(
@@ -814,7 +817,7 @@ pub async fn run_scenario(
 
     if failure_reason.is_none() {
         let start_passive_result = execute_phase("StartPassive", &mut phase_timings, || async {
-            ensure_remaining_timeout(scenario_deadline, "StartPassive")?;
+            ensure_remaining_timeout(runtime_deadline, "StartPassive")?;
 
             passive_process = Some(
                 spawn_template_process(
@@ -840,7 +843,7 @@ pub async fn run_scenario(
     if failure_reason.is_none() {
         let wait_passive_ready_result =
             execute_phase("WaitPassiveReady", &mut phase_timings, || async {
-                ensure_remaining_timeout(scenario_deadline, "WaitPassiveReady")?;
+                ensure_remaining_timeout(runtime_deadline, "WaitPassiveReady")?;
 
                 let passive = passive_process
                     .as_ref()
@@ -858,7 +861,7 @@ pub async fn run_scenario(
                 );
                 let timeout = min(
                     marker_timeout,
-                    ensure_remaining_timeout(scenario_deadline, "WaitPassiveReady")?,
+                    ensure_remaining_timeout(runtime_deadline, "WaitPassiveReady")?,
                 );
 
                 logs::wait_for_exact_marker(
@@ -880,7 +883,7 @@ pub async fn run_scenario(
 
     if failure_reason.is_none() {
         let start_active_result = execute_phase("StartActive", &mut phase_timings, || async {
-            ensure_remaining_timeout(scenario_deadline, "StartActive")?;
+            ensure_remaining_timeout(runtime_deadline, "StartActive")?;
 
             active_process = Some(
                 spawn_template_process(
@@ -897,7 +900,7 @@ pub async fn run_scenario(
             let active = active_process
                 .as_mut()
                 .ok_or_else(|| anyhow!("active process missing after spawn"))?;
-            let remaining = ensure_remaining_timeout(scenario_deadline, "StartActive")?;
+            let remaining = ensure_remaining_timeout(runtime_deadline, "StartActive")?;
             let exited = active.wait_with_timeout(remaining).await?;
             if !exited {
                 return Err(anyhow!(
@@ -925,7 +928,7 @@ pub async fn run_scenario(
     if failure_reason.is_none() {
         let validate_claims_result =
             execute_phase("ValidateClaims", &mut phase_timings, || async {
-                ensure_remaining_timeout(scenario_deadline, "ValidateClaims")?;
+                ensure_remaining_timeout(runtime_deadline, "ValidateClaims")?;
 
                 if loaded_claims.is_empty() {
                     return Err(anyhow!(
