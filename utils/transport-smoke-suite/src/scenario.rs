@@ -720,10 +720,6 @@ pub async fn run_scenario(
             )?;
         }
 
-        if template.requires_vsomeip_runtime {
-            vsomeip_runtime_lib = Some(env::detect_vsomeip_runtime_lib(&repo_root)?);
-        }
-
         if !cli_args.skip_build {
             for build_command in template.build_commands {
                 let outcome =
@@ -731,6 +727,10 @@ pub async fn run_scenario(
                         .await?;
                 assert_command_success(outcome, build_command)?;
             }
+        }
+
+        if template.requires_vsomeip_runtime {
+            vsomeip_runtime_lib = Some(env::detect_vsomeip_runtime_lib(&repo_root)?);
         }
 
         Ok(())
