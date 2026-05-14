@@ -399,9 +399,32 @@ mod tests {
 
     #[derive(Default)]
     struct MemoryOwnedTransport {
-        listeners: Mutex<Vec<Arc<dyn UOwnedListener>>>,
+        listeners: Mutex<Vec<RegisteredOwnedListener>>,
         filters: Mutex<Vec<(UUri, Option<UUri>)>>,
         sent: Mutex<Vec<UOwnedFrame>>,
+    }
+
+    #[derive(Clone)]
+    struct RegisteredOwnedListener {
+        source_filter: UUri,
+        sink_filter: Option<UUri>,
+        listener: Arc<dyn UOwnedListener>,
+    }
+
+    impl RegisteredOwnedListener {
+        fn matches_frame(&self, frame: &UOwnedFrame) -> bool {
+            if !self.source_filter.matches(frame.metadata().source()) {
+                return false;
+            }
+            if let Some(sink_filter) = &self.sink_filter {
+                frame
+                    .metadata()
+                    .sink()
+                    .is_some_and(|sink| sink_filter.matches(sink))
+            } else {
+                frame.metadata().sink().is_none()
+            }
+        }
     }
 
     impl MemoryOwnedTransport {
@@ -411,8 +434,10 @@ mod tests {
                 .lock()
                 .expect("listeners lock poisoned")
                 .clone();
-            for listener in listeners {
-                listener.on_receive_owned(frame.clone()).await;
+            for registration in listeners {
+                if registration.matches_frame(&frame) {
+                    registration.listener.on_receive_owned(frame.clone()).await;
+                }
             }
         }
 
@@ -445,7 +470,11 @@ mod tests {
             self.listeners
                 .lock()
                 .expect("listeners lock poisoned")
-                .push(listener);
+                .push(RegisteredOwnedListener {
+                    source_filter: source_filter.clone(),
+                    sink_filter: sink_filter.cloned(),
+                    listener,
+                });
             Ok(())
         }
 
@@ -458,7 +487,7 @@ mod tests {
             let mut listeners = self.listeners.lock().expect("listeners lock poisoned");
             if let Some(index) = listeners
                 .iter()
-                .position(|existing| Arc::ptr_eq(existing, &listener))
+                .position(|existing| Arc::ptr_eq(&existing.listener, &listener))
             {
                 listeners.remove(index);
             }
@@ -468,8 +497,31 @@ mod tests {
 
     #[derive(Default)]
     struct MemoryZeroCopyTransport {
-        listeners: Mutex<Vec<Arc<dyn UZeroCopyListener<UOwnedFrame>>>>,
+        listeners: Mutex<Vec<RegisteredZeroCopyListener>>,
         sent: Mutex<Vec<UOwnedFrame>>,
+    }
+
+    #[derive(Clone)]
+    struct RegisteredZeroCopyListener {
+        source_filter: UUri,
+        sink_filter: Option<UUri>,
+        listener: Arc<dyn UZeroCopyListener<UOwnedFrame>>,
+    }
+
+    impl RegisteredZeroCopyListener {
+        fn matches_frame(&self, frame: &UOwnedFrame) -> bool {
+            if !self.source_filter.matches(frame.metadata().source()) {
+                return false;
+            }
+            if let Some(sink_filter) = &self.sink_filter {
+                frame
+                    .metadata()
+                    .sink()
+                    .is_some_and(|sink| sink_filter.matches(sink))
+            } else {
+                frame.metadata().sink().is_none()
+            }
+        }
     }
 
     impl MemoryZeroCopyTransport {
@@ -479,8 +531,13 @@ mod tests {
                 .lock()
                 .expect("listeners lock poisoned")
                 .clone();
-            for listener in listeners {
-                listener.on_receive_zero_copy(frame.clone()).await;
+            for registration in listeners {
+                if registration.matches_frame(&frame) {
+                    registration
+                        .listener
+                        .on_receive_zero_copy(frame.clone())
+                        .await;
+                }
             }
         }
     }
@@ -509,14 +566,18 @@ mod tests {
 
         async fn register_zero_copy_listener(
             &self,
-            _source_filter: &UUri,
-            _sink_filter: Option<&UUri>,
+            source_filter: &UUri,
+            sink_filter: Option<&UUri>,
             listener: Arc<dyn UZeroCopyListener<Self::Rx>>,
         ) -> Result<(), UStatus> {
             self.listeners
                 .lock()
                 .expect("listeners lock poisoned")
-                .push(listener);
+                .push(RegisteredZeroCopyListener {
+                    source_filter: source_filter.clone(),
+                    sink_filter: sink_filter.cloned(),
+                    listener,
+                });
             Ok(())
         }
 
@@ -529,7 +590,7 @@ mod tests {
             let mut listeners = self.listeners.lock().expect("listeners lock poisoned");
             if let Some(index) = listeners
                 .iter()
-                .position(|existing| Arc::ptr_eq(existing, &listener))
+                .position(|existing| Arc::ptr_eq(&existing.listener, &listener))
             {
                 listeners.remove(index);
             }

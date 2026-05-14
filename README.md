@@ -19,6 +19,19 @@ A number of UEntity examples for SOME/IP, Zenoh and MQTT5. These can be used tog
 
 Reference the README.md there for more details.
 
+## Native Frame Migration Status
+
+This branch migrates the streamer workspace to native `UOwnedFrame` and `UZeroCopyTransport` APIs. The supported runnable streamer surfaces in this branch are:
+
+- `up-streamer`: the library API for routing native frames between endpoints.
+- `configurable-streamer`: the configurable binary entry point.
+- `example-streamer-implementations`: concrete example streamer binaries.
+- `utils/transport-smoke-suite`: deterministic transport smoke scenarios.
+
+The old `up-linux-streamer-plugin` crate is intentionally not restored in this migration branch. Its README already stated that it was not usable, and its implementation depended on the removed generated-envelope `UTransport` surface and `Endpoint::new` API. Restoring it should be a follow-up task after upstream PR packaging replaces local path dependencies and the plugin can be rebuilt on `Endpoint::from_owned` plus native owned transports.
+
+The old bundled/unbundled lint workflows are replaced by `.github/workflows/native-frame-ci.yaml`. The scheduled smoke coverage is retained through `.github/workflows/transport-smoke-capstone.yaml`.
+
 ## Building
 
 ### Only `up-streamer`

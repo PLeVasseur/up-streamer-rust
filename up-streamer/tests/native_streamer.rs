@@ -17,8 +17,8 @@ use async_trait::async_trait;
 use up_rust::{
     FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
     FetchSubscriptionsResponse, NotificationsRequest, ResetRequest, ResetResponse,
-    SubscriptionRequest, SubscriptionResponse, UCode, UFrameMetadata, UOwnedFrame, UOwnedListener,
-    UOwnedTransport, UStatus, USubscription, UUri, UVecTxBuffer, UZeroCopyListener,
+    SubscriptionRequest, SubscriptionResponse, UCode, UFrameMetadata, UMessageBuilder, UOwnedFrame,
+    UOwnedListener, UOwnedTransport, UStatus, USubscription, UUri, UVecTxBuffer, UZeroCopyListener,
     UZeroCopyTransport,
 };
 use up_streamer::{Endpoint, TransportMode, UStreamer};
@@ -77,8 +77,31 @@ impl USubscription for EmptySubscriptions {
 
 #[derive(Default)]
 struct MemoryOwnedTransport {
-    listeners: Mutex<Vec<Arc<dyn UOwnedListener>>>,
+    listeners: Mutex<Vec<RegisteredOwnedListener>>,
     sent: Mutex<Vec<UOwnedFrame>>,
+}
+
+#[derive(Clone)]
+struct RegisteredOwnedListener {
+    source_filter: UUri,
+    sink_filter: Option<UUri>,
+    listener: Arc<dyn UOwnedListener>,
+}
+
+impl RegisteredOwnedListener {
+    fn matches_frame(&self, frame: &UOwnedFrame) -> bool {
+        if !self.source_filter.matches(frame.metadata().source()) {
+            return false;
+        }
+        if let Some(sink_filter) = &self.sink_filter {
+            frame
+                .metadata()
+                .sink()
+                .is_some_and(|sink| sink_filter.matches(sink))
+        } else {
+            frame.metadata().sink().is_none()
+        }
+    }
 }
 
 impl MemoryOwnedTransport {
@@ -88,8 +111,10 @@ impl MemoryOwnedTransport {
             .lock()
             .expect("listeners lock poisoned")
             .clone();
-        for listener in listeners {
-            listener.on_receive_owned(frame.clone()).await;
+        for registration in listeners {
+            if registration.matches_frame(&frame) {
+                registration.listener.on_receive_owned(frame.clone()).await;
+            }
         }
     }
 
@@ -107,14 +132,18 @@ impl UOwnedTransport for MemoryOwnedTransport {
 
     async fn register_owned_listener(
         &self,
-        _source_filter: &UUri,
-        _sink_filter: Option<&UUri>,
+        source_filter: &UUri,
+        sink_filter: Option<&UUri>,
         listener: Arc<dyn UOwnedListener>,
     ) -> Result<(), UStatus> {
         self.listeners
             .lock()
             .expect("listeners lock poisoned")
-            .push(listener);
+            .push(RegisteredOwnedListener {
+                source_filter: source_filter.clone(),
+                sink_filter: sink_filter.cloned(),
+                listener,
+            });
         Ok(())
     }
 
@@ -127,7 +156,7 @@ impl UOwnedTransport for MemoryOwnedTransport {
         let mut listeners = self.listeners.lock().expect("listeners lock poisoned");
         if let Some(index) = listeners
             .iter()
-            .position(|existing| Arc::ptr_eq(existing, &listener))
+            .position(|existing| Arc::ptr_eq(&existing.listener, &listener))
         {
             listeners.remove(index);
         }
@@ -137,8 +166,31 @@ impl UOwnedTransport for MemoryOwnedTransport {
 
 #[derive(Default)]
 struct MemoryZeroCopyTransport {
-    listeners: Mutex<Vec<Arc<dyn UZeroCopyListener<UOwnedFrame>>>>,
+    listeners: Mutex<Vec<RegisteredZeroCopyListener>>,
     sent: Mutex<Vec<UOwnedFrame>>,
+}
+
+#[derive(Clone)]
+struct RegisteredZeroCopyListener {
+    source_filter: UUri,
+    sink_filter: Option<UUri>,
+    listener: Arc<dyn UZeroCopyListener<UOwnedFrame>>,
+}
+
+impl RegisteredZeroCopyListener {
+    fn matches_frame(&self, frame: &UOwnedFrame) -> bool {
+        if !self.source_filter.matches(frame.metadata().source()) {
+            return false;
+        }
+        if let Some(sink_filter) = &self.sink_filter {
+            frame
+                .metadata()
+                .sink()
+                .is_some_and(|sink| sink_filter.matches(sink))
+        } else {
+            frame.metadata().sink().is_none()
+        }
+    }
 }
 
 impl MemoryZeroCopyTransport {
@@ -148,8 +200,13 @@ impl MemoryZeroCopyTransport {
             .lock()
             .expect("listeners lock poisoned")
             .clone();
-        for listener in listeners {
-            listener.on_receive_zero_copy(frame.clone()).await;
+        for registration in listeners {
+            if registration.matches_frame(&frame) {
+                registration
+                    .listener
+                    .on_receive_zero_copy(frame.clone())
+                    .await;
+            }
         }
     }
 
@@ -182,14 +239,18 @@ impl UZeroCopyTransport for MemoryZeroCopyTransport {
 
     async fn register_zero_copy_listener(
         &self,
-        _source_filter: &UUri,
-        _sink_filter: Option<&UUri>,
+        source_filter: &UUri,
+        sink_filter: Option<&UUri>,
         listener: Arc<dyn UZeroCopyListener<Self::Rx>>,
     ) -> Result<(), UStatus> {
         self.listeners
             .lock()
             .expect("listeners lock poisoned")
-            .push(listener);
+            .push(RegisteredZeroCopyListener {
+                source_filter: source_filter.clone(),
+                sink_filter: sink_filter.cloned(),
+                listener,
+            });
         Ok(())
     }
 
@@ -202,7 +263,7 @@ impl UZeroCopyTransport for MemoryZeroCopyTransport {
         let mut listeners = self.listeners.lock().expect("listeners lock poisoned");
         if let Some(index) = listeners
             .iter()
-            .position(|existing| Arc::ptr_eq(existing, &listener))
+            .position(|existing| Arc::ptr_eq(&existing.listener, &listener))
         {
             listeners.remove(index);
         }
@@ -219,6 +280,31 @@ fn frame(authority: &str) -> UOwnedFrame {
         UFrameMetadata::publish(topic(authority)),
         b"native-stream".as_slice(),
     )
+}
+
+fn point_to_point_frame(
+    source_authority: &str,
+    sink_authority: &str,
+    resource_id: u16,
+) -> UOwnedFrame {
+    let source =
+        UUri::try_from_parts(source_authority, 0x4210, 1, resource_id).expect("valid source URI");
+    let sink = UUri::try_from_parts(sink_authority, 0x4220, 1, 0).expect("valid sink URI");
+    UMessageBuilder::notification(source, sink)
+        .build_with_raw_payload("native-stream")
+        .expect("valid notification frame")
+}
+
+fn sent_frame_ids(transport: &MemoryOwnedTransport) -> Vec<up_rust::UUID> {
+    transport
+        .sent()
+        .iter()
+        .map(|frame| frame.metadata().attributes().id().clone())
+        .collect()
+}
+
+fn frame_id(frame: &UOwnedFrame) -> up_rust::UUID {
+    frame.metadata().attributes().id().clone()
 }
 
 async fn yield_to_forwarder() {
@@ -300,4 +386,83 @@ async fn duplicate_and_missing_routes_return_status_codes() {
             .get_code(),
         UCode::NOT_FOUND
     );
+}
+
+#[tokio::test]
+async fn routes_multiple_owned_authorities_and_removes_rules() {
+    let local = Arc::new(MemoryOwnedTransport::default());
+    let remote_a = Arc::new(MemoryOwnedTransport::default());
+    let remote_b = Arc::new(MemoryOwnedTransport::default());
+    let local_ep = Endpoint::from_owned("local", "local-authority", local.clone());
+    let remote_a_ep = Endpoint::from_owned("remote-a", "remote-a-authority", remote_a.clone());
+    let remote_b_ep = Endpoint::from_owned("remote-b", "remote-b-authority", remote_b.clone());
+    let mut streamer = UStreamer::new("native", 8, subscription_source())
+        .await
+        .expect("streamer should build");
+
+    streamer
+        .add_route_ref(&local_ep, &remote_a_ep)
+        .await
+        .expect("local to remote-a should register");
+    streamer
+        .add_route_ref(&remote_a_ep, &local_ep)
+        .await
+        .expect("remote-a to local should register");
+
+    let local_to_a = point_to_point_frame("local-authority", "remote-a-authority", 0x9001);
+    let local_to_b_before = point_to_point_frame("local-authority", "remote-b-authority", 0x9002);
+    let a_to_local = point_to_point_frame("remote-a-authority", "local-authority", 0x9003);
+    let b_to_local_before = point_to_point_frame("remote-b-authority", "local-authority", 0x9004);
+    local.inject(local_to_a.clone()).await;
+    local.inject(local_to_b_before.clone()).await;
+    remote_a.inject(a_to_local.clone()).await;
+    remote_b.inject(b_to_local_before).await;
+    yield_to_forwarder().await;
+
+    assert!(sent_frame_ids(&remote_a).contains(&frame_id(&local_to_a)));
+    assert!(!sent_frame_ids(&remote_a).contains(&frame_id(&local_to_b_before)));
+    assert!(sent_frame_ids(&local).contains(&frame_id(&a_to_local)));
+    assert!(remote_b.sent().is_empty());
+
+    streamer
+        .add_route_ref(&local_ep, &remote_b_ep)
+        .await
+        .expect("local to remote-b should register");
+    streamer
+        .add_route_ref(&remote_b_ep, &local_ep)
+        .await
+        .expect("remote-b to local should register");
+
+    let local_to_b = point_to_point_frame("local-authority", "remote-b-authority", 0x9005);
+    let b_to_local = point_to_point_frame("remote-b-authority", "local-authority", 0x9006);
+    local.inject(local_to_b.clone()).await;
+    remote_b.inject(b_to_local.clone()).await;
+    yield_to_forwarder().await;
+
+    assert!(sent_frame_ids(&remote_b).contains(&frame_id(&local_to_b)));
+    assert!(sent_frame_ids(&local).contains(&frame_id(&b_to_local)));
+
+    streamer
+        .delete_route_ref(&local_ep, &remote_a_ep)
+        .await
+        .expect("local to remote-a should unregister");
+    streamer
+        .delete_route_ref(&remote_a_ep, &local_ep)
+        .await
+        .expect("remote-a to local should unregister");
+
+    let local_to_a_after_delete =
+        point_to_point_frame("local-authority", "remote-a-authority", 0x9007);
+    let a_to_local_after_delete =
+        point_to_point_frame("remote-a-authority", "local-authority", 0x9008);
+    let local_to_b_after_delete =
+        point_to_point_frame("local-authority", "remote-b-authority", 0x9009);
+    local.inject(local_to_a_after_delete.clone()).await;
+    remote_a.inject(a_to_local_after_delete.clone()).await;
+    local.inject(local_to_b_after_delete.clone()).await;
+    yield_to_forwarder().await;
+
+    assert!(!sent_frame_ids(&remote_a).contains(&frame_id(&local_to_a_after_delete)));
+    assert!(!sent_frame_ids(&local).contains(&frame_id(&a_to_local_after_delete)));
+    assert!(sent_frame_ids(&remote_b).contains(&frame_id(&local_to_b_after_delete)));
 }
