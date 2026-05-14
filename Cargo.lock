@@ -5100,6 +5100,7 @@ dependencies = [
  "async-trait",
  "base64",
  "bytes",
+ "futures-channel",
  "mediatype",
  "protobuf",
  "rand 0.9.2",

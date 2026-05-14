@@ -18,11 +18,11 @@ use std::{
 
 use tokio::{sync::mpsc, task::JoinHandle};
 use up_rust::{
-    FetchSubscriptionsRequest, FetchSubscriptionsResponse, UCode, UOwnedFrame, UStatus,
-    USubscription, UUri,
+    FetchSubscriptionsRequest, FetchSubscriptionsResponse, UCode, UOwnedFrame, UOwnedListener,
+    UStatus, USubscription, UTransportEndpointRegistration, UUri,
 };
 
-use crate::{endpoint::NativeIngressRegistration, Endpoint, SubscriptionSyncHealth, TransportMode};
+use crate::{Endpoint, SubscriptionSyncHealth, TransportMode};
 
 const RECENT_FRAME_ID_LIMIT: usize = 1024;
 
@@ -52,8 +52,19 @@ impl RouteKey {
 }
 
 struct RouteBinding {
-    registrations: Vec<Arc<dyn NativeIngressRegistration>>,
+    registrations: Vec<UTransportEndpointRegistration>,
     dispatch_task: JoinHandle<()>,
+}
+
+struct IngressForwarder {
+    tx: mpsc::Sender<UOwnedFrame>,
+}
+
+#[async_trait::async_trait]
+impl UOwnedListener for IngressForwarder {
+    async fn on_receive_owned(&self, frame: UOwnedFrame) {
+        let _ = self.tx.send(frame).await;
+    }
 }
 
 pub struct UStreamer {
@@ -145,7 +156,11 @@ impl UStreamer {
             registrations.push(
                 ingress
                     .transport
-                    .register_ingress(&route_filter.source, route_filter.sink.as_ref(), tx.clone())
+                    .register_owned_listener(
+                        &route_filter.source,
+                        route_filter.sink.as_ref(),
+                        Arc::new(IngressForwarder { tx: tx.clone() }),
+                    )
                     .await?,
             );
         }
@@ -191,7 +206,7 @@ impl UStreamer {
                     egress_authority = %egress_authority,
                     "egress_send_attempt"
                 );
-                match egress_transport.send_frame(frame).await {
+                match egress_transport.send_owned(frame).await {
                     Ok(()) => tracing::debug!(
                         ingress = %ingress_name,
                         ingress_authority = %ingress_authority,

@@ -34,3 +34,7 @@ up-rust = { workspace = true, features = ["protobuf-wire"] }
 usubscription-static-file = { path = "../utils/usubscription-static-file" }
 up-transport-zenoh = { workspace = true }
 up-transport-iceoryx2-rust = { workspace = true }
+
+[[bench]]
+name = "streamer_criterion"
+harness = false
