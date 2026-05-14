@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use up_rust::{
     FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
     FetchSubscriptionsResponse, NotificationsRequest, ResetRequest, ResetResponse,
-    SubscriptionRequest, SubscriptionResponse, UCode, UFrameHeader, UOwnedFrame, UOwnedListener,
+    SubscriptionRequest, SubscriptionResponse, UCode, UFrameMetadata, UOwnedFrame, UOwnedListener,
     UOwnedTransport, UStatus, USubscription, UUri, UVecTxBuffer, UZeroCopyListener,
     UZeroCopyTransport,
 };
@@ -165,7 +165,7 @@ impl UZeroCopyTransport for MemoryZeroCopyTransport {
 
     async fn reserve(
         &self,
-        header: UFrameHeader,
+        header: UFrameMetadata,
         payload_len: usize,
         _alignment: usize,
     ) -> Result<Self::Tx, UStatus> {
@@ -216,7 +216,7 @@ fn topic(authority: &str) -> UUri {
 
 fn frame(authority: &str) -> UOwnedFrame {
     UOwnedFrame::new(
-        UFrameHeader::publish(topic(authority)),
+        UFrameMetadata::publish(topic(authority)),
         b"native-stream".as_slice(),
     )
 }

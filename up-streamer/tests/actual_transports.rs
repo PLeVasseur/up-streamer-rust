@@ -21,7 +21,7 @@ use up_rust::{
     FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
     FetchSubscriptionsResponse, NotificationsRequest, ProtobufWire, RawBytes, ResetRequest,
     ResetResponse, SubscriberInfo, Subscription, SubscriptionRequest, SubscriptionResponse,
-    UAttributes, UCode, UFrameHeader, UMessageType, UOwnedFrame, UOwnedListener, UOwnedTransport,
+    UAttributes, UCode, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener, UOwnedTransport,
     UOwnedTransportExt, UPriority, UStatus, USubscription, UUri, UZeroCopyListener,
     UZeroCopyRxFrame, UZeroCopyTransport, UZeroCopyTransportExt, WireFormat, UUID,
 };
@@ -102,7 +102,7 @@ struct ZeroCopyFrameSender(mpsc::UnboundedSender<UOwnedFrame>);
 impl UZeroCopyListener<Iceoryx2RxLease> for ZeroCopyFrameSender {
     async fn on_receive_zero_copy(&self, frame: Iceoryx2RxLease) {
         let _ = self.0.send(UOwnedFrame::new(
-            frame.header().clone(),
+            frame.metadata().clone(),
             frame.payload().to_vec(),
         ));
     }
@@ -125,7 +125,7 @@ fn make_topic(authority: &str, resource: u16) -> UUri {
     UUri::try_from_parts(authority, 0x4210, 1, resource).expect("valid topic")
 }
 
-fn metadata_header(topic: UUri, token: &str, commstatus: UCode) -> (UFrameHeader, UUID, UUID) {
+fn metadata_header(topic: UUri, token: &str, commstatus: UCode) -> (UFrameMetadata, UUID, UUID) {
     let id = UUID::build();
     let request_id = UUID::build();
     let attributes = UAttributes::new(id.clone(), topic, None, UMessageType::Publish)
@@ -137,7 +137,7 @@ fn metadata_header(topic: UUri, token: &str, commstatus: UCode) -> (UFrameHeader
         .with_permission_level(11)
         .with_commstatus(commstatus);
     (
-        UFrameHeader::new(attributes, RawBytes::encoding()),
+        UFrameMetadata::new(attributes, RawBytes::encoding()),
         id,
         request_id,
     )
@@ -151,7 +151,7 @@ fn assert_streamed_metadata(
     token: &str,
     commstatus: UCode,
 ) {
-    let attributes = frame.header().attributes();
+    let attributes = frame.metadata().attributes();
     assert_eq!(attributes.id(), id);
     assert_eq!(attributes.source(), topic);
     assert_eq!(attributes.sink(), None);
@@ -186,7 +186,7 @@ async fn zenoh_transport(authority: &str) -> Arc<UPTransportZenoh> {
 }
 
 fn iceoryx2_transport() -> Arc<Iceoryx2PubSub> {
-    UTransportIceoryx2::build_zero_copy(MessagingPattern::PublishSubscribe)
+    UTransportIceoryx2::build(MessagingPattern::PublishSubscribe)
         .expect("iceoryx2 transport should build")
 }
 
@@ -290,7 +290,7 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf() {
 
     let payload = protobuf_payload("protobuf zenoh-to-iox");
     zenoh
-        .send_serialized::<ProtobufWire, _>(UFrameHeader::publish(topic), &payload)
+        .send_serialized::<ProtobufWire, _>(UFrameMetadata::publish(topic), &payload)
         .await
         .expect("zenoh protobuf send should succeed");
 
@@ -302,7 +302,7 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf() {
         .deserialize::<ProtobufWire, _>()
         .expect("protobuf payload should decode");
 
-    assert_eq!(frame.header().encoding(), &ProtobufWire::encoding());
+    assert_eq!(frame.metadata().encoding(), &ProtobufWire::encoding());
     assert_eq!(decoded.value, payload.value);
 }
 
@@ -401,7 +401,7 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned_with_protobuf() {
 
     let payload = protobuf_payload("protobuf iox-to-zenoh");
     iceoryx2
-        .send_serialized_zero_copy::<ProtobufWire, _>(UFrameHeader::publish(topic), &payload)
+        .send_serialized_zero_copy::<ProtobufWire, _>(UFrameMetadata::publish(topic), &payload)
         .await
         .expect("iceoryx2 protobuf send should succeed");
 
@@ -413,6 +413,6 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned_with_protobuf() {
         .deserialize::<ProtobufWire, _>()
         .expect("protobuf payload should decode");
 
-    assert_eq!(frame.header().encoding(), &ProtobufWire::encoding());
+    assert_eq!(frame.metadata().encoding(), &ProtobufWire::encoding());
     assert_eq!(decoded.value, payload.value);
 }

@@ -122,8 +122,7 @@ async fn endpoint_from_config(
             ))
         }
         TransportKind::Iceoryx2ZeroCopy => {
-            let transport =
-                UTransportIceoryx2::build_zero_copy(MessagingPattern::PublishSubscribe)?;
+            let transport = UTransportIceoryx2::build(MessagingPattern::PublishSubscribe)?;
             Ok(Endpoint::from_zero_copy(
                 &endpoint.name,
                 &endpoint.authority,

@@ -165,7 +165,7 @@ impl UStreamer {
                 "egress_worker_create"
             );
             while let Some(frame) = rx.recv().await {
-                let frame_id = frame.header().attributes().id().clone();
+                let frame_id = frame.metadata().attributes().id().clone();
                 if !recent_frame_ids.insert(frame_id.clone()) {
                     tracing::debug!(
                         ingress = %ingress_name,
@@ -335,7 +335,7 @@ mod tests {
     use up_rust::{
         FetchSubscribersRequest, FetchSubscribersResponse, NotificationsRequest, ResetRequest,
         ResetResponse, SubscriberInfo, Subscription, SubscriptionRequest, SubscriptionResponse,
-        UFrameHeader, UOwnedListener, UOwnedTransport, UVecTxBuffer, UZeroCopyListener,
+        UFrameMetadata, UOwnedListener, UOwnedTransport, UVecTxBuffer, UZeroCopyListener,
         UZeroCopyTransport,
     };
 
@@ -492,7 +492,7 @@ mod tests {
 
         async fn reserve(
             &self,
-            header: UFrameHeader,
+            header: UFrameMetadata,
             payload_len: usize,
             _alignment: usize,
         ) -> Result<Self::Tx, UStatus> {
@@ -558,7 +558,7 @@ mod tests {
 
     fn frame(authority: &str) -> UOwnedFrame {
         UOwnedFrame::new(
-            UFrameHeader::publish(topic(authority)),
+            UFrameMetadata::publish(topic(authority)),
             b"streamed".as_slice(),
         )
     }

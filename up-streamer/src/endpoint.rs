@@ -51,10 +51,6 @@ pub struct Endpoint {
 }
 
 impl Endpoint {
-    pub fn new(name: &str, authority: &str, transport: Arc<dyn UOwnedTransport>) -> Self {
-        Self::from_owned(name, authority, transport)
-    }
-
     pub fn from_owned(name: &str, authority: &str, transport: Arc<dyn UOwnedTransport>) -> Self {
         Self {
             name: name.to_string(),
@@ -168,7 +164,7 @@ where
         let payload_len = frame.payload().len();
         let mut buffer = self
             .transport
-            .reserve(frame.header().clone(), payload_len, 1)
+            .reserve(frame.metadata().clone(), payload_len, 1)
             .await?;
         buffer.payload_mut().copy_from_slice(frame.payload());
         self.transport.send_zero_copy(buffer).await
@@ -207,7 +203,7 @@ where
     Rx: UZeroCopyRxFrame + Send + 'static,
 {
     async fn on_receive_zero_copy(&self, frame: Rx) {
-        let owned = UOwnedFrame::new(frame.header().clone(), frame.payload().to_vec());
+        let owned = UOwnedFrame::new(frame.metadata().clone(), frame.payload().to_vec());
         let _ = self.tx.send(owned).await;
     }
 }

@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use clap::Parser;
 use tokio::sync::mpsc;
 use up_rust::{
-    RawBytes, UCode, UFrameHeader, UMessageType, UOwnedFrame, UOwnedListener, UOwnedTransport,
+    RawBytes, UCode, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener, UOwnedTransport,
     UOwnedTransportExt, UStatus, UUri,
 };
 #[cfg(feature = "mqtt-transport")]
@@ -422,37 +422,40 @@ impl UOwnedListener for PrintListener {
         println!(
             "{} received {:?}: {}",
             self.role,
-            frame.header().attributes().message_type(),
+            frame.metadata().attributes().message_type(),
             String::from_utf8_lossy(frame.payload_bytes())
         );
 
-        match frame.header().attributes().message_type() {
+        match frame.metadata().attributes().message_type() {
             UMessageType::Publish => println!("PublishReceiver: Received a message"),
             UMessageType::Response => {
                 println!("ServiceResponseListener: Received a message");
-                println!("commstatus: {:?}", frame.header().attributes().commstatus());
+                println!(
+                    "commstatus: {:?}",
+                    frame.metadata().attributes().commstatus()
+                );
             }
             _ => {}
         }
 
         if let Some(responder) = self.responder.as_ref() {
-            if frame.header().attributes().message_type() == UMessageType::Request {
-                let reply_to = frame.header().source().clone();
-                let Some(invoked_method) = frame.header().sink().cloned() else {
+            if frame.metadata().attributes().message_type() == UMessageType::Request {
+                let reply_to = frame.metadata().source().clone();
+                let Some(invoked_method) = frame.metadata().sink().cloned() else {
                     let _ = self.tx.send(frame);
                     return;
                 };
                 let mut response = UOwnedFrame::from_serializable::<RawBytes, _>(
-                    UFrameHeader::response(
+                    UFrameMetadata::response(
                         reply_to,
-                        frame.header().attributes().id().clone(),
+                        frame.metadata().attributes().id().clone(),
                         invoked_method,
                     ),
                     &&b"native response"[..],
                 )
                 .expect("raw response serialization should not fail");
-                *response.header_mut().attributes_mut() = response
-                    .header()
+                *response.metadata_mut().attributes_mut() = response
+                    .metadata()
                     .attributes()
                     .clone()
                     .with_commstatus(UCode::OK);
@@ -503,7 +506,7 @@ pub async fn run_publisher(role: &'static str) -> Result<(), UStatus> {
         println!("Sending Publish message");
         transport
             .send_serialized::<RawBytes, _>(
-                UFrameHeader::publish(source.clone()),
+                UFrameMetadata::publish(source.clone()),
                 &payload.as_bytes(),
             )
             .await?;
@@ -558,7 +561,7 @@ pub async fn run_client(role: &'static str) -> Result<(), UStatus> {
         let payload = format!("{role} native request #{count}");
         transport
             .send_serialized::<RawBytes, _>(
-                UFrameHeader::request(method.clone(), reply_to.clone(), 5_000),
+                UFrameMetadata::request(method.clone(), reply_to.clone(), 5_000),
                 &payload.as_bytes(),
             )
             .await?;
