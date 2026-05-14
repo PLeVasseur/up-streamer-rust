@@ -23,17 +23,12 @@ license.workspace = true
 async-trait = { workspace = true }
 clap = { workspace = true }
 json5 = { workspace = true }
-protobuf = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
 up-streamer = { path = "../up-streamer" }
+up-transport-iceoryx2-rust = { workspace = true }
 up-transport-zenoh = { workspace = true }
-up-transport-mqtt5 = { workspace = true }
-zenoh = { workspace = true }
 usubscription-static-file = { path = "../utils/usubscription-static-file" }
-
-[dev-dependencies]
-hello-world-protos = { path = "../utils/hello-world-protos" }

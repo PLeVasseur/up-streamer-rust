@@ -149,5 +149,5 @@ If the two reference implementations are not enough for your system you can cons
 
 - Create a streamer between SOME/IP and MQTT (mind that SOME/IP cannot act as the host-transport)
 - Run a streamer that can forward messages between all three transports
-- Implement your own custom or proprietary UTransport and connect it to one of the three officially supported ones
+- Implement your own custom or proprietary native `UOwnedTransport` or `UZeroCopyTransport` and connect it to a configured endpoint
 - Try out a system with your own UEntities. Between MQTT and Zenoh its also possible to send notification type messages

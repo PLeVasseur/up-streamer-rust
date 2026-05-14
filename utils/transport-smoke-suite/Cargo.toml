@@ -24,6 +24,7 @@ anyhow = { version = "1.0.98" }
 chrono = { version = "0.4.40", default-features = true, features = ["clock", "serde"] }
 clap = { workspace = true, features = ["derive", "env"] }
 libc = { version = "0.2.171" }
+nix = { version = "0.29", features = ["process", "signal"] }
 regex = { version = "1.11.1" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

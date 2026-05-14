@@ -21,71 +21,55 @@ license.workspace = true
 
 [[bin]]
 name = "someip_client"
-required-features = ["vsomeip-transport"]
 
 [[bin]]
 name = "someip_publisher"
-required-features = ["vsomeip-transport"]
 
 [[bin]]
 name = "someip_service"
-required-features = ["vsomeip-transport"]
 
 [[bin]]
 name = "someip_subscriber"
-required-features = ["vsomeip-transport"]
 
 [[bin]]
 name = "zenoh_client"
-required-features = ["zenoh-transport"]
 
 [[bin]]
 name = "zenoh_publisher"
-required-features = ["zenoh-transport"]
 
 [[bin]]
 name = "zenoh_service"
-required-features = ["zenoh-transport"]
 
 [[bin]]
 name = "zenoh_subscriber"
-required-features = ["zenoh-transport"]
 
 [[bin]]
 name = "mqtt_client"
-required-features = ["mqtt-transport"]
 
 [[bin]]
 name = "mqtt_publisher"
-required-features = ["mqtt-transport"]
 
 [[bin]]
 name = "mqtt_service"
-required-features = ["mqtt-transport"]
 
 [[bin]]
 name = "mqtt_subscriber"
-required-features = ["mqtt-transport"]
 
 [features]
-zenoh-transport = ["up-transport-zenoh", "zenoh"]
-vsomeip-transport = ["up-transport-vsomeip"]
-bundled-vsomeip = ["up-transport-vsomeip/bundled"]
-mqtt-transport = ["up-transport-mqtt5"]
+default = []
+zenoh-transport = []
+vsomeip-transport = []
+bundled-vsomeip = []
+mqtt-transport = []
 
 [dependencies]
 async-trait = { workspace = true }
-chrono = { version = "0.4" }
 clap = { version = "4.5.9", features = ["derive"] }
-hello-world-protos = { path = "../utils/hello-world-protos" }
 json5 = { workspace = true }
-protobuf = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
-up-transport-zenoh = { workspace = true, optional = true }
-up-transport-vsomeip = { workspace = true, optional = true }
-up-transport-mqtt5 = { workspace = true, optional = true }
-zenoh = { workspace = true, optional = true }
+up-transport-zenoh = { workspace = true }
+zenoh = { workspace = true }

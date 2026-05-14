@@ -1,66 +1,23 @@
 {
-    up_streamer_config: {
-      // The message queue size of each route between endpoints within the UStreamer
-      // Lower numbers mean that some messages will be dropped
-      message_queue_size: 10000
+  up_streamer_config: {
+    message_queue_size: 32,
+  },
+  usubscription_config: {
+    file_path: "configurable-streamer/static-subscriptions.json",
+  },
+  endpoints: [
+    {
+      name: "zenoh",
+      authority: "zenoh-authority",
+      transport: "zenoh_owned",
+      zenoh_config_file: "configurable-streamer/ZENOH_CONFIG.json5",
+      forwarding: ["iceoryx2"],
     },
-    streamer_uuri: {
-      // Determines the authority_name of the host device
-      // Used when initializing host transport
-      authority: "authority-b",
-      // Determines the ue_id of the streamer
-      // Used when initializing host transport
-      ue_id: 78,
-      // Determines the ue_version_major of the streamer
-      // Used when initializing host transport
-      ue_version_major: 1
+    {
+      name: "iceoryx2",
+      authority: "iceoryx2-authority",
+      transport: "iceoryx2_zero_copy",
+      forwarding: ["zenoh"],
     },
-    usubscription_config: {
-      // Provider mode: static_file (default) or reserved live_usubscription
-      mode: "static_file",
-      // Lists the path to the subscription file when using static file
-      file_path: "subscription_data.json"
-    },
-    transports: {
-        zenoh: {
-            // Path to the zenoh config file
-            config_file: "ZENOH_CONFIG.json5",
-            // List of endpoints that use the zenoh transport
-            endpoints: [
-                {
-                    // Authority of the entity that the endpoint represents
-                    authority: "authority-b",
-                    // Identifier of the endpoint
-                    endpoint: "endpoint_zenoh_1",
-                    // List of identifiers of all other endpoints that messages should be forwarded to
-                    forwarding: [
-                        "endpoint_mqtt_1",
-                        "endpoint_zenoh_2"
-                    ]
-                },
-                {
-                    authority: "authority-c",
-                    // Make sure that each endpoint has a unique identifier or the streamer will not start
-                    endpoint: "endpoint_zenoh_2",
-                    // All endpoint identifiers listed here must also be defined in this config
-                    forwarding: [
-                        "endpoint_zenoh_1",
-                    ]
-                }
-            ]
-        },
-        mqtt: {
-            // Same as for the zenoh section but for all MQTT5 based endpoints
-            config_file: "MQTT_CONFIG.json5",
-            endpoints: [
-                {
-                    authority: "authority-a",
-                    endpoint: "endpoint_mqtt_1",
-                    forwarding: [
-                        "endpoint_zenoh_1",
-                    ]
-                },
-            ]
-        },
-    }
+  ],
 }

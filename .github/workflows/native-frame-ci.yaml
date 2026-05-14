@@ -1,0 +1,20 @@
+name: native-frame-ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  native-frame-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Format
+        run: cargo fmt --check --all
+      - name: Check
+        run: cargo check --workspace --all-targets
+      - name: Test
+        run: cargo test --workspace -- --nocapture

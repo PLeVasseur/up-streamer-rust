@@ -19,12 +19,12 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, error, warn};
-use up_rust::core::usubscription::{
+use up_rust::{
     FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
     FetchSubscriptionsResponse, NotificationsRequest, ResetRequest, ResetResponse, SubscriberInfo,
-    Subscription, SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
+    Subscription, SubscriptionRequest, SubscriptionResponse, UCode, UStatus, USubscription, UUri,
+    UnsubscribeRequest,
 };
-use up_rust::{UCode, UStatus, UUri};
 
 const STATIC_RESOURCE_ID: u32 = 0x8001;
 
@@ -168,7 +168,10 @@ impl USubscriptionStaticFile {
             };
 
             if topic.resource_id != STATIC_RESOURCE_ID {
-                warn!("Setting fixed resource_id {STATIC_RESOURCE_ID:#06X} for topic '{topic}'");
+                warn!(
+                    "Setting fixed resource_id {STATIC_RESOURCE_ID:#06X} for topic '{}'",
+                    topic.to_uri(false)
+                );
                 topic.resource_id = STATIC_RESOURCE_ID;
             }
 
@@ -199,13 +202,10 @@ impl USubscriptionStaticFile {
                 subscriptions_by_key
                     .entry(subscription_identity)
                     .or_insert_with(|| Subscription {
-                        topic: Some(topic.clone()).into(),
+                        topic: Some(topic.clone()),
                         subscriber: Some(SubscriberInfo {
-                            uri: Some(subscriber_uri).into(),
-                            ..Default::default()
-                        })
-                        .into(),
-                        ..Default::default()
+                            uri: Some(subscriber_uri),
+                        }),
                     });
             }
         }
@@ -271,7 +271,6 @@ impl USubscription for USubscriptionStaticFile {
 
         Ok(FetchSubscriptionsResponse {
             subscriptions: subscriptions.as_ref().clone(),
-            ..Default::default()
         })
     }
 
@@ -312,14 +311,14 @@ impl USubscription for USubscriptionStaticFile {
         let mut subscribers_by_key: HashMap<UriProjectionKey, SubscriberInfo> = HashMap::new();
 
         for subscription in subscriptions.iter().cloned() {
-            let Some(topic) = subscription.topic.into_option() else {
+            let Some(topic) = subscription.topic else {
                 continue;
             };
             if UriProjectionKey::from(topic) != requested_topic_identity {
                 continue;
             }
 
-            let Some(subscriber) = subscription.subscriber.into_option() else {
+            let Some(subscriber) = subscription.subscriber else {
                 continue;
             };
             let Some(subscriber_uri) = subscriber.uri.as_ref() else {
@@ -333,12 +332,11 @@ impl USubscription for USubscriptionStaticFile {
 
         Ok(FetchSubscribersResponse {
             subscribers: subscribers_by_key.into_values().collect(),
-            ..Default::default()
         })
     }
 
     async fn reset(&self, _reset_request: ResetRequest) -> Result<ResetResponse, UStatus> {
-        Ok(ResetResponse::default())
+        Ok(ResetResponse)
     }
 }
 
@@ -349,10 +347,7 @@ mod tests {
     use std::fs;
     use std::str::FromStr;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use up_rust::core::usubscription::{
-        FetchSubscribersRequest, FetchSubscriptionsRequest, USubscription,
-    };
-    use up_rust::UUri;
+    use up_rust::{FetchSubscribersRequest, FetchSubscriptionsRequest, USubscription, UUri};
 
     static TEST_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -376,7 +371,6 @@ mod tests {
             ue_id: 0x5BA0,
             ue_version_major: 0x1,
             resource_id: 0x8001,
-            ..Default::default()
         };
 
         let key_from_borrowed = super::UriProjectionKey::from(&uri);
@@ -392,7 +386,6 @@ mod tests {
             ue_id: 0x5BA0,
             ue_version_major: 0x1FF,
             resource_id: 0x1_8001,
-            ..Default::default()
         };
 
         let key = super::UriProjectionKey::from(&uri);
@@ -422,9 +415,7 @@ mod tests {
 
         let response = backend
             .fetch_subscribers(FetchSubscribersRequest {
-                topic: Some(UUri::from_str("//authority-a/5BA0/1/FFFF").expect("valid topic"))
-                    .into(),
-                ..Default::default()
+                topic: Some(UUri::from_str("//authority-a/5BA0/1/FFFF").expect("valid topic")),
             })
             .await
             .expect("fetch_subscribers should succeed");
@@ -434,7 +425,7 @@ mod tests {
         let subscriber_uris: HashSet<String> = response
             .subscribers
             .into_iter()
-            .filter_map(|subscriber| subscriber.uri.into_option())
+            .filter_map(|subscriber| subscriber.uri)
             .map(|subscriber_uri| subscriber_uri.to_uri(false))
             .collect();
 
@@ -457,7 +448,7 @@ mod tests {
         );
 
         let first = backend
-            .fetch_subscriptions(FetchSubscriptionsRequest::default())
+            .fetch_subscriptions(FetchSubscriptionsRequest)
             .await
             .expect("initial fetch_subscriptions should succeed");
         assert_eq!(first.subscriptions.len(), 1);
@@ -465,7 +456,7 @@ mod tests {
         fs::write(&static_path, r#"{}"#).expect("overwrite static config");
 
         let second = backend
-            .fetch_subscriptions(FetchSubscriptionsRequest::default())
+            .fetch_subscriptions(FetchSubscriptionsRequest)
             .await
             .expect("cached fetch_subscriptions should succeed");
         assert_eq!(second.subscriptions.len(), 1);
@@ -475,7 +466,7 @@ mod tests {
             .expect("cache clear should succeed");
 
         let third = backend
-            .fetch_subscriptions(FetchSubscriptionsRequest::default())
+            .fetch_subscriptions(FetchSubscriptionsRequest)
             .await
             .expect("post-clear fetch_subscriptions should succeed");
         assert!(third.subscriptions.is_empty());
@@ -493,7 +484,7 @@ mod tests {
         let backend = USubscriptionStaticFile::new(static_path.to_string_lossy().to_string());
 
         let first = backend
-            .fetch_subscriptions(FetchSubscriptionsRequest::default())
+            .fetch_subscriptions(FetchSubscriptionsRequest)
             .await
             .expect("initial fetch_subscriptions should succeed");
         assert_eq!(first.subscriptions.len(), 1);
@@ -510,7 +501,7 @@ mod tests {
         .expect("overwrite static config");
 
         let second = backend
-            .fetch_subscriptions(FetchSubscriptionsRequest::default())
+            .fetch_subscriptions(FetchSubscriptionsRequest)
             .await
             .expect("reload fetch_subscriptions should succeed");
         assert_eq!(second.subscriptions.len(), 2);

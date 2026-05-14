@@ -13,15 +13,13 @@
 resolver = "2"
 members = [
     "example-streamer-uses",
-    "utils/hello-world-protos",
-    "utils/integration-test-utils",
     "example-streamer-implementations",
     "utils/criterion-guardrail",
     "utils/transport-smoke-suite",
     "configurable-streamer",
-    "up-linux-streamer-plugin",
     "up-streamer",
     "utils/usubscription-static-file",
+    "native-frame-streamer",
 ]
 
 [workspace.package]
@@ -50,12 +48,11 @@ tokio = { version = "1.44", default-features = false, features = [
     "sync",
     "time",
     "macros",
+    "signal",
 ] }
-protobuf = { version = "3.7.2", features = ["with-bytes"] }
-up-rust = { version = "0.9", default-features = false }
-up-transport-zenoh = { version = "0.9.0" }
-up-transport-vsomeip = { git = "https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust", rev = "278ab26415559d6cb61f40facd21de822032cc83", default-features = false }
-up-transport-mqtt5 = { version = "0.4.0" }
+up-rust = { path = "/home/pete.levasseur/eclipse/uprotocol/up-rust", default-features = false }
+up-transport-zenoh = { path = "/home/pete.levasseur/opencode-project-agents/up-rust/reports/up-transport-zenoh-rust_zero-copy" }
+up-transport-iceoryx2-rust = { path = "/home/pete.levasseur/opencode-project-agents/up-rust/reports/up-transport-iceoryx2-rust_zero-copy" }
 zenoh = { version = "1.2.1", features = [
     "default",
     "plugins",

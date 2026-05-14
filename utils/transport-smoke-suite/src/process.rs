@@ -13,6 +13,11 @@
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
+use nix::{
+    errno::Errno,
+    sys::signal::{kill, Signal},
+    unistd::Pid,
+};
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -113,15 +118,7 @@ impl ManagedProcess {
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout_file))
             .stderr(Stdio::from(stderr_file));
-
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setpgid(0, 0) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        command.process_group(0);
 
         let child = command.spawn().with_context(|| {
             format!(
@@ -230,23 +227,17 @@ impl ManagedProcess {
     }
 
     fn signal_process_group(&self, signal: i32) -> Result<()> {
-        let target_pgid = -self.process_group_id;
-        let rc = unsafe { libc::kill(target_pgid, signal) };
-        if rc == 0 {
-            return Ok(());
+        let signal = Signal::try_from(signal)
+            .with_context(|| format!("unsupported process signal {signal}"))?;
+        match kill(Pid::from_raw(-self.process_group_id), signal) {
+            Ok(()) | Err(Errno::ESRCH) => Ok(()),
+            Err(error) => Err(anyhow!(
+                "unable to send signal {} to process group {}: {}",
+                signal,
+                self.process_group_id,
+                error
+            )),
         }
-
-        let error = std::io::Error::last_os_error();
-        if error.raw_os_error() == Some(libc::ESRCH) {
-            return Ok(());
-        }
-
-        Err(anyhow!(
-            "unable to send signal {} to process group {}: {}",
-            signal,
-            self.process_group_id,
-            error
-        ))
     }
 }
 

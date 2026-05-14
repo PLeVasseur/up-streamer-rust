@@ -29,41 +29,14 @@ If you only want to compile the library itself, you can as normal:
 cargo build
 ```
 
-### Also build the reference Zenoh, vsomeip streamer implementations
+### Build the native reference implementation
 
-You'll need to use the feature flags `vsomeip-transport`, `zenoh-transport` or `mqtt-transport` depending on which implementation you want to build. You then also have the option of including your own vsomeip or using one bundled in `up-transport-vsomeip`.
-
-For the bundled option, you have two options to set environment variables needed.
-
-#### Using `config.toml`
-
-Set the following environment variables (for example in your .cargo/config.toml file):
-
-```toml
-[env]
-GENERIC_CPP_STDLIB_PATH=<path to your c++ stdlib (for example /usr/include/c++/13)>
-ARCH_SPECIFIC_CPP_STDLIB_PATH=<path to your c++ stdlib (for example /usr/include/x86_64-linux-gnu/c++/13)>
-```
+The migrated workspace uses local native `up-rust`, Zenoh owned-frame transport, and iceoryx2 zero-copy transport integrations.
 
 ```bash
-cargo build --features vsomeip-transport,bundled-vsomeip,zenoh-transport
+cargo build --workspace
+cargo test --workspace
 ```
-
-#### Using `build/envsetup.sh`
-
-Alternatively, you may run:
-
-```shell
-build/envsetup.sh
-```
-
-to set the environment variables.
-
-The environment variables are necessary because of a workaround done in `up-transport-vsomeip` due to not being able to figure out another way to compile vsomeip without them. (If you can figure out how to avoid this, I'm all ears!)
-
-Please reference the documentation for [vsomeip-sys](https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust/tree/main/vsomeip-sys) for more details on:
-* the build requirements for vsomeip in the linked documentation in the COVESA repo
-* the environment variables which must be set
 
 ## Deterministic transport smoke capstone
 

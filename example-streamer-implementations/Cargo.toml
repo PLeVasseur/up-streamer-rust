@@ -21,30 +21,23 @@ license.workspace = true
 
 [[bin]]
 name = "zenoh_someip"
-required-features = ["zenoh-transport", "vsomeip-transport"]
 
 [features]
 default = []
-zenoh-transport = ["up-transport-zenoh", "zenoh"]
-vsomeip-transport = ["up-transport-vsomeip"]
-bundled-vsomeip = ["up-transport-vsomeip/bundled"]
+zenoh-transport = []
+vsomeip-transport = []
+bundled-vsomeip = []
 
 [dependencies]
 async-trait = { workspace = true }
-chrono = { version = "0.4" }
 clap = { version = "4.5.9", features = ["derive"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 json5 = { workspace = true }
-protobuf = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
 up-rust = { workspace = true }
 up-streamer = { path = "../up-streamer" }
-up-transport-zenoh = { workspace = true, optional = true }
-up-transport-vsomeip = { workspace = true, optional = true }
-zenoh = { workspace = true, optional = true }
+up-transport-iceoryx2-rust = { workspace = true }
+up-transport-zenoh = { workspace = true }
 usubscription-static-file = { path = "../utils/usubscription-static-file" }
-
-[dev-dependencies]
-hello-world-protos = { path = "../utils/hello-world-protos" }
