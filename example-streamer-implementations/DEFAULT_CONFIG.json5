@@ -63,7 +63,7 @@
       //     called
       //   * the `id` field should be chosen such that it matches the ue_id of the uE on the host
       //     device
-      config_file: "../../example-streamer-implementations/vsomeip-configs/point_to_point.json",
+      config_file: "vsomeip-configs/point_to_point.json",
       // An ID to use for a vsomeip application which will represent all subscriptions to
       // publish messages output over vsomeip
       default_someip_application_id_for_someip_subscriptions: 10

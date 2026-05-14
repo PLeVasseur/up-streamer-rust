@@ -153,22 +153,22 @@ pub struct ScenarioTemplate {
 }
 
 const BUILD_MQTT_RR_ZENOH_CLIENT: &[&str] = &[
-    "cargo build -p configurable-streamer",
+    "cargo build -p configurable-streamer --features mqtt-transport",
     "cargo build -p example-streamer-uses --bin zenoh_client --features zenoh-transport",
     "cargo build -p example-streamer-uses --bin mqtt_service --features mqtt-transport",
 ];
 const BUILD_MQTT_RR_MQTT_CLIENT: &[&str] = &[
-    "cargo build -p configurable-streamer",
+    "cargo build -p configurable-streamer --features mqtt-transport",
     "cargo build -p example-streamer-uses --bin mqtt_client --features mqtt-transport",
     "cargo build -p example-streamer-uses --bin zenoh_service --features zenoh-transport",
 ];
 const BUILD_MQTT_PS_ZENOH_PUBLISHER: &[&str] = &[
-    "cargo build -p configurable-streamer",
+    "cargo build -p configurable-streamer --features mqtt-transport",
     "cargo build -p example-streamer-uses --bin zenoh_publisher --features zenoh-transport",
     "cargo build -p example-streamer-uses --bin mqtt_subscriber --features mqtt-transport",
 ];
 const BUILD_MQTT_PS_MQTT_PUBLISHER: &[&str] = &[
-    "cargo build -p configurable-streamer",
+    "cargo build -p configurable-streamer --features mqtt-transport",
     "cargo build -p example-streamer-uses --bin mqtt_publisher --features mqtt-transport",
     "cargo build -p example-streamer-uses --bin zenoh_subscriber --features zenoh-transport",
 ];
@@ -200,6 +200,7 @@ const REQUIRED_MQTT_PATHS: &[&str] = &[
 ];
 const REQUIRED_SOMEIP_PATHS: &[&str] = &[
     "example-streamer-implementations/DEFAULT_CONFIG.json5",
+    "example-streamer-implementations/DEFAULT_CONFIG_ZENOH_SERVICE.json5",
     "example-streamer-uses/vsomeip-configs/someip_client.json",
     "example-streamer-uses/vsomeip-configs/someip_publisher.json",
     "example-streamer-uses/vsomeip-configs/someip_service.json",
@@ -446,7 +447,7 @@ const SCENARIO_SOMEIP_RR_SOMEIP_CLIENT_ZENOH_SERVICE: ScenarioTemplate = Scenari
         name: "streamer",
         workdir: "example-streamer-implementations",
         binary: "zenoh_someip",
-        args: &["--config", "DEFAULT_CONFIG.json5"],
+        args: &["--config", "DEFAULT_CONFIG_ZENOH_SERVICE.json5"],
         env: SOMEIP_STREAMER_ENV,
         log_file: "streamer.log",
         readiness_marker: Some(env::READY_STREAMER_INITIALIZED),

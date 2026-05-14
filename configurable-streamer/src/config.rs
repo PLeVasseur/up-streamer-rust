@@ -42,6 +42,22 @@ pub struct EndpointConfig {
     #[serde(default)]
     pub(crate) zenoh_config_file: Option<String>,
     #[serde(default)]
+    pub(crate) mqtt_broker_uri: Option<String>,
+    #[serde(default)]
+    pub(crate) mqtt_client_id: Option<String>,
+    #[serde(default)]
+    pub(crate) mqtt_mode: MqttMode,
+    #[serde(default)]
+    pub(crate) vsomeip_config_file: Option<String>,
+    #[serde(default)]
+    pub(crate) remote_authority: Option<String>,
+    #[serde(default)]
+    pub(crate) local_uentity: Option<u32>,
+    #[serde(default)]
+    pub(crate) local_uversion: Option<u8>,
+    #[serde(default)]
+    pub(crate) local_resource: Option<u16>,
+    #[serde(default)]
     pub(crate) forwarding: Vec<String>,
 }
 
@@ -50,4 +66,14 @@ pub struct EndpointConfig {
 pub enum TransportKind {
     ZenohOwned,
     Iceoryx2ZeroCopy,
+    Mqtt5Owned,
+    VsomeipOwned,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum MqttMode {
+    #[default]
+    InVehicle,
+    OffVehicle,
 }

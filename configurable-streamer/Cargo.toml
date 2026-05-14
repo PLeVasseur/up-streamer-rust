@@ -19,9 +19,15 @@ edition.workspace = true
 keywords.workspace = true
 license.workspace = true
 
+[features]
+default = []
+mqtt-transport = ["dep:up-transport-mqtt5"]
+vsomeip-transport = ["dep:up-transport-vsomeip"]
+bundled-vsomeip = ["up-transport-vsomeip/bundled"]
+
 [dependencies]
 async-trait = { workspace = true }
-clap = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
 json5 = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
@@ -30,5 +36,7 @@ tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
 up-streamer = { path = "../up-streamer" }
 up-transport-iceoryx2-rust = { workspace = true }
+up-transport-mqtt5 = { workspace = true, optional = true }
+up-transport-vsomeip = { workspace = true, optional = true }
 up-transport-zenoh = { workspace = true }
 usubscription-static-file = { path = "../utils/usubscription-static-file" }

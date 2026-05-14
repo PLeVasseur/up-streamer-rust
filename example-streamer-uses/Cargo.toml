@@ -57,10 +57,10 @@ name = "mqtt_subscriber"
 
 [features]
 default = []
-zenoh-transport = []
-vsomeip-transport = []
-bundled-vsomeip = []
-mqtt-transport = []
+zenoh-transport = ["dep:up-transport-zenoh"]
+vsomeip-transport = ["dep:up-transport-vsomeip"]
+bundled-vsomeip = ["up-transport-vsomeip/bundled"]
+mqtt-transport = ["dep:up-transport-mqtt5"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -71,5 +71,7 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
-up-transport-zenoh = { workspace = true }
+up-transport-mqtt5 = { workspace = true, optional = true }
+up-transport-vsomeip = { workspace = true, optional = true }
+up-transport-zenoh = { workspace = true, optional = true }
 zenoh = { workspace = true }

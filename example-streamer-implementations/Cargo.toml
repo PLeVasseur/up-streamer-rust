@@ -24,9 +24,9 @@ name = "zenoh_someip"
 
 [features]
 default = []
-zenoh-transport = []
-vsomeip-transport = []
-bundled-vsomeip = []
+zenoh-transport = ["dep:up-transport-zenoh"]
+vsomeip-transport = ["dep:up-transport-vsomeip"]
+bundled-vsomeip = ["up-transport-vsomeip/bundled"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -39,5 +39,6 @@ tokio = { workspace = true, features = ["signal"] }
 up-rust = { workspace = true }
 up-streamer = { path = "../up-streamer" }
 up-transport-iceoryx2-rust = { workspace = true }
-up-transport-zenoh = { workspace = true }
+up-transport-vsomeip = { workspace = true, optional = true }
+up-transport-zenoh = { workspace = true, optional = true }
 usubscription-static-file = { path = "../utils/usubscription-static-file" }

@@ -1,0 +1,34 @@
+{
+    up_streamer_config: {
+      message_queue_size: 10000
+    },
+    streamer_uuri: {
+      authority: "authority-b",
+      ue_id: 78,
+      ue_version_major: 1
+    },
+    usubscription_config: {
+      mode: "static_file",
+      file_path: "../example-streamer-implementations/subscription_data.json"
+    },
+    zenoh_transport_config: {
+      config_file: "../example-streamer-implementations/ZENOH_CONFIG.json5"
+    },
+    host_config: {
+      transport: "Zenoh",
+    },
+    mqtt_config: {
+      authority: "authority-a",
+      hostname: "localhost",
+      port: 1883,
+      max_buffered_messages: 100,
+      max_subscriptions: 100,
+      session_expiry_interval: 3600,
+      username: "user"
+    },
+    someip_config: {
+      authority: "authority-a",
+      config_file: "vsomeip-configs/point_to_point_zenoh_service.json",
+      default_someip_application_id_for_someip_subscriptions: 10
+    },
+}

@@ -11,7 +11,10 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::Arc,
+};
 
 use tokio::{sync::mpsc, task::JoinHandle};
 use up_rust::{
@@ -21,12 +24,20 @@ use up_rust::{
 
 use crate::{endpoint::NativeIngressRegistration, Endpoint, SubscriptionSyncHealth, TransportMode};
 
+const RECENT_FRAME_ID_LIMIT: usize = 1024;
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct RouteKey {
     ingress_name: String,
     ingress_authority: String,
     egress_name: String,
     egress_authority: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RouteFilter {
+    source: UUri,
+    sink: Option<UUri>,
 }
 
 impl RouteKey {
@@ -130,18 +141,73 @@ impl UStreamer {
 
         let (tx, mut rx) = mpsc::channel::<UOwnedFrame>(self.message_queue_size);
         let mut registrations = Vec::new();
-        for source_filter in self.source_filters_for_route(ingress, egress) {
+        for route_filter in self.filters_for_route(ingress, egress) {
             registrations.push(
                 ingress
                     .transport
-                    .register_ingress(&source_filter, None, tx.clone())
+                    .register_ingress(&route_filter.source, route_filter.sink.as_ref(), tx.clone())
                     .await?,
             );
         }
+        let ingress_name = ingress.name.clone();
+        let ingress_authority = ingress.authority.clone();
+        let egress_name = egress.name.clone();
+        let egress_authority = egress.authority.clone();
         let egress_transport = egress.transport.clone();
         let dispatch_task = tokio::spawn(async move {
+            let mut recent_frame_ids = HashSet::new();
+            let mut recent_frame_order = VecDeque::new();
+            tracing::debug!(
+                ingress = %ingress_name,
+                ingress_authority = %ingress_authority,
+                egress = %egress_name,
+                egress_authority = %egress_authority,
+                "egress_worker_create"
+            );
             while let Some(frame) = rx.recv().await {
-                let _ = egress_transport.send_frame(frame).await;
+                let frame_id = frame.header().attributes().id().clone();
+                if !recent_frame_ids.insert(frame_id.clone()) {
+                    tracing::debug!(
+                        ingress = %ingress_name,
+                        ingress_authority = %ingress_authority,
+                        egress = %egress_name,
+                        egress_authority = %egress_authority,
+                        ?frame_id,
+                        "egress_duplicate_frame_skip"
+                    );
+                    continue;
+                }
+                recent_frame_order.push_back(frame_id);
+                if recent_frame_order.len() > RECENT_FRAME_ID_LIMIT {
+                    if let Some(expired_frame_id) = recent_frame_order.pop_front() {
+                        recent_frame_ids.remove(&expired_frame_id);
+                    }
+                }
+
+                tracing::debug!(
+                    ingress = %ingress_name,
+                    ingress_authority = %ingress_authority,
+                    egress = %egress_name,
+                    egress_authority = %egress_authority,
+                    "egress_send_attempt"
+                );
+                match egress_transport.send_frame(frame).await {
+                    Ok(()) => tracing::debug!(
+                        ingress = %ingress_name,
+                        ingress_authority = %ingress_authority,
+                        egress = %egress_name,
+                        egress_authority = %egress_authority,
+                        "egress_send_ok"
+                    ),
+                    Err(err) => tracing::debug!(
+                        ingress = %ingress_name,
+                        ingress_authority = %ingress_authority,
+                        egress = %egress_name,
+                        egress_authority = %egress_authority,
+                        ?err,
+                        "egress_send_failed"
+                    ),
+                }
             }
         });
 
@@ -192,10 +258,18 @@ impl UStreamer {
 }
 
 impl UStreamer {
-    fn source_filters_for_route(&self, ingress: &Endpoint, egress: &Endpoint) -> Vec<UUri> {
+    fn filters_for_route(&self, ingress: &Endpoint, egress: &Endpoint) -> Vec<RouteFilter> {
         let mut filters = Vec::new();
         if ingress.mode() == TransportMode::Owned {
-            filters.push(authority_to_wildcard_filter(&ingress.authority));
+            let source = authority_to_wildcard_filter(&ingress.authority);
+            filters.push(RouteFilter {
+                source: source.clone(),
+                sink: None,
+            });
+            filters.push(RouteFilter {
+                source,
+                sink: Some(authority_to_wildcard_filter(&egress.authority)),
+            });
         }
 
         for subscription in &self.subscription_snapshot.subscriptions {
@@ -214,13 +288,23 @@ impl UStreamer {
                 topic_authority == ingress.authority || topic_authority == "*";
             let subscriber_matches_egress =
                 subscriber_authority == egress.authority || subscriber_authority == "*";
-            if topic_matches_ingress && subscriber_matches_egress && !filters.contains(topic) {
-                filters.push(topic.clone());
+            let route_filter = RouteFilter {
+                source: topic.clone(),
+                sink: None,
+            };
+            if topic_matches_ingress
+                && subscriber_matches_egress
+                && !filters.contains(&route_filter)
+            {
+                filters.push(route_filter);
             }
         }
 
         if filters.is_empty() {
-            filters.push(authority_to_wildcard_filter(&ingress.authority));
+            filters.push(RouteFilter {
+                source: authority_to_wildcard_filter(&ingress.authority),
+                sink: None,
+            });
         }
         filters
     }
@@ -250,8 +334,9 @@ mod tests {
     use async_trait::async_trait;
     use up_rust::{
         FetchSubscribersRequest, FetchSubscribersResponse, NotificationsRequest, ResetRequest,
-        ResetResponse, Subscription, SubscriptionRequest, SubscriptionResponse, UFrameHeader,
-        UOwnedListener, UOwnedTransport, UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport,
+        ResetResponse, SubscriberInfo, Subscription, SubscriptionRequest, SubscriptionResponse,
+        UFrameHeader, UOwnedListener, UOwnedTransport, UVecTxBuffer, UZeroCopyListener,
+        UZeroCopyTransport,
     };
 
     use super::*;
@@ -315,6 +400,7 @@ mod tests {
     #[derive(Default)]
     struct MemoryOwnedTransport {
         listeners: Mutex<Vec<Arc<dyn UOwnedListener>>>,
+        filters: Mutex<Vec<(UUri, Option<UUri>)>>,
         sent: Mutex<Vec<UOwnedFrame>>,
     }
 
@@ -333,6 +419,10 @@ mod tests {
         fn sent(&self) -> Vec<UOwnedFrame> {
             self.sent.lock().expect("sent lock poisoned").clone()
         }
+
+        fn filters(&self) -> Vec<(UUri, Option<UUri>)> {
+            self.filters.lock().expect("filters lock poisoned").clone()
+        }
     }
 
     #[async_trait]
@@ -344,10 +434,14 @@ mod tests {
 
         async fn register_owned_listener(
             &self,
-            _source_filter: &UUri,
-            _sink_filter: Option<&UUri>,
+            source_filter: &UUri,
+            sink_filter: Option<&UUri>,
             listener: Arc<dyn UOwnedListener>,
         ) -> Result<(), UStatus> {
+            self.filters
+                .lock()
+                .expect("filters lock poisoned")
+                .push((source_filter.clone(), sink_filter.cloned()));
             self.listeners
                 .lock()
                 .expect("listeners lock poisoned")
@@ -447,6 +541,17 @@ mod tests {
         Arc::new(StaticSubscriptions::default())
     }
 
+    fn subscription_source_with(topic: UUri, subscriber: UUri) -> Arc<dyn USubscription> {
+        Arc::new(StaticSubscriptions {
+            subscriptions: vec![Subscription {
+                topic: Some(topic),
+                subscriber: Some(SubscriberInfo {
+                    uri: Some(subscriber),
+                }),
+            }],
+        })
+    }
+
     fn topic(authority: &str) -> UUri {
         UUri::try_from_parts(authority, 0x4210, 1, 0x9001).expect("valid topic")
     }
@@ -482,6 +587,55 @@ mod tests {
         yield_to_forwarder().await;
 
         assert_eq!(egress.sent()[0].payload_bytes(), b"streamed");
+    }
+
+    #[tokio::test]
+    async fn owned_routes_register_publish_and_point_to_point_filters() {
+        let ingress = Arc::new(MemoryOwnedTransport::default());
+        let egress = Arc::new(MemoryOwnedTransport::default());
+        let mut streamer = UStreamer::new("test", 8, subscription_source())
+            .await
+            .expect("streamer should build");
+
+        streamer
+            .add_route_ref(
+                &Endpoint::from_owned("in", "authority-a", ingress.clone()),
+                &Endpoint::from_owned("out", "authority-b", egress),
+            )
+            .await
+            .expect("route should register");
+
+        let filters = ingress.filters();
+        assert!(filters.contains(&(authority_to_wildcard_filter("authority-a"), None)));
+        assert!(filters.contains(&(
+            authority_to_wildcard_filter("authority-a"),
+            Some(authority_to_wildcard_filter("authority-b"))
+        )));
+    }
+
+    #[tokio::test]
+    async fn route_dispatch_suppresses_duplicate_owned_filter_matches() {
+        let ingress = Arc::new(MemoryOwnedTransport::default());
+        let egress = Arc::new(MemoryOwnedTransport::default());
+        let mut streamer = UStreamer::new(
+            "test",
+            8,
+            subscription_source_with(topic("authority-a"), topic("authority-b")),
+        )
+        .await
+        .expect("streamer should build");
+
+        streamer
+            .add_route_ref(
+                &Endpoint::from_owned("in", "authority-a", ingress.clone()),
+                &Endpoint::from_owned("out", "authority-b", egress.clone()),
+            )
+            .await
+            .expect("route should register");
+        ingress.inject(frame("authority-a")).await;
+        yield_to_forwarder().await;
+
+        assert_eq!(egress.sent().len(), 1);
     }
 
     #[tokio::test]

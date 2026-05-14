@@ -1,0 +1,18 @@
+{
+    "applications": [
+        {
+            "name": "foo",
+            "id": "0x1236"
+        }
+    ],
+    "services": [
+        {
+            "service": "0x1236",
+            "instance": "0x0001"
+        },
+        {
+            "service": "0x4321",
+            "instance": "0x0001"
+        }
+    ]
+}

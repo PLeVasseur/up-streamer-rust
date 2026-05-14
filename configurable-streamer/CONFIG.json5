@@ -3,20 +3,21 @@
     message_queue_size: 32,
   },
   usubscription_config: {
-    file_path: "configurable-streamer/static-subscriptions.json",
+    file_path: "subscription_data.json",
   },
   endpoints: [
     {
       name: "zenoh",
-      authority: "zenoh-authority",
+      authority: "authority-b",
       transport: "zenoh_owned",
-      zenoh_config_file: "configurable-streamer/ZENOH_CONFIG.json5",
-      forwarding: ["iceoryx2"],
+      zenoh_config_file: "ZENOH_CONFIG.json5",
+      forwarding: ["mqtt"],
     },
     {
-      name: "iceoryx2",
-      authority: "iceoryx2-authority",
-      transport: "iceoryx2_zero_copy",
+      name: "mqtt",
+      authority: "authority-a",
+      transport: "mqtt5_owned",
+      mqtt_broker_uri: "mqtt://localhost:1883",
       forwarding: ["zenoh"],
     },
   ],
