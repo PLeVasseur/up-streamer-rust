@@ -36,7 +36,7 @@ tracing-subscriber = { workspace = true }
 json5 = { workspace = true }
 serde = { workspace = true }
 tokio = { workspace = true, features = ["signal"] }
-up-rust = { workspace = true }
+up-rust = { workspace = true, features = ["protobuf-wire"] }
 up-streamer = { path = "../up-streamer" }
 up-transport-iceoryx2-rust = { workspace = true }
 up-transport-vsomeip = { workspace = true, optional = true }
