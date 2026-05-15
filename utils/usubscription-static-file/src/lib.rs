@@ -206,6 +206,7 @@ impl USubscriptionStaticFile {
                         subscriber: Some(SubscriberInfo {
                             uri: Some(subscriber_uri),
                         }),
+                        ..Default::default()
                     });
             }
         }
@@ -271,6 +272,7 @@ impl USubscription for USubscriptionStaticFile {
 
         Ok(FetchSubscriptionsResponse {
             subscriptions: subscriptions.as_ref().clone(),
+            ..Default::default()
         })
     }
 
@@ -332,6 +334,7 @@ impl USubscription for USubscriptionStaticFile {
 
         Ok(FetchSubscribersResponse {
             subscribers: subscribers_by_key.into_values().collect(),
+            ..Default::default()
         })
     }
 
@@ -419,6 +422,7 @@ mod tests {
         let response = backend
             .fetch_subscribers(FetchSubscribersRequest {
                 topic: Some(UUri::from_str("//authority-a/5BA0/1/FFFF").expect("valid topic")),
+                ..Default::default()
             })
             .await
             .expect("fetch_subscribers should succeed");
@@ -451,7 +455,7 @@ mod tests {
         );
 
         let first = backend
-            .fetch_subscriptions(FetchSubscriptionsRequest)
+            .fetch_subscriptions(FetchSubscriptionsRequest::default())
             .await
             .expect("initial fetch_subscriptions should succeed");
         assert_eq!(first.subscriptions.len(), 1);
@@ -459,7 +463,7 @@ mod tests {
         fs::write(&static_path, r#"{}"#).expect("overwrite static config");
 
         let second = backend
-            .fetch_subscriptions(FetchSubscriptionsRequest)
+            .fetch_subscriptions(FetchSubscriptionsRequest::default())
             .await
             .expect("cached fetch_subscriptions should succeed");
         assert_eq!(second.subscriptions.len(), 1);
@@ -469,7 +473,7 @@ mod tests {
             .expect("cache clear should succeed");
 
         let third = backend
-            .fetch_subscriptions(FetchSubscriptionsRequest)
+            .fetch_subscriptions(FetchSubscriptionsRequest::default())
             .await
             .expect("post-clear fetch_subscriptions should succeed");
         assert!(third.subscriptions.is_empty());
@@ -487,7 +491,7 @@ mod tests {
         let backend = USubscriptionStaticFile::new(static_path.to_string_lossy().to_string());
 
         let first = backend
-            .fetch_subscriptions(FetchSubscriptionsRequest)
+            .fetch_subscriptions(FetchSubscriptionsRequest::default())
             .await
             .expect("initial fetch_subscriptions should succeed");
         assert_eq!(first.subscriptions.len(), 1);
@@ -504,7 +508,7 @@ mod tests {
         .expect("overwrite static config");
 
         let second = backend
-            .fetch_subscriptions(FetchSubscriptionsRequest)
+            .fetch_subscriptions(FetchSubscriptionsRequest::default())
             .await
             .expect("reload fetch_subscriptions should succeed");
         assert_eq!(second.subscriptions.len(), 2);

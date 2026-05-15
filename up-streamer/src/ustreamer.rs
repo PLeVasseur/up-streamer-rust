@@ -113,7 +113,7 @@ impl UStreamer {
 
         match self
             .usubscription
-            .fetch_subscriptions(FetchSubscriptionsRequest)
+            .fetch_subscriptions(FetchSubscriptionsRequest::default())
             .await
         {
             Ok(snapshot) => {
@@ -379,6 +379,7 @@ mod tests {
         ) -> Result<FetchSubscriptionsResponse, UStatus> {
             Ok(FetchSubscriptionsResponse {
                 subscriptions: self.subscriptions.clone(),
+                ..Default::default()
             })
         }
 
@@ -627,6 +628,7 @@ mod tests {
                 subscriber: Some(SubscriberInfo {
                     uri: Some(subscriber),
                 }),
+                ..Default::default()
             }],
         })
     }

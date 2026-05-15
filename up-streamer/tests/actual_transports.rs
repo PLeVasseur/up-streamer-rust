@@ -54,6 +54,7 @@ impl USubscription for StaticSubscriptions {
     ) -> Result<FetchSubscriptionsResponse, UStatus> {
         Ok(FetchSubscriptionsResponse {
             subscriptions: self.subscriptions.clone(),
+            ..Default::default()
         })
     }
 
@@ -118,6 +119,7 @@ fn subscription(topic: UUri, subscriber: UUri) -> Subscription {
         subscriber: Some(SubscriberInfo {
             uri: Some(subscriber),
         }),
+        ..Default::default()
     }
 }
 
