@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use protobuf::well_known_types::wrappers::StringValue;
 use tokio::sync::mpsc;
 use up_rust::usubscription::{
-    FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
+    to_proto_uri, FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
     FetchSubscriptionsResponse, NotificationsRequest, ResetRequest, ResetResponse, SubscriberInfo,
     Subscription, SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
 };
@@ -84,7 +84,7 @@ impl USubscription for StaticSubscriptions {
     }
 
     async fn reset(&self, _reset_request: ResetRequest) -> Result<ResetResponse, UStatus> {
-        Ok(ResetResponse)
+        Ok(ResetResponse::default())
     }
 }
 
@@ -115,10 +115,12 @@ fn subscriptions(subscriptions: Vec<Subscription>) -> Arc<dyn USubscription> {
 
 fn subscription(topic: UUri, subscriber: UUri) -> Subscription {
     Subscription {
-        topic: Some(topic),
+        topic: Some(to_proto_uri(&topic)).into(),
         subscriber: Some(SubscriberInfo {
-            uri: Some(subscriber),
-        }),
+            uri: Some(to_proto_uri(&subscriber)).into(),
+            ..Default::default()
+        })
+        .into(),
         ..Default::default()
     }
 }

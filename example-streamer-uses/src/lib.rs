@@ -182,12 +182,7 @@ fn build_uuri(authority: &str, uentity: u32, uversion: u8, resource: u16) -> Res
 }
 
 fn wildcard(authority: &str) -> UUri {
-    UUri {
-        authority_name: authority.to_string(),
-        ue_id: 0xFFFF_FFFF,
-        ue_version_major: 0xFF,
-        resource_id: 0xFFFF,
-    }
+    UUri::try_from_parts(authority, 0xFFFF_FFFF, 0xFF, 0xFFFF).expect("valid wildcard filter")
 }
 
 fn publish_topic(args: &NativeExampleArgs, transport: ExampleTransport) -> Result<UUri, UStatus> {

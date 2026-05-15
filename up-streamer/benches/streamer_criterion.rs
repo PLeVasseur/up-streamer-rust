@@ -72,7 +72,7 @@ impl USubscription for EmptySubscriptions {
     }
 
     async fn reset(&self, _reset_request: ResetRequest) -> Result<ResetResponse, UStatus> {
-        Ok(ResetResponse)
+        Ok(ResetResponse::default())
     }
 }
 
@@ -178,12 +178,7 @@ fn topic(authority: &str) -> UUri {
 }
 
 fn wildcard_filter(authority: &str) -> UUri {
-    UUri {
-        authority_name: authority.to_string(),
-        ue_id: 0xFFFF_FFFF,
-        ue_version_major: 0xFF,
-        resource_id: 0xFFFF,
-    }
+    UUri::try_from_parts(authority, 0xFFFF_FFFF, 0xFF, 0xFFFF).expect("valid wildcard filter")
 }
 
 fn frame(authority: &str) -> UOwnedFrame {

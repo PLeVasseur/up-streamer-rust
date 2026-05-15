@@ -20,13 +20,14 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, error, warn};
 use up_rust::usubscription::{
-    FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
-    FetchSubscriptionsResponse, NotificationsRequest, ResetRequest, ResetResponse, SubscriberInfo,
-    Subscription, SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
+    to_proto_uri, FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
+    FetchSubscriptionsResponse, NotificationsRequest, ProtoUUri, ResetRequest, ResetResponse,
+    SubscriberInfo, Subscription, SubscriptionRequest, SubscriptionResponse, USubscription,
+    UnsubscribeRequest,
 };
 use up_rust::{UCode, UStatus, UUri};
 
-const STATIC_RESOURCE_ID: u32 = 0x8001;
+const STATIC_RESOURCE_ID: u16 = 0x8001;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum StaticFileReloadStrategy {
@@ -45,14 +46,11 @@ struct UriProjectionKey {
 
 impl From<UUri> for UriProjectionKey {
     fn from(uri: UUri) -> Self {
-        let ue_version_major = uri.uentity_major_version();
-        let resource_id = uri.resource_id();
-
         Self {
-            authority_name: uri.authority_name,
-            ue_id: uri.ue_id,
-            ue_version_major,
-            resource_id,
+            authority_name: uri.authority_name(),
+            ue_id: uri.ue_id(),
+            ue_version_major: uri.uentity_major_version(),
+            resource_id: uri.resource_id(),
         }
     }
 }
@@ -61,9 +59,26 @@ impl From<&UUri> for UriProjectionKey {
     fn from(uri: &UUri) -> Self {
         Self {
             authority_name: uri.authority_name(),
-            ue_id: uri.ue_id,
+            ue_id: uri.ue_id(),
             ue_version_major: uri.uentity_major_version(),
             resource_id: uri.resource_id(),
+        }
+    }
+}
+
+impl From<ProtoUUri> for UriProjectionKey {
+    fn from(uri: ProtoUUri) -> Self {
+        Self::from(&uri)
+    }
+}
+
+impl From<&ProtoUUri> for UriProjectionKey {
+    fn from(uri: &ProtoUUri) -> Self {
+        Self {
+            authority_name: uri.authority_name.clone(),
+            ue_id: uri.ue_id,
+            ue_version_major: (uri.ue_version_major & 0xFF) as u8,
+            resource_id: (uri.resource_id & 0xFFFF) as u16,
         }
     }
 }
@@ -167,12 +182,12 @@ impl USubscriptionStaticFile {
                 }
             };
 
-            if topic.resource_id != STATIC_RESOURCE_ID {
+            if topic.resource_id() != STATIC_RESOURCE_ID {
                 warn!(
                     "Setting fixed resource_id {STATIC_RESOURCE_ID:#06X} for topic '{}'",
                     topic.to_uri(false)
                 );
-                topic.resource_id = STATIC_RESOURCE_ID;
+                topic = topic.with_resource_id(STATIC_RESOURCE_ID);
             }
 
             let Some(subscribers) = subscriber_values.as_array() else {
@@ -202,10 +217,12 @@ impl USubscriptionStaticFile {
                 subscriptions_by_key
                     .entry(subscription_identity)
                     .or_insert_with(|| Subscription {
-                        topic: Some(topic.clone()),
+                        topic: Some(to_proto_uri(&topic)).into(),
                         subscriber: Some(SubscriberInfo {
-                            uri: Some(subscriber_uri),
-                        }),
+                            uri: Some(to_proto_uri(&subscriber_uri)).into(),
+                            ..Default::default()
+                        })
+                        .into(),
                         ..Default::default()
                     });
             }
@@ -306,21 +323,21 @@ impl USubscription for USubscriptionStaticFile {
         })?;
 
         let mut canonical_topic = requested_topic.clone();
-        canonical_topic.resource_id = STATIC_RESOURCE_ID;
-        let requested_topic_identity = UriProjectionKey::from(canonical_topic);
+        canonical_topic.resource_id = u32::from(STATIC_RESOURCE_ID);
+        let requested_topic_identity = UriProjectionKey::from(&canonical_topic);
 
         let subscriptions = self.load_subscriptions()?;
         let mut subscribers_by_key: HashMap<UriProjectionKey, SubscriberInfo> = HashMap::new();
 
-        for subscription in subscriptions.iter().cloned() {
-            let Some(topic) = subscription.topic else {
+        for subscription in subscriptions.iter() {
+            let Some(topic) = subscription.topic.as_ref() else {
                 continue;
             };
             if UriProjectionKey::from(topic) != requested_topic_identity {
                 continue;
             }
 
-            let Some(subscriber) = subscription.subscriber else {
+            let Some(subscriber) = subscription.subscriber.as_ref() else {
                 continue;
             };
             let Some(subscriber_uri) = subscriber.uri.as_ref() else {
@@ -329,7 +346,7 @@ impl USubscription for USubscriptionStaticFile {
 
             subscribers_by_key
                 .entry(UriProjectionKey::from(subscriber_uri))
-                .or_insert(subscriber);
+                .or_insert_with(|| subscriber.clone());
         }
 
         Ok(FetchSubscribersResponse {
@@ -339,7 +356,7 @@ impl USubscription for USubscriptionStaticFile {
     }
 
     async fn reset(&self, _reset_request: ResetRequest) -> Result<ResetResponse, UStatus> {
-        Ok(ResetResponse)
+        Ok(ResetResponse::default())
     }
 }
 
@@ -351,7 +368,8 @@ mod tests {
     use std::str::FromStr;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use up_rust::usubscription::{
-        FetchSubscribersRequest, FetchSubscriptionsRequest, USubscription,
+        from_proto_uri, to_proto_uri, FetchSubscribersRequest, FetchSubscriptionsRequest,
+        USubscription,
     };
     use up_rust::UUri;
 
@@ -372,12 +390,7 @@ mod tests {
 
     #[test]
     fn uri_projection_key_owned_and_borrowed_conversion_match() {
-        let uri = UUri {
-            authority_name: "authority-a".to_string(),
-            ue_id: 0x5BA0,
-            ue_version_major: 0x1,
-            resource_id: 0x8001,
-        };
+        let uri = UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).unwrap();
 
         let key_from_borrowed = super::UriProjectionKey::from(&uri);
         let key_from_owned = super::UriProjectionKey::from(uri.clone());
@@ -387,12 +400,7 @@ mod tests {
 
     #[test]
     fn uri_projection_key_uses_canonical_major_and_resource_semantics() {
-        let uri = UUri {
-            authority_name: "authority-a".to_string(),
-            ue_id: 0x5BA0,
-            ue_version_major: 0x1FF,
-            resource_id: 0x1_8001,
-        };
+        let uri = UUri::from_parts_unchecked("authority-a", 0x5BA0, 0x1FF, 0x1_8001);
 
         let key = super::UriProjectionKey::from(&uri);
 
@@ -421,7 +429,10 @@ mod tests {
 
         let response = backend
             .fetch_subscribers(FetchSubscribersRequest {
-                topic: Some(UUri::from_str("//authority-a/5BA0/1/FFFF").expect("valid topic")),
+                topic: Some(to_proto_uri(
+                    &UUri::from_str("//authority-a/5BA0/1/FFFF").expect("valid topic"),
+                ))
+                .into(),
                 ..Default::default()
             })
             .await
@@ -432,8 +443,8 @@ mod tests {
         let subscriber_uris: HashSet<String> = response
             .subscribers
             .into_iter()
-            .filter_map(|subscriber| subscriber.uri)
-            .map(|subscriber_uri| subscriber_uri.to_uri(false))
+            .filter_map(|subscriber| subscriber.uri.into_option())
+            .map(|subscriber_uri| from_proto_uri(&subscriber_uri).to_uri(false))
             .collect();
 
         assert_eq!(subscriber_uris.len(), 3);

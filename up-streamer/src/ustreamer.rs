@@ -18,7 +18,7 @@ use std::{
 
 use tokio::{sync::mpsc, task::JoinHandle};
 use up_rust::usubscription::{
-    FetchSubscriptionsRequest, FetchSubscriptionsResponse, USubscription,
+    from_proto_uri, FetchSubscriptionsRequest, FetchSubscriptionsResponse, USubscription,
 };
 use up_rust::{UCode, UOwnedFrame, UOwnedListener, UStatus, UTransportEndpointRegistration, UUri};
 
@@ -297,6 +297,8 @@ impl UStreamer {
             let Some(subscriber_uri) = subscriber.uri.as_ref() else {
                 continue;
             };
+            let topic = from_proto_uri(topic);
+            let subscriber_uri = from_proto_uri(subscriber_uri);
             let topic_authority = topic.authority_name();
             let subscriber_authority = subscriber_uri.authority_name();
             let topic_matches_ingress =
@@ -304,7 +306,7 @@ impl UStreamer {
             let subscriber_matches_egress =
                 subscriber_authority == egress.authority || subscriber_authority == "*";
             let route_filter = RouteFilter {
-                source: topic.clone(),
+                source: topic,
                 sink: None,
             };
             if topic_matches_ingress
@@ -334,12 +336,8 @@ impl Drop for UStreamer {
 }
 
 fn authority_to_wildcard_filter(authority_name: &str) -> UUri {
-    UUri {
-        authority_name: authority_name.to_string(),
-        ue_id: 0xFFFF_FFFF,
-        ue_version_major: 0xFF,
-        resource_id: 0xFFFF,
-    }
+    UUri::try_from_parts(authority_name, 0xFFFF_FFFF, 0xFF, 0xFFFF)
+        .expect("wildcard URI authority must be valid")
 }
 
 #[cfg(test)]
@@ -348,9 +346,9 @@ mod tests {
 
     use async_trait::async_trait;
     use up_rust::usubscription::{
-        FetchSubscribersRequest, FetchSubscribersResponse, NotificationsRequest, ResetRequest,
-        ResetResponse, SubscriberInfo, Subscription, SubscriptionRequest, SubscriptionResponse,
-        UnsubscribeRequest,
+        to_proto_uri, FetchSubscribersRequest, FetchSubscribersResponse, NotificationsRequest,
+        ResetRequest, ResetResponse, SubscriberInfo, Subscription, SubscriptionRequest,
+        SubscriptionResponse, UnsubscribeRequest,
     };
     use up_rust::{
         UFrameMetadata, UOwnedListener, UOwnedTransport, UVecTxBuffer, UZeroCopyListener,
@@ -412,7 +410,7 @@ mod tests {
         }
 
         async fn reset(&self, _reset_request: ResetRequest) -> Result<ResetResponse, UStatus> {
-            Ok(ResetResponse)
+            Ok(ResetResponse::default())
         }
     }
 
@@ -624,10 +622,12 @@ mod tests {
     fn subscription_source_with(topic: UUri, subscriber: UUri) -> Arc<dyn USubscription> {
         Arc::new(StaticSubscriptions {
             subscriptions: vec![Subscription {
-                topic: Some(topic),
+                topic: Some(to_proto_uri(&topic)).into(),
                 subscriber: Some(SubscriberInfo {
-                    uri: Some(subscriber),
-                }),
+                    uri: Some(to_proto_uri(&subscriber)).into(),
+                    ..Default::default()
+                })
+                .into(),
                 ..Default::default()
             }],
         })

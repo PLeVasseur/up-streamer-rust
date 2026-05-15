@@ -26,21 +26,9 @@ pub fn remote_authority_b() -> String {
 }
 
 pub fn local_client_uuri(id: u32) -> UUri {
-    UUri {
-        authority_name: local_authority(),
-        ue_id: id,
-        ue_version_major: 1,
-        resource_id: 2,
-        ..Default::default()
-    }
+    UUri::try_from_parts(&local_authority(), id, 1, 2).expect("valid local test URI")
 }
 
 pub fn remote_client_uuri(authority: String, id: u32) -> UUri {
-    UUri {
-        authority_name: authority,
-        ue_id: id,
-        ue_version_major: 1,
-        resource_id: 2,
-        ..Default::default()
-    }
+    UUri::try_from_parts(&authority, id, 1, 2).expect("valid remote test URI")
 }

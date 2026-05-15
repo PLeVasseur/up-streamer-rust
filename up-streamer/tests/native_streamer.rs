@@ -70,7 +70,7 @@ impl USubscription for EmptySubscriptions {
     }
 
     async fn reset(&self, _reset_request: ResetRequest) -> Result<ResetResponse, UStatus> {
-        Ok(ResetResponse)
+        Ok(ResetResponse::default())
     }
 }
 
