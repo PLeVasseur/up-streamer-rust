@@ -19,7 +19,8 @@ mod real {
     use super::config::Config;
     use clap::Parser;
     use std::{fs::File, io::Read, path::Path, sync::Arc};
-    use up_rust::{UCode, UStatus, USubscription, UUri};
+    use up_rust::usubscription::USubscription;
+    use up_rust::{UCode, UStatus, UUri};
     use up_streamer::{Endpoint, UStreamer};
     use up_transport_vsomeip::UPTransportVsomeip;
     use up_transport_zenoh::{zenoh_config::Config as ZenohConfig, UPTransportZenoh};

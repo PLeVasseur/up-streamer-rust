@@ -17,13 +17,16 @@ use std::time::Duration;
 use async_trait::async_trait;
 use protobuf::well_known_types::wrappers::StringValue;
 use tokio::sync::mpsc;
-use up_rust::{
+use up_rust::usubscription::{
     FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
-    FetchSubscriptionsResponse, NotificationsRequest, ProtobufWire, RawBytes, ResetRequest,
-    ResetResponse, SubscriberInfo, Subscription, SubscriptionRequest, SubscriptionResponse,
-    UAttributes, UCode, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener, UOwnedTransport,
-    UOwnedTransportExt, UPriority, UStatus, USubscription, UUri, UZeroCopyListener,
-    UZeroCopyRxFrame, UZeroCopyTransport, UZeroCopyTransportExt, WireFormat, UUID,
+    FetchSubscriptionsResponse, NotificationsRequest, ResetRequest, ResetResponse, SubscriberInfo,
+    Subscription, SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
+};
+use up_rust::{
+    ProtobufWire, RawBytes, UAttributes, UCode, UFrameMetadata, UMessageType, UOwnedFrame,
+    UOwnedListener, UOwnedTransport, UOwnedTransportExt, UPriority, UStatus, UUri,
+    UZeroCopyListener, UZeroCopyRxFrame, UZeroCopyTransport, UZeroCopyTransportExt, WireFormat,
+    UUID,
 };
 use up_streamer::{Endpoint, UStreamer};
 use up_transport_iceoryx2_rust::{
@@ -54,10 +57,7 @@ impl USubscription for StaticSubscriptions {
         })
     }
 
-    async fn unsubscribe(
-        &self,
-        _unsubscribe_request: up_rust::UnsubscribeRequest,
-    ) -> Result<(), UStatus> {
+    async fn unsubscribe(&self, _unsubscribe_request: UnsubscribeRequest) -> Result<(), UStatus> {
         Ok(())
     }
 

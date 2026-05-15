@@ -23,7 +23,8 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::info;
-use up_rust::{UCode, UStatus, USubscription};
+use up_rust::usubscription::USubscription;
+use up_rust::{UCode, UStatus};
 use up_streamer::{Endpoint, UStreamer};
 use up_transport_iceoryx2_rust::{transport::UTransportIceoryx2, MessagingPattern};
 #[cfg(feature = "mqtt-transport")]

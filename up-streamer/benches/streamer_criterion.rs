@@ -19,12 +19,12 @@ use std::sync::{
 use async_trait::async_trait;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use tokio::{runtime::Runtime, sync::Notify};
-use up_rust::{
+use up_rust::usubscription::{
     FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
     FetchSubscriptionsResponse, NotificationsRequest, ResetRequest, ResetResponse,
-    SubscriptionRequest, SubscriptionResponse, UFrameMetadata, UOwnedFrame, UOwnedListener,
-    UOwnedTransport, UStatus, USubscription, UUri,
+    SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
 };
+use up_rust::{UFrameMetadata, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UUri};
 use up_streamer::{Endpoint, UStreamer};
 
 #[derive(Default)]
@@ -46,10 +46,7 @@ impl USubscription for EmptySubscriptions {
         Ok(FetchSubscriptionsResponse::default())
     }
 
-    async fn unsubscribe(
-        &self,
-        _unsubscribe_request: up_rust::UnsubscribeRequest,
-    ) -> Result<(), UStatus> {
+    async fn unsubscribe(&self, _unsubscribe_request: UnsubscribeRequest) -> Result<(), UStatus> {
         Ok(())
     }
 

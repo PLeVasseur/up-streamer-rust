@@ -14,12 +14,14 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use up_rust::{
+use up_rust::usubscription::{
     FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
     FetchSubscriptionsResponse, NotificationsRequest, ResetRequest, ResetResponse,
-    SubscriptionRequest, SubscriptionResponse, UCode, UFrameMetadata, UMessageBuilder, UOwnedFrame,
-    UOwnedListener, UOwnedTransport, UStatus, USubscription, UUri, UVecTxBuffer, UZeroCopyListener,
-    UZeroCopyTransport,
+    SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
+};
+use up_rust::{
+    UCode, UFrameMetadata, UMessageBuilder, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus,
+    UUri, UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport,
 };
 use up_streamer::{Endpoint, TransportMode, UStreamer};
 
@@ -42,10 +44,7 @@ impl USubscription for EmptySubscriptions {
         Ok(FetchSubscriptionsResponse::default())
     }
 
-    async fn unsubscribe(
-        &self,
-        _unsubscribe_request: up_rust::UnsubscribeRequest,
-    ) -> Result<(), UStatus> {
+    async fn unsubscribe(&self, _unsubscribe_request: UnsubscribeRequest) -> Result<(), UStatus> {
         Ok(())
     }
 

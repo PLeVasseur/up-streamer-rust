@@ -17,10 +17,10 @@ use std::{
 };
 
 use tokio::{sync::mpsc, task::JoinHandle};
-use up_rust::{
-    FetchSubscriptionsRequest, FetchSubscriptionsResponse, UCode, UOwnedFrame, UOwnedListener,
-    UStatus, USubscription, UTransportEndpointRegistration, UUri,
+use up_rust::usubscription::{
+    FetchSubscriptionsRequest, FetchSubscriptionsResponse, USubscription,
 };
+use up_rust::{UCode, UOwnedFrame, UOwnedListener, UStatus, UTransportEndpointRegistration, UUri};
 
 use crate::{Endpoint, SubscriptionSyncHealth, TransportMode};
 
@@ -347,9 +347,12 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use up_rust::{
+    use up_rust::usubscription::{
         FetchSubscribersRequest, FetchSubscribersResponse, NotificationsRequest, ResetRequest,
         ResetResponse, SubscriberInfo, Subscription, SubscriptionRequest, SubscriptionResponse,
+        UnsubscribeRequest,
+    };
+    use up_rust::{
         UFrameMetadata, UOwnedListener, UOwnedTransport, UVecTxBuffer, UZeroCopyListener,
         UZeroCopyTransport,
     };
@@ -381,7 +384,7 @@ mod tests {
 
         async fn unsubscribe(
             &self,
-            _unsubscribe_request: up_rust::UnsubscribeRequest,
+            _unsubscribe_request: UnsubscribeRequest,
         ) -> Result<(), UStatus> {
             Ok(())
         }

@@ -19,12 +19,12 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, error, warn};
-use up_rust::{
+use up_rust::usubscription::{
     FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
     FetchSubscriptionsResponse, NotificationsRequest, ResetRequest, ResetResponse, SubscriberInfo,
-    Subscription, SubscriptionRequest, SubscriptionResponse, UCode, UStatus, USubscription, UUri,
-    UnsubscribeRequest,
+    Subscription, SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
 };
+use up_rust::{UCode, UStatus, UUri};
 
 const STATIC_RESOURCE_ID: u32 = 0x8001;
 
@@ -347,7 +347,10 @@ mod tests {
     use std::fs;
     use std::str::FromStr;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use up_rust::{FetchSubscribersRequest, FetchSubscriptionsRequest, USubscription, UUri};
+    use up_rust::usubscription::{
+        FetchSubscribersRequest, FetchSubscriptionsRequest, USubscription,
+    };
+    use up_rust::UUri;
 
     static TEST_FILE_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
