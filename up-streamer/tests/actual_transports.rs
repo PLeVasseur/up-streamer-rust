@@ -139,7 +139,7 @@ fn metadata_header(topic: UUri, token: &str, commstatus: UCode) -> (UFrameMetada
         .with_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00")
         .with_token(token)
         .with_permission_level(11)
-        .with_commstatus(commstatus);
+        .with_comm_status(commstatus);
     (
         UFrameMetadata::new(attributes, RawBytes::encoding()),
         id,

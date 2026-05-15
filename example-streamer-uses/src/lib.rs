@@ -453,7 +453,7 @@ impl UOwnedListener for PrintListener {
                     .metadata()
                     .attributes()
                     .clone()
-                    .with_commstatus(UCode::OK);
+                    .with_comm_status(UCode::OK);
                 println!("Sending Response message");
                 let _ = responder.send_owned(response).await;
             }
