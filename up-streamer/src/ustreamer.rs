@@ -20,7 +20,9 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use up_rust::usubscription::{
     from_proto_uri, FetchSubscriptionsRequest, FetchSubscriptionsResponse, USubscription,
 };
-use up_rust::{UCode, UOwnedFrame, UOwnedFrameEndpointRegistration, UOwnedListener, UStatus, UUri};
+use up_rust::{
+    transport::UOwnedFrameEndpointRegistration, UCode, UOwnedFrame, UOwnedListener, UStatus, UUri,
+};
 
 use crate::{OwnedFrameEndpoint, SubscriptionSyncHealth, TransportMode};
 
@@ -359,8 +361,9 @@ mod tests {
         SubscriptionResponse, UnsubscribeRequest,
     };
     use up_rust::{
-        UFrameMetadata, UOwnedListener, UOwnedTransport, UVecTxBuffer, UZeroCopyListener,
-        UZeroCopyTransport,
+        wire::{RawBytes, WireFormat},
+        zero_copy::{UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport},
+        UFrameMetadata, UOwnedListener, UOwnedTransport,
     };
 
     use super::*;
@@ -647,7 +650,7 @@ mod tests {
 
     fn frame(authority: &str) -> UOwnedFrame {
         UOwnedFrame::new(
-            UFrameMetadata::publish(topic(authority)),
+            UFrameMetadata::publish(topic(authority)).with_encoding(RawBytes::encoding()),
             b"streamed".as_slice(),
         )
     }

@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use clap::Parser;
 use tokio::sync::mpsc;
 use up_rust::{
-    RawBytes, UCode, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener, UOwnedTransport,
-    UOwnedTransportExt, UStatus, UUri,
+    wire::RawBytes, UCode, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener,
+    UOwnedTransport, UOwnedTransportExt, UStatus, UUri,
 };
 #[cfg(feature = "mqtt-transport")]
 use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions};
@@ -440,20 +440,23 @@ impl UOwnedListener for PrintListener {
                     let _ = self.tx.send(frame);
                     return;
                 };
-                let mut response = UOwnedFrame::from_serializable::<RawBytes, _>(
-                    UFrameMetadata::response(
-                        reply_to,
-                        frame.metadata().attributes().id().clone(),
-                        invoked_method,
-                    ),
+                let response_metadata = UFrameMetadata::response(
+                    reply_to,
+                    frame.metadata().attributes().id().clone(),
+                    invoked_method,
+                );
+                let response_metadata = UFrameMetadata::new(
+                    response_metadata
+                        .attributes()
+                        .clone()
+                        .with_comm_status(UCode::OK),
+                    response_metadata.encoding().cloned(),
+                );
+                let response = UOwnedFrame::from_serializable::<RawBytes, _>(
+                    response_metadata,
                     &&b"native response"[..],
                 )
                 .expect("raw response serialization should not fail");
-                *response.metadata_mut().attributes_mut() = response
-                    .metadata()
-                    .attributes()
-                    .clone()
-                    .with_comm_status(UCode::OK);
                 println!("Sending Response message");
                 let _ = responder.send_owned(response).await;
             }

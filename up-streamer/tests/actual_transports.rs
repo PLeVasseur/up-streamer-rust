@@ -23,10 +23,10 @@ use up_rust::usubscription::{
     Subscription, SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
 };
 use up_rust::{
-    ProtobufWire, RawBytes, UAttributes, UCode, UFrameMetadata, UMessageType, UOwnedFrame,
-    UOwnedListener, UOwnedTransport, UOwnedTransportExt, UPriority, UStatus, UUri,
-    UZeroCopyListener, UZeroCopyRxFrame, UZeroCopyTransport, UZeroCopyTransportExt, WireFormat,
-    UUID,
+    wire::{RawBytes, WireFormat},
+    zero_copy::{UZeroCopyListener, UZeroCopyRxFrame, UZeroCopyTransport, UZeroCopyTransportExt},
+    ProtobufWire, UAttributes, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener,
+    UOwnedTransport, UOwnedTransportExt, UPriority, UStatus, UUri, UUID,
 };
 use up_streamer::{OwnedFrameEndpoint, UStreamer};
 use up_transport_iceoryx2_rust::{
@@ -129,32 +129,16 @@ fn make_topic(authority: &str, resource: u16) -> UUri {
     UUri::try_from_parts(authority, 0x4210, 1, resource).expect("valid topic")
 }
 
-fn metadata_header(topic: UUri, token: &str, commstatus: UCode) -> (UFrameMetadata, UUID, UUID) {
+fn metadata_header(topic: UUri) -> (UFrameMetadata, UUID) {
     let id = UUID::build();
-    let request_id = UUID::build();
     let attributes = UAttributes::new(id.clone(), topic, None, UMessageType::Publish)
         .with_priority(UPriority::CS5)
         .with_ttl(3_000)
-        .with_request_id(request_id.clone())
-        .with_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00")
-        .with_token(token)
-        .with_permission_level(11)
-        .with_comm_status(commstatus);
-    (
-        UFrameMetadata::new(attributes, RawBytes::encoding()),
-        id,
-        request_id,
-    )
+        .with_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00");
+    (UFrameMetadata::new(attributes, RawBytes::encoding()), id)
 }
 
-fn assert_streamed_metadata(
-    frame: &UOwnedFrame,
-    topic: &UUri,
-    id: &UUID,
-    request_id: &UUID,
-    token: &str,
-    commstatus: UCode,
-) {
+fn assert_streamed_metadata(frame: &UOwnedFrame, topic: &UUri, id: &UUID) {
     let attributes = frame.metadata().attributes();
     assert_eq!(attributes.id(), id);
     assert_eq!(attributes.source(), topic);
@@ -162,14 +146,14 @@ fn assert_streamed_metadata(
     assert_eq!(attributes.message_type(), UMessageType::Publish);
     assert_eq!(attributes.priority(), UPriority::CS5);
     assert_eq!(attributes.ttl(), Some(3_000));
-    assert_eq!(attributes.request_id(), Some(request_id));
+    assert_eq!(attributes.request_id(), None);
     assert_eq!(
         attributes.traceparent(),
         Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00")
     );
-    assert_eq!(attributes.token(), Some(token));
-    assert_eq!(attributes.permission_level(), Some(11));
-    assert_eq!(attributes.commstatus(), Some(commstatus));
+    assert_eq!(attributes.token(), None);
+    assert_eq!(attributes.permission_level(), None);
+    assert_eq!(attributes.commstatus(), None);
 }
 
 fn protobuf_payload(value: &str) -> StringValue {
@@ -236,8 +220,7 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy() {
         .iter()
         .any(|name| name == &expected_service));
 
-    let (header, id, request_id) =
-        metadata_header(topic.clone(), "zenoh-to-iox-token", UCode::UNAVAILABLE);
+    let (header, id) = metadata_header(topic.clone());
     zenoh
         .send_serialized::<RawBytes, _>(header, &&b"zenoh-to-iox"[..])
         .await
@@ -248,14 +231,7 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy() {
         .expect("receive should not time out")
         .expect("receiver should remain open");
     assert_eq!(frame.payload_bytes(), b"zenoh-to-iox");
-    assert_streamed_metadata(
-        &frame,
-        &topic,
-        &id,
-        &request_id,
-        "zenoh-to-iox-token",
-        UCode::UNAVAILABLE,
-    );
+    assert_streamed_metadata(&frame, &topic, &id);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -306,7 +282,7 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf() {
         .deserialize::<ProtobufWire, _>()
         .expect("protobuf payload should decode");
 
-    assert_eq!(frame.metadata().encoding(), &ProtobufWire::encoding());
+    assert_eq!(frame.metadata().encoding(), Some(&ProtobufWire::encoding()));
     assert_eq!(decoded.value, payload.value);
 }
 
@@ -344,11 +320,7 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned() {
         .await
         .expect("route should register");
 
-    let (header, id, request_id) = metadata_header(
-        topic.clone(),
-        "iox-to-zenoh-token",
-        UCode::RESOURCE_EXHAUSTED,
-    );
+    let (header, id) = metadata_header(topic.clone());
     iceoryx2
         .send_serialized_zero_copy::<RawBytes, _>(header, &&b"iox-to-zenoh"[..])
         .await
@@ -359,14 +331,7 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned() {
         .expect("receive should not time out")
         .expect("receiver should remain open");
     assert_eq!(frame.payload_bytes(), b"iox-to-zenoh");
-    assert_streamed_metadata(
-        &frame,
-        &topic,
-        &id,
-        &request_id,
-        "iox-to-zenoh-token",
-        UCode::RESOURCE_EXHAUSTED,
-    );
+    assert_streamed_metadata(&frame, &topic, &id);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -417,6 +382,6 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned_with_protobuf() {
         .deserialize::<ProtobufWire, _>()
         .expect("protobuf payload should decode");
 
-    assert_eq!(frame.metadata().encoding(), &ProtobufWire::encoding());
+    assert_eq!(frame.metadata().encoding(), Some(&ProtobufWire::encoding()));
     assert_eq!(decoded.value, payload.value);
 }

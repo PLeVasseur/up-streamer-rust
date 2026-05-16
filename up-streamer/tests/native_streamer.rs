@@ -20,8 +20,10 @@ use up_rust::usubscription::{
     SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
 };
 use up_rust::{
+    wire::{RawBytes, WireFormat},
+    zero_copy::{UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport},
     UCode, UFrameBuilder, UFrameMetadata, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus,
-    UUri, UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport,
+    UUri,
 };
 use up_streamer::{OwnedFrameEndpoint, TransportMode, UStreamer};
 
@@ -276,7 +278,7 @@ fn topic(authority: &str) -> UUri {
 
 fn frame(authority: &str) -> UOwnedFrame {
     UOwnedFrame::new(
-        UFrameMetadata::publish(topic(authority)),
+        UFrameMetadata::publish(topic(authority)).with_encoding(RawBytes::encoding()),
         b"native-stream".as_slice(),
     )
 }

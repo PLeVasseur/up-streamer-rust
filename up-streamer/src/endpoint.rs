@@ -13,9 +13,9 @@
 
 use std::sync::Arc;
 
-use up_rust::{UOwnedFrameEndpoint, UOwnedTransport, UZeroCopyTransport};
+use up_rust::{transport::UOwnedFrameEndpoint, zero_copy::UZeroCopyTransport, UOwnedTransport};
 
-pub use up_rust::UOwnedFrameEndpointMode as TransportMode;
+pub use up_rust::transport::UOwnedFrameEndpointMode as TransportMode;
 
 #[derive(Clone)]
 pub struct OwnedFrameEndpoint {
