@@ -20,7 +20,6 @@ use up_rust::usubscription::{
     SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
 };
 use up_rust::{
-    wire::{RawBytes, WireFormat},
     zero_copy::{UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport},
     UCode, UFrameBuilder, UFrameMetadata, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus,
     UUri,
@@ -272,17 +271,6 @@ impl UZeroCopyTransport for MemoryZeroCopyTransport {
     }
 }
 
-fn topic(authority: &str) -> UUri {
-    UUri::try_from_parts(authority, 0x4210, 1, 0x9001).expect("valid topic")
-}
-
-fn frame(authority: &str) -> UOwnedFrame {
-    UOwnedFrame::new(
-        UFrameMetadata::publish(topic(authority)).with_encoding(RawBytes::encoding()),
-        b"native-stream".as_slice(),
-    )
-}
-
 fn point_to_point_frame(
     source_authority: &str,
     sink_authority: &str,
@@ -351,8 +339,12 @@ async fn routes_owned_and_zero_copy_configurations() {
         .await
         .expect("zero-copy-to-owned route should register");
 
-    owned_ingress.inject(frame("authority-a")).await;
-    zero_copy_ingress.inject(frame("authority-c")).await;
+    owned_ingress
+        .inject(point_to_point_frame("authority-a", "authority-b", 0x9001))
+        .await;
+    zero_copy_ingress
+        .inject(point_to_point_frame("authority-c", "authority-d", 0x9002))
+        .await;
     yield_to_forwarder().await;
 
     assert_eq!(zero_copy_egress.sent()[0].payload_bytes(), b"native-stream");

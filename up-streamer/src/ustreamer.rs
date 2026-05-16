@@ -24,7 +24,7 @@ use up_rust::{
     transport::UOwnedFrameEndpointRegistration, UCode, UOwnedFrame, UOwnedListener, UStatus, UUri,
 };
 
-use crate::{OwnedFrameEndpoint, SubscriptionSyncHealth, TransportMode};
+use crate::{OwnedFrameEndpoint, SubscriptionSyncHealth};
 
 const RECENT_FRAME_ID_LIMIT: usize = 1024;
 
@@ -54,6 +54,9 @@ impl RouteKey {
 }
 
 struct RouteBinding {
+    ingress: OwnedFrameEndpoint,
+    egress: OwnedFrameEndpoint,
+    tx: mpsc::Sender<UOwnedFrame>,
     registrations: Vec<UOwnedFrameEndpointRegistration>,
     dispatch_task: JoinHandle<()>,
 }
@@ -119,6 +122,7 @@ impl UStreamer {
             .await
         {
             Ok(snapshot) => {
+                self.rewire_routes(&snapshot).await?;
                 self.subscription_snapshot = snapshot;
                 self.subscription_sync_health.last_attempt_succeeded = Some(true);
                 self.subscription_sync_health.last_success_at =
@@ -144,6 +148,13 @@ impl UStreamer {
             ));
         }
 
+        if self.subscription_sync_health.last_success_at.is_none() {
+            return Err(UStatus::fail_with_code(
+                UCode::FAILED_PRECONDITION,
+                "subscription snapshot is unavailable",
+            ));
+        }
+
         let route_key = RouteKey::new(ingress, egress);
         if self.routes.contains_key(&route_key) {
             return Err(UStatus::fail_with_code(
@@ -155,16 +166,23 @@ impl UStreamer {
         let (tx, mut rx) = mpsc::channel::<UOwnedFrame>(self.message_queue_size);
         let mut registrations = Vec::new();
         for route_filter in self.filters_for_route(ingress, egress) {
-            registrations.push(
-                ingress
-                    .transport
-                    .register_owned_listener(
-                        &route_filter.source,
-                        route_filter.sink.as_ref(),
-                        Arc::new(IngressForwarder { tx: tx.clone() }),
-                    )
-                    .await?,
-            );
+            match ingress
+                .transport
+                .register_owned_listener(
+                    &route_filter.source,
+                    route_filter.sink.as_ref(),
+                    Arc::new(IngressForwarder { tx: tx.clone() }),
+                )
+                .await
+            {
+                Ok(registration) => registrations.push(registration),
+                Err(err) => {
+                    for registration in registrations {
+                        let _ = registration.unregister().await;
+                    }
+                    return Err(err);
+                }
+            }
         }
         let ingress_name = ingress.name.clone();
         let ingress_authority = ingress.authority.clone();
@@ -231,6 +249,9 @@ impl UStreamer {
         self.routes.insert(
             route_key,
             RouteBinding {
+                ingress: ingress.clone(),
+                egress: egress.clone(),
+                tx,
                 registrations,
                 dispatch_task,
             },
@@ -262,10 +283,23 @@ impl UStreamer {
         let Some(binding) = self.routes.remove(&route_key) else {
             return Err(UStatus::fail_with_code(UCode::NOT_FOUND, "route not found"));
         };
-        binding.dispatch_task.abort();
+        let mut binding = binding;
+        let mut remaining_registrations = Vec::new();
+        let mut first_err = None;
         for registration in binding.registrations {
-            registration.unregister().await?;
+            if let Err(err) = registration.unregister().await {
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+                remaining_registrations.push(registration);
+            }
         }
+        if let Some(err) = first_err {
+            binding.registrations = remaining_registrations;
+            self.routes.insert(route_key, binding);
+            return Err(err);
+        }
+        binding.dispatch_task.abort();
         Ok(())
     }
 
@@ -279,62 +313,109 @@ impl UStreamer {
 }
 
 impl UStreamer {
+    async fn rewire_routes(
+        &mut self,
+        snapshot: &FetchSubscriptionsResponse,
+    ) -> Result<(), UStatus> {
+        let mut new_registrations_by_route: HashMap<
+            RouteKey,
+            Vec<UOwnedFrameEndpointRegistration>,
+        > = HashMap::new();
+        for (route_key, binding) in &self.routes {
+            let filters = filters_for_snapshot(snapshot, &binding.ingress, &binding.egress);
+            let mut new_registrations = Vec::new();
+            for route_filter in filters {
+                match binding
+                    .ingress
+                    .transport
+                    .register_owned_listener(
+                        &route_filter.source,
+                        route_filter.sink.as_ref(),
+                        Arc::new(IngressForwarder {
+                            tx: binding.tx.clone(),
+                        }),
+                    )
+                    .await
+                {
+                    Ok(registration) => new_registrations.push(registration),
+                    Err(err) => {
+                        for registrations in new_registrations_by_route.into_values() {
+                            for registration in registrations {
+                                let _ = registration.unregister().await;
+                            }
+                        }
+                        for registration in new_registrations {
+                            let _ = registration.unregister().await;
+                        }
+                        return Err(err);
+                    }
+                }
+            }
+            new_registrations_by_route.insert(route_key.clone(), new_registrations);
+        }
+
+        for (route_key, mut new_registrations) in new_registrations_by_route {
+            let Some(binding) = self.routes.get_mut(&route_key) else {
+                continue;
+            };
+            let old_registrations = std::mem::take(&mut binding.registrations);
+            for registration in old_registrations {
+                if let Err(err) = registration.unregister().await {
+                    tracing::debug!(?err, "route_rewire_unregister_old_failed");
+                    new_registrations.push(registration);
+                }
+            }
+            binding.registrations = new_registrations;
+        }
+        Ok(())
+    }
+
     fn filters_for_route(
         &self,
         ingress: &OwnedFrameEndpoint,
         egress: &OwnedFrameEndpoint,
     ) -> Vec<RouteFilter> {
-        let mut filters = Vec::new();
-        if ingress.mode() == TransportMode::Owned {
-            let source = authority_to_wildcard_filter(&ingress.authority);
-            filters.push(RouteFilter {
-                source: source.clone(),
-                sink: None,
-            });
-            filters.push(RouteFilter {
-                source,
-                sink: Some(authority_to_wildcard_filter(&egress.authority)),
-            });
-        }
-
-        for subscription in &self.subscription_snapshot.subscriptions {
-            let Some(topic) = subscription.topic.as_ref() else {
-                continue;
-            };
-            let Some(subscriber) = subscription.subscriber.as_ref() else {
-                continue;
-            };
-            let Some(subscriber_uri) = subscriber.uri.as_ref() else {
-                continue;
-            };
-            let topic = from_proto_uri(topic);
-            let subscriber_uri = from_proto_uri(subscriber_uri);
-            let topic_authority = topic.authority_name();
-            let subscriber_authority = subscriber_uri.authority_name();
-            let topic_matches_ingress =
-                topic_authority == ingress.authority || topic_authority == "*";
-            let subscriber_matches_egress =
-                subscriber_authority == egress.authority || subscriber_authority == "*";
-            let route_filter = RouteFilter {
-                source: topic,
-                sink: None,
-            };
-            if topic_matches_ingress
-                && subscriber_matches_egress
-                && !filters.contains(&route_filter)
-            {
-                filters.push(route_filter);
-            }
-        }
-
-        if filters.is_empty() {
-            filters.push(RouteFilter {
-                source: authority_to_wildcard_filter(&ingress.authority),
-                sink: None,
-            });
-        }
-        filters
+        filters_for_snapshot(&self.subscription_snapshot, ingress, egress)
     }
+}
+
+fn filters_for_snapshot(
+    snapshot: &FetchSubscriptionsResponse,
+    ingress: &OwnedFrameEndpoint,
+    egress: &OwnedFrameEndpoint,
+) -> Vec<RouteFilter> {
+    let mut filters = vec![RouteFilter {
+        source: authority_to_wildcard_filter(&ingress.authority),
+        sink: Some(authority_to_wildcard_filter(&egress.authority)),
+    }];
+
+    for subscription in &snapshot.subscriptions {
+        let Some(topic) = subscription.topic.as_ref() else {
+            continue;
+        };
+        let Some(subscriber) = subscription.subscriber.as_ref() else {
+            continue;
+        };
+        let Some(subscriber_uri) = subscriber.uri.as_ref() else {
+            continue;
+        };
+        let topic = from_proto_uri(topic);
+        let subscriber_uri = from_proto_uri(subscriber_uri);
+        let topic_authority = topic.authority_name();
+        let subscriber_authority = subscriber_uri.authority_name();
+        let topic_matches_ingress = topic_authority == ingress.authority || topic_authority == "*";
+        let subscriber_matches_egress =
+            subscriber_authority == egress.authority || subscriber_authority == "*";
+        let route_filter = RouteFilter {
+            source: topic,
+            sink: None,
+        };
+        if topic_matches_ingress && subscriber_matches_egress && !filters.contains(&route_filter) {
+            filters.push(route_filter);
+        }
+    }
+
+    filters
 }
 
 impl Drop for UStreamer {
@@ -363,7 +444,7 @@ mod tests {
     use up_rust::{
         wire::{RawBytes, WireFormat},
         zero_copy::{UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport},
-        UFrameMetadata, UOwnedListener, UOwnedTransport,
+        UFrameBuilder, UFrameMetadata, UOwnedListener, UOwnedTransport,
     };
 
     use super::*;
@@ -371,6 +452,7 @@ mod tests {
     #[derive(Default)]
     struct StaticSubscriptions {
         subscriptions: Vec<Subscription>,
+        fail_fetch: bool,
     }
 
     #[async_trait]
@@ -386,6 +468,12 @@ mod tests {
             &self,
             _fetch_subscriptions_request: FetchSubscriptionsRequest,
         ) -> Result<FetchSubscriptionsResponse, UStatus> {
+            if self.fail_fetch {
+                return Err(UStatus::fail_with_code(
+                    UCode::UNAVAILABLE,
+                    "subscription fetch failed",
+                ));
+            }
             Ok(FetchSubscriptionsResponse {
                 subscriptions: self.subscriptions.clone(),
                 ..Default::default()
@@ -430,6 +518,8 @@ mod tests {
         listeners: Mutex<Vec<RegisteredOwnedListener>>,
         filters: Mutex<Vec<(UUri, Option<UUri>)>>,
         sent: Mutex<Vec<UOwnedFrame>>,
+        fail_on_registration: Mutex<Option<usize>>,
+        register_attempts: Mutex<usize>,
     }
 
     #[derive(Clone)]
@@ -476,6 +566,20 @@ mod tests {
         fn filters(&self) -> Vec<(UUri, Option<UUri>)> {
             self.filters.lock().expect("filters lock poisoned").clone()
         }
+
+        fn fail_on_registration(registration_attempt: usize) -> Self {
+            Self {
+                fail_on_registration: Mutex::new(Some(registration_attempt)),
+                ..Default::default()
+            }
+        }
+
+        fn listener_count(&self) -> usize {
+            self.listeners
+                .lock()
+                .expect("listeners lock poisoned")
+                .len()
+        }
     }
 
     #[async_trait]
@@ -491,6 +595,22 @@ mod tests {
             sink_filter: Option<&UUri>,
             listener: Arc<dyn UOwnedListener>,
         ) -> Result<(), UStatus> {
+            let mut register_attempts = self
+                .register_attempts
+                .lock()
+                .expect("register_attempts lock poisoned");
+            *register_attempts += 1;
+            if self
+                .fail_on_registration
+                .lock()
+                .expect("fail_on_registration lock poisoned")
+                .is_some_and(|fail_on_registration| fail_on_registration == *register_attempts)
+            {
+                return Err(UStatus::fail_with_code(
+                    UCode::UNAVAILABLE,
+                    "listener registration failed",
+                ));
+            }
             self.filters
                 .lock()
                 .expect("filters lock poisoned")
@@ -568,6 +688,10 @@ mod tests {
                 }
             }
         }
+
+        fn sent(&self) -> Vec<UOwnedFrame> {
+            self.sent.lock().expect("sent lock poisoned").clone()
+        }
     }
 
     #[async_trait]
@@ -630,6 +754,13 @@ mod tests {
         Arc::new(StaticSubscriptions::default())
     }
 
+    fn failing_subscription_source() -> Arc<dyn USubscription> {
+        Arc::new(StaticSubscriptions {
+            fail_fetch: true,
+            ..Default::default()
+        })
+    }
+
     fn subscription_source_with(topic: UUri, subscriber: UUri) -> Arc<dyn USubscription> {
         Arc::new(StaticSubscriptions {
             subscriptions: vec![Subscription {
@@ -641,6 +772,7 @@ mod tests {
                 .into(),
                 ..Default::default()
             }],
+            ..Default::default()
         })
     }
 
@@ -655,6 +787,15 @@ mod tests {
         )
     }
 
+    fn point_to_point_frame(source_authority: &str, sink_authority: &str) -> UOwnedFrame {
+        let source =
+            UUri::try_from_parts(source_authority, 0x4210, 1, 0x9001).expect("valid source URI");
+        let sink = UUri::try_from_parts(sink_authority, 0x4220, 1, 0).expect("valid sink URI");
+        UFrameBuilder::notification(source, sink)
+            .build_with_raw_payload("streamed")
+            .expect("valid notification frame")
+    }
+
     async fn yield_to_forwarder() {
         tokio::task::yield_now().await;
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
@@ -664,9 +805,13 @@ mod tests {
     async fn routes_owned_to_owned() {
         let ingress = Arc::new(MemoryOwnedTransport::default());
         let egress = Arc::new(MemoryOwnedTransport::default());
-        let mut streamer = UStreamer::new("test", 8, subscription_source())
-            .await
-            .expect("streamer should build");
+        let mut streamer = UStreamer::new(
+            "test",
+            8,
+            subscription_source_with(topic("authority-a"), topic("authority-b")),
+        )
+        .await
+        .expect("streamer should build");
 
         streamer
             .add_route_ref(
@@ -698,7 +843,7 @@ mod tests {
             .expect("route should register");
 
         let filters = ingress.filters();
-        assert!(filters.contains(&(authority_to_wildcard_filter("authority-a"), None)));
+        assert!(!filters.contains(&(authority_to_wildcard_filter("authority-a"), None)));
         assert!(filters.contains(&(
             authority_to_wildcard_filter("authority-a"),
             Some(authority_to_wildcard_filter("authority-b"))
@@ -745,10 +890,103 @@ mod tests {
             )
             .await
             .expect("route should register");
-        ingress.inject(frame("authority-a")).await;
+        ingress
+            .inject(point_to_point_frame("authority-a", "authority-b"))
+            .await;
         yield_to_forwarder().await;
 
         assert_eq!(egress.sent()[0].payload_bytes(), b"streamed");
+    }
+
+    #[tokio::test]
+    async fn failed_subscription_fetch_prevents_wildcard_route() {
+        let ingress = Arc::new(MemoryOwnedTransport::default());
+        let egress = Arc::new(MemoryOwnedTransport::default());
+        let mut streamer = UStreamer::new("test", 8, failing_subscription_source())
+            .await
+            .expect("streamer should build");
+
+        let err = streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress),
+            )
+            .await
+            .expect_err("route should require a valid subscription snapshot");
+
+        assert_eq!(err.get_code(), UCode::FAILED_PRECONDITION);
+        assert!(ingress.filters().is_empty());
+    }
+
+    #[tokio::test]
+    async fn add_route_rolls_back_partial_registration_failure() {
+        let ingress = Arc::new(MemoryOwnedTransport::fail_on_registration(2));
+        let egress = Arc::new(MemoryOwnedTransport::default());
+        let mut streamer = UStreamer::new(
+            "test",
+            8,
+            subscription_source_with(topic("authority-a"), topic("authority-b")),
+        )
+        .await
+        .expect("streamer should build");
+
+        let err = streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress),
+            )
+            .await
+            .expect_err("second listener registration should fail");
+
+        assert_eq!(err.get_code(), UCode::UNAVAILABLE);
+        assert_eq!(ingress.listener_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn point_to_point_filters_work_for_owned_and_zero_copy_without_subscriptions() {
+        let owned_ingress = Arc::new(MemoryOwnedTransport::default());
+        let zero_copy_ingress = Arc::new(MemoryZeroCopyTransport::default());
+        let owned_egress = Arc::new(MemoryOwnedTransport::default());
+        let zero_copy_egress = Arc::new(MemoryZeroCopyTransport::default());
+        let mut streamer = UStreamer::new("test", 8, subscription_source())
+            .await
+            .expect("streamer should build");
+
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("owned-in", "authority-a", owned_ingress.clone()),
+                &OwnedFrameEndpoint::from_zero_copy(
+                    "zc-out",
+                    "authority-b",
+                    zero_copy_egress.clone(),
+                ),
+            )
+            .await
+            .expect("owned route should register");
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_zero_copy(
+                    "zc-in",
+                    "authority-c",
+                    zero_copy_ingress.clone(),
+                ),
+                &OwnedFrameEndpoint::from_owned("owned-out", "authority-d", owned_egress.clone()),
+            )
+            .await
+            .expect("zero-copy route should register");
+
+        owned_ingress
+            .inject(point_to_point_frame("authority-a", "authority-b"))
+            .await;
+        zero_copy_ingress
+            .inject(point_to_point_frame("authority-c", "authority-d"))
+            .await;
+        owned_ingress.inject(frame("authority-a")).await;
+        zero_copy_ingress.inject(frame("authority-c")).await;
+        yield_to_forwarder().await;
+
+        assert_eq!(zero_copy_egress.sent().len(), 1);
+        assert_eq!(owned_egress.sent().len(), 1);
     }
 
     #[tokio::test]
