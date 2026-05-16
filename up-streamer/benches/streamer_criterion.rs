@@ -25,7 +25,7 @@ use up_rust::usubscription::{
     SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
 };
 use up_rust::{UFrameMetadata, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UUri};
-use up_streamer::{Endpoint, UStreamer};
+use up_streamer::{OwnedFrameEndpoint, UStreamer};
 
 #[derive(Default)]
 struct EmptySubscriptions;
@@ -188,8 +188,12 @@ fn frame(authority: &str) -> UOwnedFrame {
     )
 }
 
-fn endpoint(name: &str, authority: &str, transport: Arc<MemoryOwnedTransport>) -> Endpoint {
-    Endpoint::from_owned(name, authority, transport)
+fn endpoint(
+    name: &str,
+    authority: &str,
+    transport: Arc<MemoryOwnedTransport>,
+) -> OwnedFrameEndpoint {
+    OwnedFrameEndpoint::from_owned(name, authority, transport)
 }
 
 fn bench_routing_lookup(c: &mut Criterion) {

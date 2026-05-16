@@ -25,7 +25,7 @@ use std::sync::Arc;
 use tracing::info;
 use up_rust::usubscription::USubscription;
 use up_rust::{UCode, UStatus};
-use up_streamer::{Endpoint, UStreamer};
+use up_streamer::{OwnedFrameEndpoint, UStreamer};
 use up_transport_iceoryx2_rust::{transport::UTransportIceoryx2, MessagingPattern};
 #[cfg(feature = "mqtt-transport")]
 use up_transport_mqtt5::{
@@ -58,7 +58,7 @@ fn required_field<'a>(
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             invalid_config(format!(
-                "Endpoint '{}' requires non-empty field '{}'",
+                "OwnedFrameEndpoint '{}' requires non-empty field '{}'",
                 endpoint.name, name
             ))
         })
@@ -95,7 +95,7 @@ impl From<MqttMode> for MqttTransportMode {
 async fn endpoint_from_config(
     endpoint: &EndpointConfig,
     base_dir: &Path,
-) -> Result<Endpoint, UStatus> {
+) -> Result<OwnedFrameEndpoint, UStatus> {
     match endpoint.transport {
         TransportKind::ZenohOwned => {
             let zenoh_config = match endpoint.zenoh_config_file.as_ref() {
@@ -116,7 +116,7 @@ async fn endpoint_from_config(
                     .build()
                     .await?,
             );
-            Ok(Endpoint::from_owned(
+            Ok(OwnedFrameEndpoint::from_owned(
                 &endpoint.name,
                 &endpoint.authority,
                 transport,
@@ -124,7 +124,7 @@ async fn endpoint_from_config(
         }
         TransportKind::Iceoryx2ZeroCopy => {
             let transport = UTransportIceoryx2::build(MessagingPattern::PublishSubscribe)?;
-            Ok(Endpoint::from_zero_copy(
+            Ok(OwnedFrameEndpoint::from_zero_copy(
                 &endpoint.name,
                 &endpoint.authority,
                 transport,
@@ -143,7 +143,7 @@ async fn endpoint_from_config(
                 let transport =
                     Arc::new(Mqtt5Transport::new(options, endpoint.authority.clone()).await?);
                 transport.connect().await?;
-                Ok(Endpoint::from_owned(
+                Ok(OwnedFrameEndpoint::from_owned(
                     &endpoint.name,
                     &endpoint.authority,
                     transport,
@@ -152,7 +152,7 @@ async fn endpoint_from_config(
             #[cfg(not(feature = "mqtt-transport"))]
             {
                 Err(invalid_config(format!(
-                    "Endpoint '{}' uses mqtt5_owned but configurable-streamer was built without feature 'mqtt-transport'",
+                    "OwnedFrameEndpoint '{}' uses mqtt5_owned but configurable-streamer was built without feature 'mqtt-transport'",
                     endpoint.name
                 )))
             }
@@ -170,7 +170,7 @@ async fn endpoint_from_config(
                     required_field(endpoint, &endpoint.remote_authority, "remote_authority")?;
                 let local_uentity = endpoint.local_uentity.ok_or_else(|| {
                     invalid_config(format!(
-                        "Endpoint '{}' requires field 'local_uentity'",
+                        "OwnedFrameEndpoint '{}' requires field 'local_uentity'",
                         endpoint.name
                     ))
                 })?;
@@ -189,7 +189,7 @@ async fn endpoint_from_config(
                     &config_file,
                     None,
                 )?);
-                Ok(Endpoint::from_owned(
+                Ok(OwnedFrameEndpoint::from_owned(
                     &endpoint.name,
                     &endpoint.authority,
                     transport,
@@ -198,7 +198,7 @@ async fn endpoint_from_config(
             #[cfg(not(feature = "vsomeip-transport"))]
             {
                 Err(invalid_config(format!(
-                    "Endpoint '{}' uses vsomeip_owned but configurable-streamer was built without feature 'vsomeip-transport'",
+                    "OwnedFrameEndpoint '{}' uses vsomeip_owned but configurable-streamer was built without feature 'vsomeip-transport'",
                     endpoint.name
                 )))
             }
@@ -208,7 +208,7 @@ async fn endpoint_from_config(
 
 async fn wire_forwarding_rules(
     streamer: &mut UStreamer,
-    endpoints: &HashMap<String, Endpoint>,
+    endpoints: &HashMap<String, OwnedFrameEndpoint>,
     endpoint_configs: &[EndpointConfig],
 ) -> Result<(), UStatus> {
     for endpoint_config in endpoint_configs {

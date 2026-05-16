@@ -28,7 +28,7 @@ use up_rust::{
     UZeroCopyListener, UZeroCopyRxFrame, UZeroCopyTransport, UZeroCopyTransportExt, WireFormat,
     UUID,
 };
-use up_streamer::{Endpoint, UStreamer};
+use up_streamer::{OwnedFrameEndpoint, UStreamer};
 use up_transport_iceoryx2_rust::{
     transport::UTransportIceoryx2, Iceoryx2PubSub, Iceoryx2RxLease, MessagingPattern,
 };
@@ -222,8 +222,8 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy() {
     .expect("streamer should build");
     streamer
         .add_route_ref(
-            &Endpoint::from_owned("zenoh", &zenoh_authority, zenoh.clone()),
-            &Endpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2_egress),
+            &OwnedFrameEndpoint::from_owned("zenoh", &zenoh_authority, zenoh.clone()),
+            &OwnedFrameEndpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2_egress),
         )
         .await
         .expect("route should register");
@@ -286,8 +286,8 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf() {
     .expect("streamer should build");
     streamer
         .add_route_ref(
-            &Endpoint::from_owned("zenoh", &zenoh_authority, zenoh.clone()),
-            &Endpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2_egress),
+            &OwnedFrameEndpoint::from_owned("zenoh", &zenoh_authority, zenoh.clone()),
+            &OwnedFrameEndpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2_egress),
         )
         .await
         .expect("route should register");
@@ -338,8 +338,8 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned() {
     .expect("streamer should build");
     streamer
         .add_route_ref(
-            &Endpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2.clone()),
-            &Endpoint::from_owned("zenoh", &zenoh_authority, zenoh_egress),
+            &OwnedFrameEndpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2.clone()),
+            &OwnedFrameEndpoint::from_owned("zenoh", &zenoh_authority, zenoh_egress),
         )
         .await
         .expect("route should register");
@@ -397,8 +397,8 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned_with_protobuf() {
     .expect("streamer should build");
     streamer
         .add_route_ref(
-            &Endpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2.clone()),
-            &Endpoint::from_owned("zenoh", &zenoh_authority, zenoh_egress),
+            &OwnedFrameEndpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2.clone()),
+            &OwnedFrameEndpoint::from_owned("zenoh", &zenoh_authority, zenoh_egress),
         )
         .await
         .expect("route should register");

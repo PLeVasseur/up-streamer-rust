@@ -18,7 +18,7 @@
 //! Protocol Buffers message envelopes.
 
 mod endpoint;
-pub use endpoint::{Endpoint, TransportMode};
+pub use endpoint::{OwnedFrameEndpoint, TransportMode};
 
 mod subscription_sync_health;
 pub use subscription_sync_health::SubscriptionSyncHealth;

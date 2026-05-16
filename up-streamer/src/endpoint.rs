@@ -13,23 +13,23 @@
 
 use std::sync::Arc;
 
-use up_rust::{UOwnedTransport, UTransportEndpoint, UZeroCopyTransport};
+use up_rust::{UOwnedFrameEndpoint, UOwnedTransport, UZeroCopyTransport};
 
-pub use up_rust::UTransportMode as TransportMode;
+pub use up_rust::UOwnedFrameEndpointMode as TransportMode;
 
 #[derive(Clone)]
-pub struct Endpoint {
+pub struct OwnedFrameEndpoint {
     pub(crate) name: String,
     pub(crate) authority: String,
-    pub(crate) transport: UTransportEndpoint,
+    pub(crate) transport: UOwnedFrameEndpoint,
 }
 
-impl Endpoint {
+impl OwnedFrameEndpoint {
     pub fn from_owned(name: &str, authority: &str, transport: Arc<dyn UOwnedTransport>) -> Self {
         Self {
             name: name.to_string(),
             authority: authority.to_string(),
-            transport: UTransportEndpoint::from_owned(transport),
+            transport: UOwnedFrameEndpoint::from_owned(transport),
         }
     }
 
@@ -40,7 +40,7 @@ impl Endpoint {
         Self {
             name: name.to_string(),
             authority: authority.to_string(),
-            transport: UTransportEndpoint::from_zero_copy(transport),
+            transport: UOwnedFrameEndpoint::from_zero_copy(transport),
         }
     }
 

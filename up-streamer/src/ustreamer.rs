@@ -20,9 +20,9 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use up_rust::usubscription::{
     from_proto_uri, FetchSubscriptionsRequest, FetchSubscriptionsResponse, USubscription,
 };
-use up_rust::{UCode, UOwnedFrame, UOwnedListener, UStatus, UTransportEndpointRegistration, UUri};
+use up_rust::{UCode, UOwnedFrame, UOwnedFrameEndpointRegistration, UOwnedListener, UStatus, UUri};
 
-use crate::{Endpoint, SubscriptionSyncHealth, TransportMode};
+use crate::{OwnedFrameEndpoint, SubscriptionSyncHealth, TransportMode};
 
 const RECENT_FRAME_ID_LIMIT: usize = 1024;
 
@@ -41,7 +41,7 @@ struct RouteFilter {
 }
 
 impl RouteKey {
-    fn new(ingress: &Endpoint, egress: &Endpoint) -> Self {
+    fn new(ingress: &OwnedFrameEndpoint, egress: &OwnedFrameEndpoint) -> Self {
         Self {
             ingress_name: ingress.name.clone(),
             ingress_authority: ingress.authority.clone(),
@@ -52,7 +52,7 @@ impl RouteKey {
 }
 
 struct RouteBinding {
-    registrations: Vec<UTransportEndpointRegistration>,
+    registrations: Vec<UOwnedFrameEndpointRegistration>,
     dispatch_task: JoinHandle<()>,
 }
 
@@ -132,8 +132,8 @@ impl UStreamer {
 
     pub async fn add_route_ref(
         &mut self,
-        ingress: &Endpoint,
-        egress: &Endpoint,
+        ingress: &OwnedFrameEndpoint,
+        egress: &OwnedFrameEndpoint,
     ) -> Result<(), UStatus> {
         if ingress.authority == egress.authority {
             return Err(UStatus::fail_with_code(
@@ -236,14 +236,18 @@ impl UStreamer {
         Ok(())
     }
 
-    pub async fn add_route(&mut self, ingress: Endpoint, egress: Endpoint) -> Result<(), UStatus> {
+    pub async fn add_route(
+        &mut self,
+        ingress: OwnedFrameEndpoint,
+        egress: OwnedFrameEndpoint,
+    ) -> Result<(), UStatus> {
         self.add_route_ref(&ingress, &egress).await
     }
 
     pub async fn delete_route_ref(
         &mut self,
-        ingress: &Endpoint,
-        egress: &Endpoint,
+        ingress: &OwnedFrameEndpoint,
+        egress: &OwnedFrameEndpoint,
     ) -> Result<(), UStatus> {
         if ingress.authority == egress.authority {
             return Err(UStatus::fail_with_code(
@@ -265,15 +269,19 @@ impl UStreamer {
 
     pub async fn delete_route(
         &mut self,
-        ingress: Endpoint,
-        egress: Endpoint,
+        ingress: OwnedFrameEndpoint,
+        egress: OwnedFrameEndpoint,
     ) -> Result<(), UStatus> {
         self.delete_route_ref(&ingress, &egress).await
     }
 }
 
 impl UStreamer {
-    fn filters_for_route(&self, ingress: &Endpoint, egress: &Endpoint) -> Vec<RouteFilter> {
+    fn filters_for_route(
+        &self,
+        ingress: &OwnedFrameEndpoint,
+        egress: &OwnedFrameEndpoint,
+    ) -> Vec<RouteFilter> {
         let mut filters = Vec::new();
         if ingress.mode() == TransportMode::Owned {
             let source = authority_to_wildcard_filter(&ingress.authority);
@@ -659,8 +667,8 @@ mod tests {
 
         streamer
             .add_route_ref(
-                &Endpoint::from_owned("in", "authority-a", ingress.clone()),
-                &Endpoint::from_owned("out", "authority-b", egress.clone()),
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress.clone()),
             )
             .await
             .expect("route should register");
@@ -680,8 +688,8 @@ mod tests {
 
         streamer
             .add_route_ref(
-                &Endpoint::from_owned("in", "authority-a", ingress.clone()),
-                &Endpoint::from_owned("out", "authority-b", egress),
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress),
             )
             .await
             .expect("route should register");
@@ -708,8 +716,8 @@ mod tests {
 
         streamer
             .add_route_ref(
-                &Endpoint::from_owned("in", "authority-a", ingress.clone()),
-                &Endpoint::from_owned("out", "authority-b", egress.clone()),
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress.clone()),
             )
             .await
             .expect("route should register");
@@ -729,8 +737,8 @@ mod tests {
 
         streamer
             .add_route_ref(
-                &Endpoint::from_zero_copy("in", "authority-a", ingress.clone()),
-                &Endpoint::from_owned("out", "authority-b", egress.clone()),
+                &OwnedFrameEndpoint::from_zero_copy("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress.clone()),
             )
             .await
             .expect("route should register");
@@ -744,8 +752,8 @@ mod tests {
     async fn rejects_duplicate_and_missing_routes() {
         let ingress = Arc::new(MemoryOwnedTransport::default());
         let egress = Arc::new(MemoryOwnedTransport::default());
-        let in_ep = Endpoint::from_owned("in", "authority-a", ingress);
-        let out_ep = Endpoint::from_owned("out", "authority-b", egress);
+        let in_ep = OwnedFrameEndpoint::from_owned("in", "authority-a", ingress);
+        let out_ep = OwnedFrameEndpoint::from_owned("out", "authority-b", egress);
         let mut streamer = UStreamer::new("test", 8, subscription_source())
             .await
             .expect("streamer should build");

@@ -12,6 +12,7 @@
  ********************************************************************************/
 
 use clap::Parser;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -130,6 +131,9 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
                 outcome.stderr
             );
         }
+
+        build_selected_scenario_dependencies(&repo_root, &selected_scenarios, cli.no_bootstrap)
+            .await?;
     }
 
     let matrix_start_wall = chrono::Utc::now();
@@ -282,9 +286,7 @@ async fn run_single_scenario(
         .arg("--egress-worker-min-count")
         .arg(cli.egress_worker_min_count.to_string());
 
-    if cli.skip_build {
-        command.arg("--skip-build");
-    }
+    command.arg("--skip-build");
     if cli.no_bootstrap {
         command.arg("--no-bootstrap");
     }
@@ -329,6 +331,41 @@ async fn run_single_scenario(
     }
 
     Ok(report)
+}
+
+async fn build_selected_scenario_dependencies(
+    repo_root: &Path,
+    selected_scenarios: &[String],
+    no_bootstrap: bool,
+) -> anyhow::Result<()> {
+    let mut seen = BTreeSet::new();
+    for scenario_id in selected_scenarios {
+        let template = scenario::scenario_template(scenario_id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "unknown scenario id '{}' during dependency build",
+                scenario_id
+            )
+        })?;
+
+        for build_command in template.build_commands {
+            if !seen.insert(*build_command) {
+                continue;
+            }
+
+            let outcome =
+                run_shell_command(repo_root, repo_root, build_command, no_bootstrap).await?;
+            if outcome.status_code != Some(0) {
+                anyhow::bail!(
+                    "failed to build scenario dependency\ncommand: {}\nstdout:\n{}\nstderr:\n{}",
+                    outcome.command,
+                    outcome.stdout,
+                    outcome.stderr
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_scenario_report_path(output: &str) -> Option<PathBuf> {

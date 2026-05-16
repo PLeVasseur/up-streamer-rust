@@ -21,7 +21,7 @@ mod real {
     use std::{fs::File, io::Read, path::Path, sync::Arc};
     use up_rust::usubscription::USubscription;
     use up_rust::{UCode, UStatus, UUri};
-    use up_streamer::{Endpoint, UStreamer};
+    use up_streamer::{OwnedFrameEndpoint, UStreamer};
     use up_transport_vsomeip::UPTransportVsomeip;
     use up_transport_zenoh::{zenoh_config::Config as ZenohConfig, UPTransportZenoh};
     use usubscription_static_file::USubscriptionStaticFile;
@@ -93,9 +93,10 @@ mod real {
             None,
         )?);
 
-        let zenoh_endpoint = Endpoint::from_owned("zenoh", &config.streamer_uuri.authority, zenoh);
+        let zenoh_endpoint =
+            OwnedFrameEndpoint::from_owned("zenoh", &config.streamer_uuri.authority, zenoh);
         let someip_endpoint =
-            Endpoint::from_owned("someip", &config.someip_config.authority, someip);
+            OwnedFrameEndpoint::from_owned("someip", &config.someip_config.authority, someip);
 
         let mut streamer = UStreamer::new(
             "zenoh-someip-streamer",

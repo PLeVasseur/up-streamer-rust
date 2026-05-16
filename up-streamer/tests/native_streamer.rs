@@ -20,10 +20,10 @@ use up_rust::usubscription::{
     SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
 };
 use up_rust::{
-    UCode, UFrameMetadata, UMessageBuilder, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus,
+    UCode, UFrameBuilder, UFrameMetadata, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus,
     UUri, UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport,
 };
-use up_streamer::{Endpoint, TransportMode, UStreamer};
+use up_streamer::{OwnedFrameEndpoint, TransportMode, UStreamer};
 
 #[derive(Default)]
 struct EmptySubscriptions;
@@ -289,7 +289,7 @@ fn point_to_point_frame(
     let source =
         UUri::try_from_parts(source_authority, 0x4210, 1, resource_id).expect("valid source URI");
     let sink = UUri::try_from_parts(sink_authority, 0x4220, 1, 0).expect("valid sink URI");
-    UMessageBuilder::notification(source, sink)
+    UFrameBuilder::notification(source, sink)
         .build_with_raw_payload("native-stream")
         .expect("valid notification frame")
 }
@@ -326,25 +326,25 @@ async fn routes_owned_and_zero_copy_configurations() {
         .expect("streamer should build");
 
     assert_eq!(
-        Endpoint::from_owned("owned", "authority-a", owned_ingress.clone()).mode(),
+        OwnedFrameEndpoint::from_owned("owned", "authority-a", owned_ingress.clone()).mode(),
         TransportMode::Owned
     );
     assert_eq!(
-        Endpoint::from_zero_copy("zc", "authority-b", zero_copy_ingress.clone()).mode(),
+        OwnedFrameEndpoint::from_zero_copy("zc", "authority-b", zero_copy_ingress.clone()).mode(),
         TransportMode::ZeroCopy
     );
 
     streamer
         .add_route_ref(
-            &Endpoint::from_owned("owned-in", "authority-a", owned_ingress.clone()),
-            &Endpoint::from_zero_copy("zc-out", "authority-b", zero_copy_egress.clone()),
+            &OwnedFrameEndpoint::from_owned("owned-in", "authority-a", owned_ingress.clone()),
+            &OwnedFrameEndpoint::from_zero_copy("zc-out", "authority-b", zero_copy_egress.clone()),
         )
         .await
         .expect("owned-to-zero-copy route should register");
     streamer
         .add_route_ref(
-            &Endpoint::from_zero_copy("zc-in", "authority-c", zero_copy_ingress.clone()),
-            &Endpoint::from_owned("owned-out", "authority-d", owned_egress.clone()),
+            &OwnedFrameEndpoint::from_zero_copy("zc-in", "authority-c", zero_copy_ingress.clone()),
+            &OwnedFrameEndpoint::from_owned("owned-out", "authority-d", owned_egress.clone()),
         )
         .await
         .expect("zero-copy-to-owned route should register");
@@ -361,8 +361,8 @@ async fn routes_owned_and_zero_copy_configurations() {
 async fn duplicate_and_missing_routes_return_status_codes() {
     let ingress = Arc::new(MemoryOwnedTransport::default());
     let egress = Arc::new(MemoryOwnedTransport::default());
-    let in_ep = Endpoint::from_owned("in", "authority-a", ingress);
-    let out_ep = Endpoint::from_owned("out", "authority-b", egress);
+    let in_ep = OwnedFrameEndpoint::from_owned("in", "authority-a", ingress);
+    let out_ep = OwnedFrameEndpoint::from_owned("out", "authority-b", egress);
     let mut streamer = UStreamer::new("native", 8, subscription_source())
         .await
         .expect("streamer should build");
@@ -392,9 +392,11 @@ async fn routes_multiple_owned_authorities_and_removes_rules() {
     let local = Arc::new(MemoryOwnedTransport::default());
     let remote_a = Arc::new(MemoryOwnedTransport::default());
     let remote_b = Arc::new(MemoryOwnedTransport::default());
-    let local_ep = Endpoint::from_owned("local", "local-authority", local.clone());
-    let remote_a_ep = Endpoint::from_owned("remote-a", "remote-a-authority", remote_a.clone());
-    let remote_b_ep = Endpoint::from_owned("remote-b", "remote-b-authority", remote_b.clone());
+    let local_ep = OwnedFrameEndpoint::from_owned("local", "local-authority", local.clone());
+    let remote_a_ep =
+        OwnedFrameEndpoint::from_owned("remote-a", "remote-a-authority", remote_a.clone());
+    let remote_b_ep =
+        OwnedFrameEndpoint::from_owned("remote-b", "remote-b-authority", remote_b.clone());
     let mut streamer = UStreamer::new("native", 8, subscription_source())
         .await
         .expect("streamer should build");
