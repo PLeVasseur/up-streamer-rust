@@ -24,13 +24,16 @@ use up_rust::usubscription::{
 };
 use up_rust::{
     wire::{RawBytes, WireFormat},
-    zero_copy::{UZeroCopyListener, UZeroCopyRxFrame, UZeroCopyTransport, UZeroCopyTransportExt},
+    zero_copy::{
+        UZeroCopyListener, UZeroCopyPayloadCopyExt, UZeroCopyRxFrame, UZeroCopyTransport,
+        UZeroCopyTransportExt,
+    },
     ProtobufWire, UAttributes, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener,
     UOwnedTransport, UOwnedTransportExt, UPriority, UStatus, UUri, UUID,
 };
 use up_streamer::{OwnedFrameEndpoint, UStreamer};
 use up_transport_iceoryx2_rust::{
-    transport::UTransportIceoryx2, Iceoryx2PubSub, Iceoryx2RxLease, MessagingPattern,
+    transport::UTransportIceoryx2, Iceoryx2PubSub, MessagingPattern,
 };
 use up_transport_zenoh::{zenoh_config::Config as ZenohConfig, UPTransportZenoh};
 
@@ -100,11 +103,14 @@ impl UOwnedListener for OwnedFrameSender {
 struct ZeroCopyFrameSender(mpsc::UnboundedSender<UOwnedFrame>);
 
 #[async_trait]
-impl UZeroCopyListener<Iceoryx2RxLease> for ZeroCopyFrameSender {
-    async fn on_receive_zero_copy(&self, frame: Iceoryx2RxLease) {
+impl<T> UZeroCopyListener<T> for ZeroCopyFrameSender
+where
+    T: UZeroCopyRxFrame + Send + 'static,
+{
+    async fn on_receive_zero_copy(&self, frame: T) {
         let _ = self.0.send(UOwnedFrame::new(
             frame.metadata().clone(),
-            frame.payload().to_vec(),
+            frame.payload_to_vec(),
         ));
     }
 }
@@ -384,4 +390,100 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned_with_protobuf() {
 
     assert_eq!(frame.metadata().encoding(), Some(&ProtobufWire::encoding()));
     assert_eq!(decoded.value, payload.value);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn routes_real_zenoh_zero_copy_to_real_iceoryx2_zero_copy() {
+    let unique = format!("native-streamer-zc-{}", std::process::id());
+    let zenoh_authority = format!("zenoh-{unique}");
+    let iceoryx_authority = format!("iceoryx-{unique}");
+    let topic = make_topic(&zenoh_authority, 0x9105);
+    let zenoh = zenoh_transport(&zenoh_authority).await;
+    let iceoryx2_egress = iceoryx2_transport();
+    let iceoryx2_receiver = iceoryx2_transport();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    iceoryx2_receiver
+        .register_zero_copy_listener(&topic, None, Arc::new(ZeroCopyFrameSender(tx)))
+        .await
+        .expect("iceoryx2 receiver listener should register");
+
+    let mut streamer = UStreamer::new(
+        "actual-zc-zc",
+        16,
+        subscriptions(vec![subscription(
+            topic.clone(),
+            make_topic(&iceoryx_authority, 0xA105),
+        )]),
+    )
+    .await
+    .expect("streamer should build");
+    streamer
+        .add_route_ref(
+            &OwnedFrameEndpoint::from_zero_copy("zenoh-zc", &zenoh_authority, zenoh.clone()),
+            &OwnedFrameEndpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2_egress),
+        )
+        .await
+        .expect("route should register");
+
+    let (header, id) = metadata_header(topic.clone());
+    zenoh
+        .send_serialized_zero_copy::<RawBytes, _>(header, &&b"zenoh-zc-to-iox"[..])
+        .await
+        .expect("zenoh zero-copy send should succeed");
+
+    let frame = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("receive should not time out")
+        .expect("receiver should remain open");
+    assert_eq!(frame.payload_bytes(), b"zenoh-zc-to-iox");
+    assert_streamed_metadata(&frame, &topic, &id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_zero_copy() {
+    let unique = format!("native-streamer-zc-reverse-{}", std::process::id());
+    let iceoryx_authority = format!("iceoryx-{unique}");
+    let zenoh_authority = format!("zenoh-{unique}");
+    let topic = make_topic(&iceoryx_authority, 0x9106);
+    let iceoryx2 = iceoryx2_transport();
+    let zenoh_egress = zenoh_transport(&zenoh_authority).await;
+    let zenoh_receiver = zenoh_transport(&zenoh_authority).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    zenoh_receiver
+        .register_zero_copy_listener(&topic, None, Arc::new(ZeroCopyFrameSender(tx)))
+        .await
+        .expect("zenoh zero-copy receiver listener should register");
+
+    let mut streamer = UStreamer::new(
+        "actual-zc-zc-reverse",
+        16,
+        subscriptions(vec![subscription(
+            topic.clone(),
+            make_topic(&zenoh_authority, 0xA106),
+        )]),
+    )
+    .await
+    .expect("streamer should build");
+    streamer
+        .add_route_ref(
+            &OwnedFrameEndpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2.clone()),
+            &OwnedFrameEndpoint::from_zero_copy("zenoh-zc", &zenoh_authority, zenoh_egress),
+        )
+        .await
+        .expect("route should register");
+
+    let (header, id) = metadata_header(topic.clone());
+    iceoryx2
+        .send_serialized_zero_copy::<RawBytes, _>(header, &&b"iox-to-zenoh-zc"[..])
+        .await
+        .expect("iceoryx2 zero-copy send should succeed");
+
+    let frame = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("receive should not time out")
+        .expect("receiver should remain open");
+    assert_eq!(frame.payload_bytes(), b"iox-to-zenoh-zc");
+    assert_streamed_metadata(&frame, &topic, &id);
 }

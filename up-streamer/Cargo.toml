@@ -31,7 +31,7 @@ up-rust = { workspace = true, features = ["protobuf-wire"] }
 criterion = { version = "0.5.1", features = ["csv_output"] }
 protobuf = { version = "3.7.2", features = ["with-bytes"] }
 usubscription-static-file = { path = "../utils/usubscription-static-file" }
-up-transport-zenoh = { workspace = true }
+up-transport-zenoh = { workspace = true, features = ["zero-copy"] }
 up-transport-iceoryx2-rust = { workspace = true }
 
 [[bench]]

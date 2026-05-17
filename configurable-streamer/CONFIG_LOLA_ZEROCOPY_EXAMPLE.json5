@@ -7,9 +7,9 @@
   },
   endpoints: [
     {
-      name: "zenoh-zc",
+      name: "zenoh-owned",
       authority: "authority-a",
-      transport: "zenoh_zero_copy",
+      transport: "zenoh_owned",
       zenoh_config_file: "ZENOH_CONFIG.json5",
       forwarding: ["lola-zc"],
     },
@@ -24,7 +24,7 @@
       lola_sample_alignment: 8,
       lola_max_samples: 16,
       lola_mw_com_config_file: "MW_COM_CONFIG_LOLA.json",
-      forwarding: ["zenoh-zc"],
+      forwarding: ["zenoh-owned"],
     },
   ],
 }
