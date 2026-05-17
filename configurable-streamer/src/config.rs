@@ -42,6 +42,20 @@ pub struct EndpointConfig {
     #[serde(default)]
     pub(crate) zenoh_config_file: Option<String>,
     #[serde(default)]
+    pub(crate) lola_instance_specifier: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_service_type: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_event_name: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_sample_size: Option<usize>,
+    #[serde(default)]
+    pub(crate) lola_sample_alignment: Option<usize>,
+    #[serde(default)]
+    pub(crate) lola_max_samples: Option<usize>,
+    #[serde(default)]
+    pub(crate) lola_mw_com_config_file: Option<String>,
+    #[serde(default)]
     pub(crate) mqtt_broker_uri: Option<String>,
     #[serde(default)]
     pub(crate) mqtt_client_id: Option<String>,
@@ -65,6 +79,8 @@ pub struct EndpointConfig {
 #[serde(rename_all = "snake_case")]
 pub enum TransportKind {
     ZenohOwned,
+    ZenohZeroCopy,
+    LolaZeroCopy,
     Iceoryx2ZeroCopy,
     Mqtt5Owned,
     VsomeipOwned,

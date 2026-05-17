@@ -51,6 +51,7 @@ tokio = { version = "1.44", default-features = false, features = [
 ] }
 up-rust = { path = "/home/pete.levasseur/eclipse/uprotocol/up-rust", default-features = false }
 up-transport-zenoh = { path = "/home/pete.levasseur/opencode-project-agents/up-rust/reports/up-transport-zenoh-rust_zero-copy" }
+up-transport-lola-rust = { path = "/home/pete.levasseur/opencode-project-agents/up-rust/reports/up-transport-lola-rust_zero-copy" }
 up-transport-iceoryx2-rust = { path = "/home/pete.levasseur/opencode-project-agents/up-rust/reports/up-transport-iceoryx2-rust_zero-copy" }
 up-transport-mqtt5 = { path = "/home/pete.levasseur/opencode-project-agents/up-rust/reports/up-transport-mqtt5-rust_zero-copy", default-features = false }
 up-transport-vsomeip = { path = "/home/pete.levasseur/opencode-project-agents/up-rust/reports/up-transport-someip-rust_zero-copy/up-transport-vsomeip", default-features = false }

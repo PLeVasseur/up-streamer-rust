@@ -27,6 +27,8 @@ use up_rust::usubscription::USubscription;
 use up_rust::{UCode, UStatus};
 use up_streamer::{OwnedFrameEndpoint, UStreamer};
 use up_transport_iceoryx2_rust::{transport::UTransportIceoryx2, MessagingPattern};
+#[cfg(feature = "lola-transport")]
+use up_transport_lola_rust::{LolaTransportConfig, UTransportLola};
 #[cfg(feature = "mqtt-transport")]
 use up_transport_mqtt5::{
     Mqtt5Transport, Mqtt5TransportOptions, TransportMode as MqttTransportMode,
@@ -47,7 +49,7 @@ fn invalid_config(message: impl Into<String>) -> UStatus {
     UStatus::fail_with_code(UCode::INVALID_ARGUMENT, message.into())
 }
 
-#[cfg(feature = "vsomeip-transport")]
+#[cfg(any(feature = "lola-transport", feature = "vsomeip-transport"))]
 fn required_field<'a>(
     endpoint: &EndpointConfig,
     field: &'a Option<String>,
@@ -121,6 +123,104 @@ async fn endpoint_from_config(
                 &endpoint.authority,
                 transport,
             ))
+        }
+        TransportKind::ZenohZeroCopy => {
+            #[cfg(feature = "zenoh-zero-copy")]
+            {
+                let zenoh_config = match endpoint.zenoh_config_file.as_ref() {
+                    Some(path) if !path.is_empty() => {
+                        let path = resolve_config_path(base_dir, path);
+                        ZenohConfig::from_file(&path).map_err(|error| {
+                            UStatus::fail_with_code(
+                                UCode::INVALID_ARGUMENT,
+                                format!("Unable to load Zenoh config file: {error}"),
+                            )
+                        })?
+                    }
+                    _ => ZenohConfig::default(),
+                };
+                let transport = Arc::new(
+                    UPTransportZenoh::builder(endpoint.authority.clone())?
+                        .with_config(zenoh_config)
+                        .build()
+                        .await?,
+                );
+                Ok(OwnedFrameEndpoint::from_zero_copy(
+                    &endpoint.name,
+                    &endpoint.authority,
+                    transport,
+                ))
+            }
+            #[cfg(not(feature = "zenoh-zero-copy"))]
+            {
+                Err(invalid_config(format!(
+                    "OwnedFrameEndpoint '{}' uses zenoh_zero_copy but configurable-streamer was built without feature 'zenoh-zero-copy'",
+                    endpoint.name
+                )))
+            }
+        }
+        TransportKind::LolaZeroCopy => {
+            #[cfg(feature = "lola-transport")]
+            {
+                let mw_com_config_path = endpoint
+                    .lola_mw_com_config_file
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .map(|path| resolve_config_path(base_dir, path).display().to_string());
+                let config = LolaTransportConfig {
+                    local_authority: endpoint.authority.clone(),
+                    instance_specifier: required_field(
+                        endpoint,
+                        &endpoint.lola_instance_specifier,
+                        "lola_instance_specifier",
+                    )?
+                    .to_string(),
+                    service_type: required_field(
+                        endpoint,
+                        &endpoint.lola_service_type,
+                        "lola_service_type",
+                    )?
+                    .to_string(),
+                    event_name: required_field(
+                        endpoint,
+                        &endpoint.lola_event_name,
+                        "lola_event_name",
+                    )?
+                    .to_string(),
+                    sample_size: endpoint.lola_sample_size.ok_or_else(|| {
+                        invalid_config(format!(
+                            "OwnedFrameEndpoint '{}' requires field 'lola_sample_size'",
+                            endpoint.name
+                        ))
+                    })?,
+                    sample_alignment: endpoint.lola_sample_alignment.ok_or_else(|| {
+                        invalid_config(format!(
+                            "OwnedFrameEndpoint '{}' requires field 'lola_sample_alignment'",
+                            endpoint.name
+                        ))
+                    })?,
+                    max_samples: endpoint.lola_max_samples.ok_or_else(|| {
+                        invalid_config(format!(
+                            "OwnedFrameEndpoint '{}' requires field 'lola_max_samples'",
+                            endpoint.name
+                        ))
+                    })?,
+                    mw_com_config_path,
+                };
+                let transport = UTransportLola::build(config)?;
+                Ok(OwnedFrameEndpoint::from_zero_copy(
+                    &endpoint.name,
+                    &endpoint.authority,
+                    transport,
+                ))
+            }
+            #[cfg(not(feature = "lola-transport"))]
+            {
+                Err(invalid_config(format!(
+                    "OwnedFrameEndpoint '{}' uses lola_zero_copy but configurable-streamer was built without feature 'lola-transport'",
+                    endpoint.name
+                )))
+            }
         }
         TransportKind::Iceoryx2ZeroCopy => {
             let transport = UTransportIceoryx2::build(MessagingPattern::PublishSubscribe)?;

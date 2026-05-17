@@ -21,6 +21,8 @@ license.workspace = true
 
 [features]
 default = []
+zenoh-zero-copy = ["up-transport-zenoh/zero-copy"]
+lola-transport = ["dep:up-transport-lola-rust"]
 mqtt-transport = ["dep:up-transport-mqtt5"]
 vsomeip-transport = ["dep:up-transport-vsomeip"]
 bundled-vsomeip = ["up-transport-vsomeip/bundled"]
@@ -36,6 +38,7 @@ tracing-subscriber = { workspace = true }
 up-rust = { workspace = true, features = ["protobuf-wire"] }
 up-streamer = { path = "../up-streamer" }
 up-transport-iceoryx2-rust = { workspace = true }
+up-transport-lola-rust = { workspace = true, optional = true }
 up-transport-mqtt5 = { workspace = true, optional = true }
 up-transport-vsomeip = { workspace = true, optional = true }
 up-transport-zenoh = { workspace = true }

@@ -1,0 +1,30 @@
+{
+  up_streamer_config: {
+    message_queue_size: 32,
+  },
+  usubscription_config: {
+    file_path: "subscription_data.json",
+  },
+  endpoints: [
+    {
+      name: "zenoh-zc",
+      authority: "authority-a",
+      transport: "zenoh_zero_copy",
+      zenoh_config_file: "ZENOH_CONFIG.json5",
+      forwarding: ["lola-zc"],
+    },
+    {
+      name: "lola-zc",
+      authority: "authority-b",
+      transport: "lola_zero_copy",
+      lola_instance_specifier: "uprotocol/transport/frame",
+      lola_service_type: "/uprotocol/Transport",
+      lola_event_name: "frame",
+      lola_sample_size: 65536,
+      lola_sample_alignment: 8,
+      lola_max_samples: 16,
+      lola_mw_com_config_file: "mw_com_config.json",
+      forwarding: ["zenoh-zc"],
+    },
+  ],
+}

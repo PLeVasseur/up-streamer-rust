@@ -861,6 +861,7 @@ dependencies = [
  "up-rust",
  "up-streamer",
  "up-transport-iceoryx2-rust",
+ "up-transport-lola-rust",
  "up-transport-mqtt5",
  "up-transport-vsomeip",
  "up-transport-zenoh",
@@ -5230,6 +5231,15 @@ dependencies = [
  "hostname",
  "iceoryx2",
  "iceoryx2-bb-container",
+ "tokio",
+ "up-rust",
+]
+
+[[package]]
+name = "up-transport-lola-rust"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
  "tokio",
  "up-rust",
 ]
