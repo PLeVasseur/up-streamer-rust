@@ -32,9 +32,7 @@ use up_rust::{
     UOwnedTransport, UOwnedTransportExt, UPriority, UStatus, UUri, UUID,
 };
 use up_streamer::{OwnedFrameEndpoint, UStreamer};
-use up_transport_iceoryx2_rust::{
-    transport::UTransportIceoryx2, Iceoryx2PubSub, MessagingPattern,
-};
+use up_transport_iceoryx2_rust::{transport::UTransportIceoryx2, Iceoryx2PubSub, MessagingPattern};
 use up_transport_zenoh::{zenoh_config::Config as ZenohConfig, UPTransportZenoh};
 
 #[derive(Default)]
@@ -338,6 +336,66 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned() {
         .expect("receiver should remain open");
     assert_eq!(frame.payload_bytes(), b"iox-to-zenoh");
     assert_streamed_metadata(&frame, &topic, &id);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn iceoryx2_ingress_fans_out_to_streamer_and_local_listener() {
+    let unique = format!("native-streamer-fanout-{}", std::process::id());
+    let iceoryx_authority = format!("iceoryx-{unique}");
+    let zenoh_authority = format!("zenoh-{unique}");
+    let topic = make_topic(&iceoryx_authority, 0x9107);
+    let iceoryx2 = iceoryx2_transport();
+    let zenoh_egress = zenoh_transport(&zenoh_authority).await;
+    let zenoh_receiver = zenoh_transport(&zenoh_authority).await;
+    let (local_tx, mut local_rx) = mpsc::unbounded_channel();
+    let (streamed_tx, mut streamed_rx) = mpsc::unbounded_channel();
+
+    iceoryx2
+        .register_zero_copy_listener(&topic, None, Arc::new(ZeroCopyFrameSender(local_tx)))
+        .await
+        .expect("local iceoryx2 listener should register");
+    zenoh_receiver
+        .register_owned_listener(&topic, None, Arc::new(OwnedFrameSender(streamed_tx)))
+        .await
+        .expect("zenoh receiver listener should register");
+
+    let mut streamer = UStreamer::new(
+        "actual-fanout",
+        16,
+        subscriptions(vec![subscription(
+            topic.clone(),
+            make_topic(&zenoh_authority, 0xA107),
+        )]),
+    )
+    .await
+    .expect("streamer should build");
+    streamer
+        .add_route_ref(
+            &OwnedFrameEndpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2.clone()),
+            &OwnedFrameEndpoint::from_owned("zenoh", &zenoh_authority, zenoh_egress),
+        )
+        .await
+        .expect("route should register");
+
+    let (header, id) = metadata_header(topic.clone());
+    iceoryx2
+        .send_serialized_zero_copy::<RawBytes, _>(header, &&b"iox-fanout"[..])
+        .await
+        .expect("iceoryx2 send should succeed");
+
+    let local_frame = tokio::time::timeout(Duration::from_secs(5), local_rx.recv())
+        .await
+        .expect("local receive should not time out")
+        .expect("local receiver should remain open");
+    let streamed_frame = tokio::time::timeout(Duration::from_secs(5), streamed_rx.recv())
+        .await
+        .expect("streamed receive should not time out")
+        .expect("streamed receiver should remain open");
+
+    assert_eq!(local_frame.payload_bytes(), b"iox-fanout");
+    assert_eq!(streamed_frame.payload_bytes(), b"iox-fanout");
+    assert_streamed_metadata(&local_frame, &topic, &id);
+    assert_streamed_metadata(&streamed_frame, &topic, &id);
 }
 
 #[tokio::test(flavor = "multi_thread")]
