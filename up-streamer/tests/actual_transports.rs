@@ -12,6 +12,8 @@
  ********************************************************************************/
 
 use std::sync::Arc;
+#[cfg(feature = "lola-transport")]
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -33,7 +35,12 @@ use up_rust::{
 };
 use up_streamer::{OwnedFrameEndpoint, UStreamer};
 use up_transport_iceoryx2_rust::{transport::UTransportIceoryx2, Iceoryx2PubSub, MessagingPattern};
+#[cfg(feature = "lola-transport")]
+use up_transport_lola_rust::{LolaRxLease, LolaTransportConfig, UTransportLola};
 use up_transport_zenoh::{zenoh_config::Config as ZenohConfig, UPTransportZenoh};
+
+#[cfg(feature = "lola-transport")]
+static LOLA_STREAMER_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
 #[derive(Default)]
 struct StaticSubscriptions {
@@ -180,6 +187,33 @@ async fn zenoh_transport(authority: &str) -> Arc<UPTransportZenoh> {
 fn iceoryx2_transport() -> Arc<Iceoryx2PubSub> {
     UTransportIceoryx2::build(MessagingPattern::PublishSubscribe)
         .expect("iceoryx2 transport should build")
+}
+
+#[cfg(feature = "lola-transport")]
+fn lola_transport(authority: &str) -> Arc<UTransportLola> {
+    let mw_com_config_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../configurable-streamer/MW_COM_CONFIG_LOLA.json"
+    );
+    UTransportLola::build(LolaTransportConfig {
+        local_authority: authority.to_string(),
+        instance_specifier: "uprotocol/transport".to_string(),
+        service_type: "/uprotocol/Transport".to_string(),
+        event_name: "frame".to_string(),
+        sample_size: 65_536,
+        sample_alignment: 8,
+        max_samples: 4,
+        mw_com_config_path: Some(mw_com_config_path.to_string()),
+    })
+    .expect("LoLa transport should build")
+}
+
+#[cfg(feature = "lola-transport")]
+async fn lola_streamer_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    LOLA_STREAMER_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -396,6 +430,152 @@ async fn iceoryx2_ingress_fans_out_to_streamer_and_local_listener() {
     assert_eq!(streamed_frame.payload_bytes(), b"iox-fanout");
     assert_streamed_metadata(&local_frame, &topic, &id);
     assert_streamed_metadata(&streamed_frame, &topic, &id);
+}
+
+#[cfg(feature = "lola-transport")]
+#[tokio::test(flavor = "multi_thread")]
+async fn lola_publish_ingress_fans_out_to_streamer_and_local_listener() {
+    let _guard = lola_streamer_guard().await;
+    let unique = format!("native-streamer-lola-pub-{}", std::process::id());
+    let lola_authority = format!("lola-{unique}");
+    let zenoh_authority = format!("zenoh-{unique}");
+    let topic = make_topic(&lola_authority, 0x9108);
+    let lola = lola_transport(&lola_authority);
+    let zenoh_egress = zenoh_transport(&zenoh_authority).await;
+    let zenoh_receiver = zenoh_transport(&zenoh_authority).await;
+    let (local_tx, mut local_rx) = mpsc::unbounded_channel();
+    let (streamed_tx, mut streamed_rx) = mpsc::unbounded_channel();
+    let local_listener: Arc<dyn UZeroCopyListener<LolaRxLease>> =
+        Arc::new(ZeroCopyFrameSender(local_tx));
+
+    lola.register_zero_copy_listener(&topic, None, local_listener.clone())
+        .await
+        .expect("local LoLa listener should register");
+    zenoh_receiver
+        .register_owned_listener(&topic, None, Arc::new(OwnedFrameSender(streamed_tx)))
+        .await
+        .expect("zenoh receiver listener should register");
+
+    let mut streamer = UStreamer::new(
+        "actual-lola-publish-fanout",
+        16,
+        subscriptions(vec![subscription(
+            topic.clone(),
+            make_topic(&zenoh_authority, 0xA108),
+        )]),
+    )
+    .await
+    .expect("streamer should build");
+    streamer
+        .add_route_ref(
+            &OwnedFrameEndpoint::from_zero_copy("lola", &lola_authority, lola.clone()),
+            &OwnedFrameEndpoint::from_owned("zenoh", &zenoh_authority, zenoh_egress),
+        )
+        .await
+        .expect("route should register");
+
+    let (header, id) = metadata_header(topic.clone());
+    lola.send_serialized_zero_copy::<RawBytes, _>(header, &&b"lola-publish-fanout"[..])
+        .await
+        .expect("LoLa send should succeed");
+
+    let local_frame = tokio::time::timeout(Duration::from_secs(5), local_rx.recv())
+        .await
+        .expect("local receive should not time out")
+        .expect("local receiver should remain open");
+    let streamed_frame = tokio::time::timeout(Duration::from_secs(5), streamed_rx.recv())
+        .await
+        .expect("streamed receive should not time out")
+        .expect("streamed receiver should remain open");
+
+    assert_eq!(local_frame.payload_bytes(), b"lola-publish-fanout");
+    assert_eq!(streamed_frame.payload_bytes(), b"lola-publish-fanout");
+    assert_streamed_metadata(&local_frame, &topic, &id);
+    assert_streamed_metadata(&streamed_frame, &topic, &id);
+
+    lola.unregister_zero_copy_listener(&topic, None, local_listener)
+        .await
+        .expect("local LoLa listener should unregister");
+}
+
+#[cfg(feature = "lola-transport")]
+#[tokio::test(flavor = "multi_thread")]
+async fn lola_targeted_ingress_fans_out_to_streamer_and_local_listener() {
+    let _guard = lola_streamer_guard().await;
+    let unique = format!("native-streamer-lola-p2p-{}", std::process::id());
+    let lola_authority = format!("lola-{unique}");
+    let zenoh_authority = format!("zenoh-{unique}");
+    let source = make_topic(&lola_authority, 0x9109);
+    let sink = UUri::try_from_parts(&zenoh_authority, 0x4220, 1, 0).expect("valid sink");
+    let lola = lola_transport(&lola_authority);
+    let zenoh_egress = zenoh_transport(&zenoh_authority).await;
+    let zenoh_receiver = zenoh_transport(&zenoh_authority).await;
+    let (local_tx, mut local_rx) = mpsc::unbounded_channel();
+    let (streamed_tx, mut streamed_rx) = mpsc::unbounded_channel();
+    let local_listener: Arc<dyn UZeroCopyListener<LolaRxLease>> =
+        Arc::new(ZeroCopyFrameSender(local_tx));
+
+    lola.register_zero_copy_listener(&source, Some(&sink), local_listener.clone())
+        .await
+        .expect("local LoLa listener should register");
+    zenoh_receiver
+        .register_owned_listener(
+            &source,
+            Some(&sink),
+            Arc::new(OwnedFrameSender(streamed_tx)),
+        )
+        .await
+        .expect("zenoh receiver listener should register");
+
+    let mut streamer = UStreamer::new("actual-lola-targeted-fanout", 16, subscriptions(Vec::new()))
+        .await
+        .expect("streamer should build");
+    streamer
+        .add_route_ref(
+            &OwnedFrameEndpoint::from_zero_copy("lola", &lola_authority, lola.clone()),
+            &OwnedFrameEndpoint::from_owned("zenoh", &zenoh_authority, zenoh_egress),
+        )
+        .await
+        .expect("route should register");
+
+    let id = UUID::build();
+    let attributes = UAttributes::new(
+        id.clone(),
+        source.clone(),
+        Some(sink.clone()),
+        UMessageType::Notification,
+    )
+    .with_priority(UPriority::CS5)
+    .with_ttl(3_000)
+    .with_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00");
+    lola.send_serialized_zero_copy::<RawBytes, _>(
+        UFrameMetadata::new(attributes, RawBytes::encoding()),
+        &&b"lola-targeted-fanout"[..],
+    )
+    .await
+    .expect("LoLa send should succeed");
+
+    let local_frame = tokio::time::timeout(Duration::from_secs(5), local_rx.recv())
+        .await
+        .expect("local receive should not time out")
+        .expect("local receiver should remain open");
+    let streamed_frame = tokio::time::timeout(Duration::from_secs(5), streamed_rx.recv())
+        .await
+        .expect("streamed receive should not time out")
+        .expect("streamed receiver should remain open");
+
+    assert_eq!(local_frame.payload_bytes(), b"lola-targeted-fanout");
+    assert_eq!(streamed_frame.payload_bytes(), b"lola-targeted-fanout");
+    assert_eq!(local_frame.metadata().attributes().id(), &id);
+    assert_eq!(streamed_frame.metadata().attributes().id(), &id);
+    assert_eq!(local_frame.metadata().attributes().source(), &source);
+    assert_eq!(streamed_frame.metadata().attributes().source(), &source);
+    assert_eq!(local_frame.metadata().attributes().sink(), Some(&sink));
+    assert_eq!(streamed_frame.metadata().attributes().sink(), Some(&sink));
+
+    lola.unregister_zero_copy_listener(&source, Some(&sink), local_listener)
+        .await
+        .expect("local LoLa listener should unregister");
 }
 
 #[tokio::test(flavor = "multi_thread")]

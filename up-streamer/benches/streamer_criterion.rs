@@ -24,7 +24,7 @@ use up_rust::usubscription::{
     FetchSubscriptionsResponse, NotificationsRequest, ResetRequest, ResetResponse,
     SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
 };
-use up_rust::{UFrameMetadata, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UUri};
+use up_rust::{UFrameBuilder, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UUri};
 use up_streamer::{OwnedFrameEndpoint, UStreamer};
 
 #[derive(Default)]
@@ -181,11 +181,11 @@ fn wildcard_filter(authority: &str) -> UUri {
     UUri::try_from_parts(authority, 0xFFFF_FFFF, 0xFF, 0xFFFF).expect("valid wildcard filter")
 }
 
-fn frame(authority: &str) -> UOwnedFrame {
-    UOwnedFrame::new(
-        UFrameMetadata::publish(topic(authority)),
-        b"native-stream".as_slice(),
-    )
+fn routed_frame(source_authority: &str, sink_authority: &str) -> UOwnedFrame {
+    let sink = UUri::try_from_parts(sink_authority, 0x4220, 1, 0).expect("valid sink URI");
+    UFrameBuilder::notification(topic(source_authority), sink)
+        .build_with_raw_payload("native-stream")
+        .expect("valid routed frame")
 }
 
 fn endpoint(
@@ -291,7 +291,9 @@ fn bench_egress_forwarding(c: &mut Criterion) {
             b.iter(|| {
                 expected_count += 1;
                 runtime.block_on(async {
-                    ingress.inject(frame("authority-a")).await;
+                    ingress
+                        .inject(routed_frame("authority-a", "authority-b"))
+                        .await;
                     egress.wait_for_sent(expected_count).await;
                 })
             })
