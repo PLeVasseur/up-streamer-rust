@@ -31,6 +31,7 @@ const DEFAULT_ZENOH_PUBLISHER_UENTITY: u32 = 0x3039;
 const DEFAULT_EDGE_PUBLISHER_UENTITY: u32 = 0x5BA0;
 const DEFAULT_UVERSION: u8 = 0x1;
 const DEFAULT_RESOURCE: u16 = 0x8001;
+const DEFAULT_METHOD_RESOURCE: u16 = 0x0001;
 const DEFAULT_BROKER_URI: &str = "localhost:1883";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -246,7 +247,11 @@ fn service_method_for_authority(
         authority,
         parse_u32_or_default("--uentity", args.uentity.as_ref(), DEFAULT_SERVICE_UENTITY)?,
         parse_u8_or_default("--uversion", args.uversion.as_ref(), DEFAULT_UVERSION)?,
-        parse_u16_or_default("--resource", args.resource.as_ref(), DEFAULT_RESOURCE)?,
+        parse_u16_or_default(
+            "--resource",
+            args.resource.as_ref(),
+            DEFAULT_METHOD_RESOURCE,
+        )?,
     )
 }
 

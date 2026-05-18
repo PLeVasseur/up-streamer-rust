@@ -135,6 +135,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
         build_selected_scenario_dependencies(&repo_root, &selected_scenarios, cli.no_bootstrap)
             .await?;
     }
+    prepare_selected_scenario_infrastructure(&repo_root, &selected_scenarios).await?;
 
     let matrix_start_wall = chrono::Utc::now();
     let matrix_start_instant = Instant::now();
@@ -363,6 +364,51 @@ async fn build_selected_scenario_dependencies(
                 );
             }
         }
+    }
+
+    Ok(())
+}
+
+async fn prepare_selected_scenario_infrastructure(
+    repo_root: &Path,
+    selected_scenarios: &[String],
+) -> anyhow::Result<()> {
+    let needs_mqtt_broker = selected_scenarios.iter().any(|scenario_id| {
+        scenario::scenario_template(scenario_id)
+            .map(|template| template.requires_docker)
+            .unwrap_or(false)
+    });
+    if !needs_mqtt_broker {
+        return Ok(());
+    }
+
+    let image_check = run_shell_command(
+        repo_root,
+        repo_root,
+        "docker image inspect eclipse-mosquitto:2.0",
+        true,
+    )
+    .await?;
+    if image_check.status_code == Some(0) {
+        return Ok(());
+    }
+
+    let compose_path = repo_root
+        .join("utils")
+        .join("mosquitto")
+        .join("docker-compose.yaml");
+    let pull_command = format!(
+        "docker compose -f {} pull mosquitto",
+        shell_escape(compose_path.display().to_string().as_str())
+    );
+    let pull_outcome = run_shell_command(repo_root, repo_root, &pull_command, true).await?;
+    if pull_outcome.status_code != Some(0) {
+        anyhow::bail!(
+            "failed to pull MQTT broker image before timed smoke scenarios\ncommand: {}\nstdout:\n{}\nstderr:\n{}",
+            pull_outcome.command,
+            pull_outcome.stdout,
+            pull_outcome.stderr
+        );
     }
 
     Ok(())

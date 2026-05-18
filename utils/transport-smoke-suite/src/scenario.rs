@@ -721,10 +721,6 @@ pub async fn run_scenario(
             )?;
         }
 
-        if template.requires_vsomeip_runtime {
-            vsomeip_runtime_lib = Some(env::detect_vsomeip_runtime_lib(&repo_root)?);
-        }
-
         if !cli_args.skip_build {
             for build_command in template.build_commands {
                 let outcome =
@@ -732,6 +728,10 @@ pub async fn run_scenario(
                         .await?;
                 assert_command_success(outcome, build_command)?;
             }
+        }
+
+        if template.requires_vsomeip_runtime {
+            vsomeip_runtime_lib = Some(env::detect_vsomeip_runtime_lib(&repo_root)?);
         }
 
         Ok(())
@@ -1182,7 +1182,7 @@ fn ensure_process_exited(process: Option<&mut ManagedProcess>, role: &str) -> Re
     Ok(())
 }
 
-async fn start_mqtt_broker(repo_root: &Path, no_bootstrap: bool, deadline: Instant) -> Result<()> {
+async fn start_mqtt_broker(repo_root: &Path, _no_bootstrap: bool, deadline: Instant) -> Result<()> {
     let compose_path = repo_root
         .join("utils")
         .join("mosquitto")
@@ -1190,11 +1190,23 @@ async fn start_mqtt_broker(repo_root: &Path, no_bootstrap: bool, deadline: Insta
     let compose_path_quoted = shell_escape(compose_path.display().to_string().as_str());
 
     let down_command = format!("docker compose -f {compose_path_quoted} down --remove-orphans");
-    let _ = run_shell_command(repo_root, repo_root, &down_command, no_bootstrap).await;
+    let _ = run_shell_command(repo_root, repo_root, &down_command, true).await;
+
+    if Instant::now() >= deadline {
+        return Err(anyhow!(
+            "scenario hard timeout reached while stopping existing MQTT broker"
+        ));
+    }
 
     let up_command = format!("docker compose -f {compose_path_quoted} up -d");
-    let up_outcome = run_shell_command(repo_root, repo_root, &up_command, no_bootstrap).await?;
+    let up_outcome = run_shell_command(repo_root, repo_root, &up_command, true).await?;
     assert_command_success(up_outcome, "docker compose up -d")?;
+
+    if Instant::now() >= deadline {
+        return Err(anyhow!(
+            "scenario hard timeout reached while starting MQTT broker"
+        ));
+    }
 
     let broker_deadline = Instant::now() + Duration::from_secs(env::BROKER_READY_TIMEOUT_SECS);
     loop {
@@ -1227,7 +1239,7 @@ async fn start_mqtt_broker(repo_root: &Path, no_bootstrap: bool, deadline: Insta
     }
 }
 
-async fn stop_mqtt_broker(repo_root: &Path, no_bootstrap: bool) -> Result<()> {
+async fn stop_mqtt_broker(repo_root: &Path, _no_bootstrap: bool) -> Result<()> {
     let compose_path = repo_root
         .join("utils")
         .join("mosquitto")
@@ -1235,7 +1247,7 @@ async fn stop_mqtt_broker(repo_root: &Path, no_bootstrap: bool) -> Result<()> {
     let compose_path_quoted = shell_escape(compose_path.display().to_string().as_str());
     let down_command = format!("docker compose -f {compose_path_quoted} down --remove-orphans");
 
-    let outcome = run_shell_command(repo_root, repo_root, &down_command, no_bootstrap).await?;
+    let outcome = run_shell_command(repo_root, repo_root, &down_command, true).await?;
     assert_command_success(outcome, "docker compose down")
 }
 

@@ -13,9 +13,12 @@
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
+use std::env as std_env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::process::Command;
+use walkdir::WalkDir;
 
 pub const DEFAULT_SEND_COUNT: u64 = 12;
 pub const DEFAULT_SEND_INTERVAL_MS: u64 = 1000;
@@ -118,52 +121,92 @@ pub fn ensure_paths_exist(repo_root: &Path, required_paths: &[&str]) -> Result<(
 }
 
 pub fn detect_vsomeip_runtime_lib(repo_root: &Path) -> Result<PathBuf> {
-    let build_dir = repo_root.join("target").join("debug").join("build");
-    if !build_dir.exists() {
+    let mut candidates = Vec::new();
+
+    if let Ok(install_path) = std_env::var("VSOMEIP_INSTALL_PATH") {
+        collect_vsomeip_runtime_candidates(Path::new(&install_path), &mut candidates)
+            .with_context(|| format!("unable to scan VSOMEIP_INSTALL_PATH={install_path}"))?;
+    }
+
+    let target_dir = cargo_target_dir(repo_root);
+    let build_dir = target_dir.join("debug").join("build");
+    if build_dir.exists() {
+        for entry in fs::read_dir(&build_dir)
+            .with_context(|| format!("unable to read build directory {}", build_dir.display()))?
+        {
+            let entry = entry?;
+            let file_name = entry.file_name();
+            let file_name = file_name.to_string_lossy();
+            if !file_name.starts_with("vsomeip-sys-") {
+                continue;
+            }
+
+            collect_vsomeip_runtime_candidates(&entry.path().join("out"), &mut candidates)?;
+        }
+    } else if candidates.is_empty() {
         return Err(anyhow!(
             "missing build output directory for vsomeip lookup: {}",
             build_dir.display()
         ));
     }
 
-    let mut candidates = Vec::new();
-    for entry in fs::read_dir(&build_dir)
-        .with_context(|| format!("unable to read build directory {}", build_dir.display()))?
+    candidates.sort_by_key(|(modified, _)| *modified);
+    candidates.pop().map(|(_, path)| path).ok_or_else(|| {
+        anyhow!(
+            "unable to locate bundled vsomeip runtime library under {} or VSOMEIP_INSTALL_PATH",
+            build_dir.display()
+        )
+    })
+}
+
+fn cargo_target_dir(repo_root: &Path) -> PathBuf {
+    std_env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root.join(path)
+            }
+        })
+        .unwrap_or_else(|| repo_root.join("target"))
+}
+
+fn collect_vsomeip_runtime_candidates(
+    search_root: &Path,
+    candidates: &mut Vec<(SystemTime, PathBuf)>,
+) -> Result<()> {
+    if !search_root.exists() {
+        return Ok(());
+    }
+
+    for entry in WalkDir::new(search_root)
+        .follow_links(false)
+        .max_depth(12)
+        .into_iter()
     {
-        let entry = entry?;
-        let file_name = entry.file_name();
-        let file_name = file_name.to_string_lossy();
-        if !file_name.starts_with("vsomeip-sys-") {
+        let entry = entry.with_context(|| {
+            format!(
+                "unable to inspect bundled vsomeip runtime under {}",
+                search_root.display()
+            )
+        })?;
+        let file_name = entry.file_name().to_string_lossy();
+        if !(file_name == "libvsomeip3.so"
+            || file_name.starts_with("libvsomeip3.so.")
+            || file_name == "libvsomeip3.dylib")
+        {
             continue;
         }
 
-        let candidate = entry
-            .path()
-            .join("out")
-            .join("vsomeip")
-            .join("vsomeip-install")
-            .join("lib");
-
-        if candidate.exists() {
-            let modified = fs::metadata(&candidate)
-                .and_then(|metadata| metadata.modified())
-                .with_context(|| {
-                    format!(
-                        "unable to inspect modified time for {}",
-                        candidate.display()
-                    )
-                })?;
-            candidates.push((modified, candidate));
-        }
+        let Some(parent) = entry.path().parent() else {
+            continue;
+        };
+        let modified = fs::metadata(entry.path())
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(UNIX_EPOCH);
+        candidates.push((modified, parent.to_path_buf()));
     }
 
-    candidates.sort_by_key(|(modified, _)| *modified);
-    candidates
-        .pop()
-        .map(|(_, path)| path)
-        .ok_or_else(|| {
-            anyhow!(
-                "unable to locate bundled vsomeip runtime under target/debug/build/vsomeip-sys-*/out/vsomeip/vsomeip-install/lib"
-            )
-        })
+    Ok(())
 }
