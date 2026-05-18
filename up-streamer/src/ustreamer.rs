@@ -72,6 +72,17 @@ impl UOwnedListener for IngressForwarder {
     }
 }
 
+/// Native-frame uStreamer router.
+///
+/// `UStreamer` registers owned-frame listeners on ingress endpoints, filters
+/// frames using the current uSubscription snapshot, and sends matching frames to
+/// egress endpoints. The router stores and forwards [`UOwnedFrame`] values even
+/// when an endpoint is backed by a zero-copy transport.
+///
+/// Routes are authority-to-authority bindings between [`OwnedFrameEndpoint`]s.
+/// When a route involves a zero-copy endpoint, copies happen inside that endpoint
+/// adapter; the streamer does not preserve zero-copy leases across route
+/// boundaries.
 pub struct UStreamer {
     name: String,
     message_queue_size: usize,
@@ -82,6 +93,15 @@ pub struct UStreamer {
 }
 
 impl UStreamer {
+    /// Creates a streamer and fetches the initial subscription snapshot.
+    ///
+    /// `message_queue_size` controls the bounded channel used between ingress
+    /// listener callbacks and the egress worker for each route. A value of zero
+    /// is treated as one.
+    ///
+    /// Construction succeeds even if the initial subscription refresh fails; the
+    /// failure is reflected in [`Self::subscription_sync_health`]. Route creation
+    /// will fail until a subscription snapshot has been fetched successfully.
     pub async fn new(
         name: &str,
         message_queue_size: u16,
@@ -99,18 +119,32 @@ impl UStreamer {
         Ok(streamer)
     }
 
+    /// Returns the streamer name used for diagnostics.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Returns health metadata for the most recent subscription refresh attempts.
     pub fn subscription_sync_health(&self) -> SubscriptionSyncHealth {
         self.subscription_sync_health.clone()
     }
 
+    /// Returns the last successfully fetched subscription snapshot.
     pub fn subscription_snapshot(&self) -> &FetchSubscriptionsResponse {
         &self.subscription_snapshot
     }
 
+    /// Fetches subscriptions and rewires existing routes to match the new
+    /// snapshot.
+    ///
+    /// Route rewiring unregisters old ingress filters and registers the filters
+    /// required by the new snapshot. If fetching or rewiring fails, health state
+    /// records the failed attempt.
+    ///
+    /// # Errors
+    ///
+    /// Returns the uSubscription fetch error or a transport registration error
+    /// encountered while rewiring routes.
     pub async fn refresh_subscriptions(&mut self) -> Result<SubscriptionSyncHealth, UStatus> {
         self.subscription_sync_health.previous_attempt_succeeded =
             self.subscription_sync_health.last_attempt_succeeded;
@@ -136,6 +170,17 @@ impl UStreamer {
         }
     }
 
+    /// Adds a route from `ingress` to `egress`.
+    ///
+    /// The route registers listener filters derived from the current subscription
+    /// snapshot. Frames delivered by the ingress endpoint are forwarded to the
+    /// egress endpoint unless their frame ID was recently seen on this route.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when authorities are identical, no successful
+    /// subscription snapshot is available, the route already exists, or ingress
+    /// listener registration fails.
     pub async fn add_route_ref(
         &mut self,
         ingress: &OwnedFrameEndpoint,
@@ -259,6 +304,13 @@ impl UStreamer {
         Ok(())
     }
 
+    /// Adds a route, consuming endpoint values after registration.
+    ///
+    /// This is a convenience wrapper around [`Self::add_route_ref`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::add_route_ref`].
     pub async fn add_route(
         &mut self,
         ingress: OwnedFrameEndpoint,
@@ -267,6 +319,15 @@ impl UStreamer {
         self.add_route_ref(&ingress, &egress).await
     }
 
+    /// Deletes a route from `ingress` to `egress` and unregisters its listeners.
+    ///
+    /// If any unregister operation fails, the route is restored with the
+    /// remaining registrations so callers can retry deletion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when authorities are identical, the route does not exist,
+    /// or an underlying unregister operation fails.
     pub async fn delete_route_ref(
         &mut self,
         ingress: &OwnedFrameEndpoint,
@@ -303,6 +364,13 @@ impl UStreamer {
         Ok(())
     }
 
+    /// Deletes a route, consuming endpoint values after lookup.
+    ///
+    /// This is a convenience wrapper around [`Self::delete_route_ref`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::delete_route_ref`].
     pub async fn delete_route(
         &mut self,
         ingress: OwnedFrameEndpoint,

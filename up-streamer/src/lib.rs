@@ -16,6 +16,19 @@
 //! The public API is based on `UOwnedFrame`, `UOwnedTransport`, and
 //! `UZeroCopyTransport`. It intentionally does not expose or depend on generated
 //! Protocol Buffers message envelopes.
+//!
+//! The router itself forwards [`up_rust::UOwnedFrame`] values. Owned transports
+//! are wrapped with [`OwnedFrameEndpoint::from_owned`]. True zero-copy transports
+//! are wrapped with [`OwnedFrameEndpoint::from_zero_copy`], which uses
+//! [`up_rust::transport::UOwnedFrameEndpoint`] as an adapter boundary: zero-copy
+//! ingress leases are copied into owned frames before routing, and owned egress
+//! frames are copied into zero-copy transmit loans.
+//!
+//! This design lets one streamer bridge owned and zero-copy transports without
+//! requiring every transport to expose the same concrete receive lease type. It
+//! does not claim end-to-end zero-copy forwarding across the streamer boundary.
+
+#![warn(rustdoc::bare_urls, rustdoc::broken_intra_doc_links)]
 
 mod endpoint;
 pub use endpoint::{OwnedFrameEndpoint, TransportMode};
