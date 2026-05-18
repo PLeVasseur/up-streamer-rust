@@ -12,14 +12,46 @@
  ********************************************************************************/
 
 use criterion_guardrail::{evaluate_guardrail, GuardrailInput, REQUIRED_BENCHMARK_IDS};
-use std::path::PathBuf;
+use std::{fs, path::Path};
+use tempfile::TempDir;
+
+const HEADER: &str = "group,function,value,sample_measured_value,unit,iteration_count\n";
+
+fn write_raw_csv(path: &Path, measured_values: &[u64]) {
+    let mut payload = String::from(HEADER);
+    for measured_value in measured_values {
+        payload.push_str(&format!("routing,bench,id,{measured_value},ns,10\n"));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("create fixture parent directories");
+    }
+    fs::write(path, payload).expect("write fixture csv");
+}
 
 #[test]
-fn checked_in_fixture_tree_supports_direct_and_fallback_layouts() {
-    let criterion_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("criterion-sample-tree");
+fn fixture_tree_supports_direct_and_fallback_layouts() {
+    let tempdir = TempDir::new().expect("tempdir");
+    let criterion_root = tempdir.path().join("criterion");
+
+    for (index, benchmark_id) in REQUIRED_BENCHMARK_IDS.iter().enumerate() {
+        write_raw_csv(
+            &criterion_root
+                .join(benchmark_id)
+                .join("ergonomics_baseline")
+                .join("raw.csv"),
+            &[1000, 1010, 990],
+        );
+
+        let candidate_dir = criterion_root
+            .join(benchmark_id)
+            .join("ergonomics_candidate");
+        let candidate_path = if index % 2 == 0 {
+            candidate_dir.join("raw.csv")
+        } else {
+            candidate_dir.join("new").join("raw.csv")
+        };
+        write_raw_csv(&candidate_path, &[1010, 1020, 1000]);
+    }
 
     let report = evaluate_guardrail(&GuardrailInput {
         criterion_root,

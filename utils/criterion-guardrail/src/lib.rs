@@ -18,16 +18,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-pub const REQUIRED_BENCHMARK_IDS: [&str; 6] = [
+pub const REQUIRED_BENCHMARK_IDS: [&str; 11] = [
     "routing_lookup/exact_authority",
     "routing_lookup/wildcard_authority",
     "publish_resolution/source_filter_derivation",
     "ingress_registry/register_route",
     "ingress_registry/unregister_route",
-    "egress_forwarding/single_route_dispatch",
+    "egress_forwarding/owned_to_owned/4096",
+    "egress_forwarding/owned_to_zero_copy/4096",
+    "egress_forwarding/zero_copy_to_owned/4096",
+    "egress_forwarding/zero_copy_to_zero_copy/4096",
+    "fanout_forwarding/owned_to_owned_routes/8",
+    "fanout_forwarding/zero_copy_to_zero_copy_routes/8",
 ];
 
-const THROUGHPUT_GROUPS: [&str; 2] = ["egress_forwarding", "ingress_registry"];
+const THROUGHPUT_GROUPS: [&str; 3] = ["egress_forwarding", "fanout_forwarding", "ingress_registry"];
 const LATENCY_GROUPS: [&str; 2] = ["routing_lookup", "publish_resolution"];
 const ALLOC_PROXY_BENCHMARK_IDS: [&str; 2] = [
     "routing_lookup/wildcard_authority",
