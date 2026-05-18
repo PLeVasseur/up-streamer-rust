@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use clap::Parser;
 use tokio::sync::mpsc;
 use up_rust::{
-    wire::RawBytes, UCode, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener,
+    payload::RawBytes, UCode, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener,
     UOwnedTransport, UOwnedTransportExt, UStatus, UUri,
 };
 #[cfg(feature = "mqtt-transport")]

@@ -25,12 +25,13 @@ use up_rust::usubscription::{
     Subscription, SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
 };
 use up_rust::{
-    wire::{RawBytes, WireFormat},
+    frame_wire::{ProtobufUMessageFrame, UFrameWireFormat},
+    payload::{RawBytes, UWireError},
     zero_copy::{
         UZeroCopyListener, UZeroCopyPayloadCopyExt, UZeroCopyRxFrame, UZeroCopyTransport,
         UZeroCopyTransportExt,
     },
-    ProtobufWire, UAttributes, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener,
+    ProtobufPayload, UAttributes, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener,
     UOwnedTransport, UOwnedTransportExt, UPriority, UStatus, UUri, UUID,
 };
 use up_streamer::{OwnedFrameEndpoint, UStreamer};
@@ -308,7 +309,7 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf() {
 
     let payload = protobuf_payload("protobuf zenoh-to-iox");
     zenoh
-        .send_serialized::<ProtobufWire, _>(UFrameMetadata::publish(topic), &payload)
+        .send_serialized::<ProtobufPayload, _>(UFrameMetadata::publish(topic), &payload)
         .await
         .expect("zenoh protobuf send should succeed");
 
@@ -317,11 +318,81 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf() {
         .expect("receive should not time out")
         .expect("receiver should remain open");
     let decoded: StringValue = frame
-        .deserialize::<ProtobufWire, _>()
+        .deserialize::<ProtobufPayload, _>()
         .expect("protobuf payload should decode");
 
-    assert_eq!(frame.metadata().encoding(), Some(&ProtobufWire::encoding()));
+    assert_eq!(
+        frame.metadata().encoding(),
+        Some(&ProtobufPayload::encoding())
+    );
     assert_eq!(decoded.value, payload.value);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf_umessage_frame_payload() {
+    let unique = format!("native-streamer-outer-pb-{}", std::process::id());
+    let zenoh_authority = format!("zenoh-{unique}");
+    let iceoryx_authority = format!("iceoryx-{unique}");
+    let topic = make_topic(&zenoh_authority, 0x910A);
+    let zenoh = zenoh_transport(&zenoh_authority).await;
+    let iceoryx2_egress = iceoryx2_transport();
+    let iceoryx2_receiver = iceoryx2_transport();
+    let (tx, mut rx) = mpsc::unbounded_channel();
+
+    iceoryx2_receiver
+        .register_zero_copy_listener(&topic, None, Arc::new(ZeroCopyFrameSender(tx)))
+        .await
+        .expect("iceoryx2 receiver listener should register");
+
+    let mut streamer = UStreamer::new(
+        "actual-outer-pb",
+        16,
+        subscriptions(vec![subscription(
+            topic.clone(),
+            make_topic(&iceoryx_authority, 0xA10A),
+        )]),
+    )
+    .await
+    .expect("streamer should build");
+    streamer
+        .add_route_ref(
+            &OwnedFrameEndpoint::from_owned("zenoh", &zenoh_authority, zenoh.clone()),
+            &OwnedFrameEndpoint::from_zero_copy("iceoryx2", &iceoryx_authority, iceoryx2_egress),
+        )
+        .await
+        .expect("route should register");
+
+    let payload = protobuf_payload("protobuf payload inside streamed protobuf UMessage frame");
+    let inner_frame = UOwnedFrame::from_serializable::<ProtobufPayload, _>(
+        UFrameMetadata::publish(make_topic("inner", 0x910A)),
+        &payload,
+    )
+    .expect("inner protobuf payload should serialize");
+    let envelope = ProtobufUMessageFrame::serialize_frame(&inner_frame)
+        .expect("outer protobuf UMessage frame should serialize");
+    zenoh
+        .send_serialized::<RawBytes, _>(UFrameMetadata::publish(topic), &envelope)
+        .await
+        .expect("zenoh raw envelope send should succeed");
+
+    let frame = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+        .await
+        .expect("receive should not time out")
+        .expect("receiver should remain open");
+    let wrong_layer = frame.deserialize::<ProtobufPayload, StringValue>();
+    let decoded_frame = ProtobufUMessageFrame::deserialize_frame(frame.payload_bytes())
+        .expect("outer UMessage frame should decode");
+    let decoded_payload: StringValue = decoded_frame
+        .deserialize::<ProtobufPayload, _>()
+        .expect("inner protobuf payload should decode after outer frame decode");
+
+    assert_eq!(frame.metadata().encoding(), Some(&RawBytes::encoding()));
+    assert_eq!(frame.payload_bytes(), envelope.as_ref());
+    assert!(matches!(
+        wrong_layer,
+        Err(UWireError::UnsupportedEncoding { .. })
+    ));
+    assert_eq!(decoded_payload.value, payload.value);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -614,7 +685,7 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned_with_protobuf() {
 
     let payload = protobuf_payload("protobuf iox-to-zenoh");
     iceoryx2
-        .send_serialized_zero_copy::<ProtobufWire, _>(UFrameMetadata::publish(topic), &payload)
+        .send_serialized_zero_copy::<ProtobufPayload, _>(UFrameMetadata::publish(topic), &payload)
         .await
         .expect("iceoryx2 protobuf send should succeed");
 
@@ -623,10 +694,13 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned_with_protobuf() {
         .expect("receive should not time out")
         .expect("receiver should remain open");
     let decoded: StringValue = frame
-        .deserialize::<ProtobufWire, _>()
+        .deserialize::<ProtobufPayload, _>()
         .expect("protobuf payload should decode");
 
-    assert_eq!(frame.metadata().encoding(), Some(&ProtobufWire::encoding()));
+    assert_eq!(
+        frame.metadata().encoding(),
+        Some(&ProtobufPayload::encoding())
+    );
     assert_eq!(decoded.value, payload.value);
 }
 

@@ -504,15 +504,17 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
+    use protobuf::well_known_types::wrappers::StringValue;
     use up_rust::usubscription::{
         to_proto_uri, FetchSubscribersRequest, FetchSubscribersResponse, NotificationsRequest,
         ResetRequest, ResetResponse, SubscriberInfo, Subscription, SubscriptionRequest,
         SubscriptionResponse, UnsubscribeRequest,
     };
     use up_rust::{
-        wire::{RawBytes, WireFormat},
+        frame_wire::{ProtobufUMessageFrame, UFrameWireFormat},
+        payload::{RawBytes, UWireError},
         zero_copy::{UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport},
-        UFrameBuilder, UFrameMetadata, UOwnedListener, UOwnedTransport,
+        ProtobufPayload, UFrameBuilder, UFrameMetadata, UOwnedListener, UOwnedTransport,
     };
 
     use super::*;
@@ -855,6 +857,12 @@ mod tests {
         )
     }
 
+    fn protobuf_payload(value: &str) -> StringValue {
+        let mut payload = StringValue::new();
+        payload.value = value.to_string();
+        payload
+    }
+
     fn point_to_point_frame(source_authority: &str, sink_authority: &str) -> UOwnedFrame {
         let source =
             UUri::try_from_parts(source_authority, 0x4210, 1, 0x9001).expect("valid source URI");
@@ -892,6 +900,60 @@ mod tests {
         yield_to_forwarder().await;
 
         assert_eq!(egress.sent()[0].payload_bytes(), b"streamed");
+    }
+
+    #[tokio::test]
+    async fn routes_owned_to_owned_preserves_protobuf_umessage_frame_payload_bytes() {
+        let ingress = Arc::new(MemoryOwnedTransport::default());
+        let egress = Arc::new(MemoryOwnedTransport::default());
+        let mut streamer = UStreamer::new(
+            "test",
+            8,
+            subscription_source_with(topic("authority-a"), topic("authority-b")),
+        )
+        .await
+        .expect("streamer should build");
+
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress.clone()),
+            )
+            .await
+            .expect("route should register");
+
+        let payload = protobuf_payload("protobuf payload inside protobuf UMessage frame");
+        let inner_frame = UOwnedFrame::from_serializable::<ProtobufPayload, _>(
+            UFrameMetadata::publish(topic("authority-inner")),
+            &payload,
+        )
+        .expect("protobuf payload should serialize");
+        let envelope = ProtobufUMessageFrame::serialize_frame(&inner_frame)
+            .expect("protobuf UMessage frame should serialize");
+        let carrier = UOwnedFrame::new(
+            UFrameMetadata::publish(topic("authority-a")).with_encoding(RawBytes::encoding()),
+            envelope.clone(),
+        );
+
+        ingress.inject(carrier).await;
+        yield_to_forwarder().await;
+
+        let sent = egress.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].payload_bytes(), envelope.as_ref());
+
+        let wrong_layer = sent[0].deserialize::<ProtobufPayload, StringValue>();
+        assert!(matches!(
+            wrong_layer,
+            Err(UWireError::UnsupportedEncoding { .. })
+        ));
+
+        let decoded_frame = ProtobufUMessageFrame::deserialize_frame(sent[0].payload_bytes())
+            .expect("outer UMessage frame should decode");
+        let decoded_payload: StringValue = decoded_frame
+            .deserialize::<ProtobufPayload, _>()
+            .expect("inner protobuf payload should decode after outer frame decode");
+        assert_eq!(decoded_payload.value, payload.value);
     }
 
     #[tokio::test]

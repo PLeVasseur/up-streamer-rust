@@ -8,7 +8,7 @@ Generic native-frame uStreamer for bridging serializer-neutral uProtocol transpo
 
 `OwnedFrameEndpoint` is an adapter boundary. A zero-copy ingress lease is copied into an owned frame before routing, and a zero-copy egress copies the owned frame payload into a transmit loan. This lets one router bridge owned and zero-copy transports, but it is not end-to-end zero-copy forwarding.
 
-The crate does not depend on generated Protocol Buffers envelopes. Payload representation is carried by `UEncoding` and concrete payload codecs use the `WireFormat` traits from `up-rust`.
+The crate does not depend on generated Protocol Buffers envelopes. Payload representation is carried by `UEncoding` and concrete payload codecs use the `PayloadFormat` traits from `up-rust`.
 
 ## Usage
 
