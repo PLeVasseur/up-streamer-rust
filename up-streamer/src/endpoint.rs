@@ -25,6 +25,11 @@ pub use up_rust::transport::UOwnedFrameEndpointMode as TransportMode;
 /// built from a zero-copy transport, the underlying
 /// [`up_rust::transport::UOwnedFrameEndpoint`] copies receive leases into owned
 /// frames and copies owned egress frames into transmit loans.
+///
+/// The type name omits the leading `U` to keep the streamer API concise, but it
+/// wraps `up_rust::transport::UOwnedFrameEndpoint` directly. Use
+/// [`Self::mode`] when diagnostics need to distinguish native owned transports
+/// from zero-copy transports adapted through this copy boundary.
 #[derive(Clone)]
 pub struct OwnedFrameEndpoint {
     pub(crate) name: String,
@@ -35,7 +40,10 @@ pub struct OwnedFrameEndpoint {
 impl OwnedFrameEndpoint {
     /// Creates a streamer endpoint backed by an [`up_rust::UOwnedTransport`].
     ///
-    /// Sends and listener registration remain on the owned-frame path.
+    /// Sends and listener registration remain on the owned-frame path. Egress
+    /// calls [`up_rust::UOwnedTransport::send_owned`] with the frame routed by
+    /// the streamer, and ingress listener callbacks already receive
+    /// [`up_rust::UOwnedFrame`] values.
     pub fn from_owned(name: &str, authority: &str, transport: Arc<dyn UOwnedTransport>) -> Self {
         Self {
             name: name.to_string(),
@@ -48,7 +56,10 @@ impl OwnedFrameEndpoint {
     ///
     /// This constructor adapts the transport to the streamer's owned-frame router.
     /// It is useful for bridging shared-memory transports, but it is a copy
-    /// boundary rather than end-to-end zero-copy forwarding.
+    /// boundary rather than end-to-end zero-copy forwarding. Egress reserves a
+    /// transmit loan with final metadata, copies the owned payload into the loan,
+    /// then commits it. Ingress copies the receive lease into an owned frame
+    /// before invoking streamer routing logic.
     pub fn from_zero_copy<T>(name: &str, authority: &str, transport: Arc<T>) -> Self
     where
         T: UZeroCopyTransport + Send + Sync + 'static,

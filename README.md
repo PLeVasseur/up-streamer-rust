@@ -21,7 +21,7 @@ Reference the README.md there for more details.
 
 ## Native Frame Migration Status
 
-This branch migrates the streamer workspace to native `UOwnedFrame` and `UZeroCopyTransport` APIs. The supported runnable streamer surfaces in this branch are:
+This workspace uses native `UOwnedFrame` and `UZeroCopyTransport` APIs. The supported runnable streamer surfaces are:
 
 - `up-streamer`: the library API for routing native frames between owned-frame endpoints.
 - `configurable-streamer`: the configurable binary entry point.
@@ -31,6 +31,8 @@ This branch migrates the streamer workspace to native `UOwnedFrame` and `UZeroCo
 The old `up-linux-streamer-plugin` crate is intentionally not restored in this migration branch. Its README already stated that it was not usable, and its implementation depended on the removed generated-envelope `UTransport` surface and old endpoint-construction API. Restoring it should be a follow-up task after upstream PR packaging replaces local path dependencies and the plugin can be rebuilt on `OwnedFrameEndpoint::from_owned` plus native owned transports.
 
 The old bundled/unbundled lint workflows are replaced by `.github/workflows/native-frame-ci.yaml`. The scheduled smoke coverage is retained through `.github/workflows/transport-smoke-capstone.yaml`.
+
+The streamer library routes owned frames. Zero-copy transports are connected through explicit adapter boundaries that copy receive leases into owned frames and copy owned egress payloads into transmit loans. This keeps transport capabilities honest while letting one router bridge owned network/broker transports and shared-memory transports.
 
 ## Building
 

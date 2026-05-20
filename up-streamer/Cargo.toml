@@ -11,6 +11,7 @@
 
 [package]
 name = "up-streamer"
+description = "Native-frame uProtocol streamer for owned and zero-copy transport endpoints"
 rust-version.workspace = true
 version.workspace = true
 repository.workspace = true
@@ -18,6 +19,7 @@ homepage.workspace = true
 edition.workspace = true
 keywords.workspace = true
 license.workspace = true
+readme = "README.md"
 
 [features]
 default = []
@@ -42,3 +44,10 @@ up-transport-iceoryx2-rust = { workspace = true }
 [[bench]]
 name = "streamer_criterion"
 harness = false
+
+[package.metadata.docs.rs]
+no-default-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }

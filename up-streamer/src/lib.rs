@@ -29,6 +29,7 @@
 //! does not claim end-to-end zero-copy forwarding across the streamer boundary.
 
 #![warn(rustdoc::bare_urls, rustdoc::broken_intra_doc_links)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod endpoint;
 pub use endpoint::{OwnedFrameEndpoint, TransportMode};
