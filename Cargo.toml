@@ -23,7 +23,7 @@ members = [
 
 [workspace.package]
 rust-version = "1.88"
-version = "0.1.0"
+version = "0.2.0"
 repository = "https://github.com/eclipse-uprotocol/up-streamer-rust"
 homepage = "https://github.com/eclipse-uprotocol"
 edition = "2021"
@@ -49,12 +49,12 @@ tokio = { version = "1.44", default-features = false, features = [
     "macros",
     "signal",
 ] }
-up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "46afb8551077d65df66de29059629332a6fdd501", default-features = false }
-up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "c4c3c779aeac6e3ec4e9fb9ca639d993661c36b3" }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "28a700d82a00a08d09c5d2802d058c9ebc082f04" }
-up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "9707da2f3461d68d944ba6a3212f81a79f9764b5" }
-up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "8e2ccd422e109419d9a1c433769eb7afa58d3a0e", default-features = false }
-up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "8c6231f3633114a145f4eb7b4d50aed76b1a3cde", default-features = false }
+up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "0b0201a8fa7a30c98c78c41221a4fac9eac954d8", default-features = false }
+up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "ea259cd4fc94165a7ec9c9d04aa52d160c1b01a9" }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "20f25b7a20ef76fba8e4b4978d5f36dab8b42465" }
+up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "8db1cb9ae66324c2afe337f50bf5d2cbbcfd15f4" }
+up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "eb71eedb7040b28ff415f5a3f2ce9629548b7766", default-features = false }
+up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "9fa93defb0b348c4c022a934b5d850be83bf2dde", default-features = false }
 zenoh = { version = "1.2.1", features = [
     "default",
     "plugins",
