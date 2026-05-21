@@ -3,7 +3,7 @@
 This is a standalone implementation of a uStreamer.
 It is implemented to dynamically link between any number of uEntities that use a mix of either Zenoh or MQTT5.
 
-The configurable streamer routes native `UOwnedFrame` values. Owned transports are used directly; true zero-copy transports are connected through an owned-frame adapter that copies zero-copy receive leases into owned frames and copies owned egress payloads into transmit loans. Payload codecs remain an application concern: the streamer preserves `UEncoding` and payload bytes but does not deserialize or reinterpret them.
+The configurable streamer routes native `UOwnedFrame` values. Owned transports are used directly; true zero-copy transports are connected through an owned-frame adapter that copies zero-copy receive leases into owned frames and copies owned egress payloads into transmit loans. Payload codecs remain an application concern: the streamer preserves `PayloadEncoding` and payload bytes but does not deserialize or reinterpret them.
 
 ## Supported Setups
 

@@ -504,7 +504,7 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use protobuf::well_known_types::wrappers::StringValue;
+    use protobuf::well_known_types::{any::Any, wrappers::StringValue};
     use up_rust::usubscription::{
         to_proto_uri, FetchSubscribersRequest, FetchSubscribersResponse, NotificationsRequest,
         ResetRequest, ResetResponse, SubscriberInfo, Subscription, SubscriptionRequest,
@@ -514,7 +514,8 @@ mod tests {
         frame_wire::{ProtobufUMessageFrame, UFrameWireFormat},
         payload::{RawBytes, UWireError},
         zero_copy::{UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport},
-        ProtobufPayload, UFrameBuilder, UFrameMetadata, UOwnedListener, UOwnedTransport,
+        PayloadEncoding, ProtobufAnyPayload, ProtobufPayload, UFrameBuilder, UFrameMetadata,
+        UOwnedListener, UOwnedTransport,
     };
 
     use super::*;
@@ -900,6 +901,130 @@ mod tests {
         yield_to_forwarder().await;
 
         assert_eq!(egress.sent()[0].payload_bytes(), b"streamed");
+    }
+
+    #[tokio::test]
+    async fn routes_owned_to_owned_preserves_custom_payload_encoding() {
+        let ingress = Arc::new(MemoryOwnedTransport::default());
+        let egress = Arc::new(MemoryOwnedTransport::default());
+        let mut streamer = UStreamer::new(
+            "test",
+            8,
+            subscription_source_with(topic("authority-a"), topic("authority-b")),
+        )
+        .await
+        .expect("streamer should build");
+
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress.clone()),
+            )
+            .await
+            .expect("route should register");
+
+        let encoding = PayloadEncoding::custom(
+            "com.example.streamed-native-v1",
+            "application/vnd.example.streamed-native",
+        );
+        let frame = UOwnedFrame::new(
+            UFrameMetadata::publish(topic("authority-a")).with_encoding(encoding.clone()),
+            b"native-layout".as_slice(),
+        );
+        ingress.inject(frame).await;
+        yield_to_forwarder().await;
+
+        let sent = egress.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].metadata().encoding(), Some(&encoding));
+        assert_eq!(sent[0].payload_bytes(), b"native-layout");
+    }
+
+    #[tokio::test]
+    async fn routes_owned_to_owned_preserves_protobuf_payload_encoding() {
+        let ingress = Arc::new(MemoryOwnedTransport::default());
+        let egress = Arc::new(MemoryOwnedTransport::default());
+        let mut streamer = UStreamer::new(
+            "test",
+            8,
+            subscription_source_with(topic("authority-a"), topic("authority-b")),
+        )
+        .await
+        .expect("streamer should build");
+
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress.clone()),
+            )
+            .await
+            .expect("route should register");
+
+        let payload = protobuf_payload("protobuf payload routed by streamer");
+        let frame = UOwnedFrame::from_serializable::<ProtobufPayload, _>(
+            UFrameMetadata::publish(topic("authority-a")),
+            &payload,
+        )
+        .expect("protobuf payload should serialize");
+        ingress.inject(frame).await;
+        yield_to_forwarder().await;
+
+        let sent = egress.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            sent[0].metadata().encoding(),
+            Some(&ProtobufPayload::encoding())
+        );
+        let decoded: StringValue = sent[0]
+            .deserialize::<ProtobufPayload, _>()
+            .expect("protobuf payload should still decode after routing");
+        assert_eq!(decoded.value, payload.value);
+    }
+
+    #[tokio::test]
+    async fn routes_owned_to_owned_preserves_protobuf_any_payload_encoding() {
+        let ingress = Arc::new(MemoryOwnedTransport::default());
+        let egress = Arc::new(MemoryOwnedTransport::default());
+        let mut streamer = UStreamer::new(
+            "test",
+            8,
+            subscription_source_with(topic("authority-a"), topic("authority-b")),
+        )
+        .await
+        .expect("streamer should build");
+
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress.clone()),
+            )
+            .await
+            .expect("route should register");
+
+        let payload = protobuf_payload("protobuf Any payload routed by streamer");
+        let any = Any::pack(&payload).expect("protobuf Any should pack");
+        let frame = UOwnedFrame::from_serializable::<ProtobufAnyPayload, _>(
+            UFrameMetadata::publish(topic("authority-a")),
+            &any,
+        )
+        .expect("protobuf Any payload should serialize");
+        ingress.inject(frame).await;
+        yield_to_forwarder().await;
+
+        let sent = egress.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            sent[0].metadata().encoding(),
+            Some(&ProtobufAnyPayload::encoding())
+        );
+        let decoded_any: Any = sent[0]
+            .deserialize::<ProtobufAnyPayload, _>()
+            .expect("protobuf Any payload should still decode after routing");
+        let decoded = decoded_any
+            .unpack::<StringValue>()
+            .expect("protobuf Any should unpack")
+            .expect("protobuf Any should contain StringValue");
+        assert_eq!(decoded.value, payload.value);
     }
 
     #[tokio::test]
