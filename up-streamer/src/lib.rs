@@ -19,7 +19,7 @@
 //!
 //! The router itself forwards [`up_rust::UOwnedFrame`] values. Owned transports
 //! are wrapped with [`OwnedFrameEndpoint::from_owned`]. True zero-copy transports
-//! are wrapped with [`OwnedFrameEndpoint::from_zero_copy`], which uses
+//! are wrapped with [`OwnedFrameEndpoint::from_zero_copy_copying_adapter`], which uses
 //! [`up_rust::transport::UOwnedFrameEndpoint`] as an adapter boundary: zero-copy
 //! ingress leases are copied into owned frames before routing, and owned egress
 //! frames are copied into zero-copy transmit loans.

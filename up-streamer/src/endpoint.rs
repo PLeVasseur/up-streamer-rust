@@ -52,7 +52,18 @@ impl OwnedFrameEndpoint {
         }
     }
 
-    /// Creates a streamer endpoint backed by a true zero-copy transport.
+    /// Compatibility alias for [`Self::from_zero_copy_copying_adapter`].
+    ///
+    /// Prefer [`Self::from_zero_copy_copying_adapter`] in new code so the copy
+    /// boundary is explicit at call sites.
+    pub fn from_zero_copy<T>(name: &str, authority: &str, transport: Arc<T>) -> Self
+    where
+        T: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        Self::from_zero_copy_copying_adapter(name, authority, transport)
+    }
+
+    /// Creates a streamer endpoint backed by a true zero-copy transport through a copying adapter.
     ///
     /// This constructor adapts the transport to the streamer's owned-frame router.
     /// It is useful for bridging shared-memory transports, but it is a copy
@@ -60,14 +71,14 @@ impl OwnedFrameEndpoint {
     /// transmit loan with final metadata, copies the owned payload into the loan,
     /// then commits it. Ingress copies the receive lease into an owned frame
     /// before invoking streamer routing logic.
-    pub fn from_zero_copy<T>(name: &str, authority: &str, transport: Arc<T>) -> Self
+    pub fn from_zero_copy_copying_adapter<T>(name: &str, authority: &str, transport: Arc<T>) -> Self
     where
         T: UZeroCopyTransport + Send + Sync + 'static,
     {
         Self {
             name: name.to_string(),
             authority: authority.to_string(),
-            transport: UOwnedFrameEndpoint::from_zero_copy(transport),
+            transport: UOwnedFrameEndpoint::from_zero_copy_copying_adapter(transport),
         }
     }
 

@@ -353,7 +353,7 @@ fn zero_copy_endpoint(
     authority: &str,
     transport: Arc<MemoryZeroCopyTransport>,
 ) -> OwnedFrameEndpoint {
-    OwnedFrameEndpoint::from_zero_copy(name, authority, transport)
+    OwnedFrameEndpoint::from_zero_copy_copying_adapter(name, authority, transport)
 }
 
 fn bench_routing_lookup(c: &mut Criterion) {

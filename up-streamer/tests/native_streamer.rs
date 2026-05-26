@@ -320,20 +320,33 @@ async fn routes_owned_and_zero_copy_configurations() {
         TransportMode::Owned
     );
     assert_eq!(
-        OwnedFrameEndpoint::from_zero_copy("zc", "authority-b", zero_copy_ingress.clone()).mode(),
+        OwnedFrameEndpoint::from_zero_copy_copying_adapter(
+            "zc",
+            "authority-b",
+            zero_copy_ingress.clone(),
+        )
+        .mode(),
         TransportMode::ZeroCopy
     );
 
     streamer
         .add_route_ref(
             &OwnedFrameEndpoint::from_owned("owned-in", "authority-a", owned_ingress.clone()),
-            &OwnedFrameEndpoint::from_zero_copy("zc-out", "authority-b", zero_copy_egress.clone()),
+            &OwnedFrameEndpoint::from_zero_copy_copying_adapter(
+                "zc-out",
+                "authority-b",
+                zero_copy_egress.clone(),
+            ),
         )
         .await
         .expect("owned-to-zero-copy route should register");
     streamer
         .add_route_ref(
-            &OwnedFrameEndpoint::from_zero_copy("zc-in", "authority-c", zero_copy_ingress.clone()),
+            &OwnedFrameEndpoint::from_zero_copy_copying_adapter(
+                "zc-in",
+                "authority-c",
+                zero_copy_ingress.clone(),
+            ),
             &OwnedFrameEndpoint::from_owned("owned-out", "authority-d", owned_egress.clone()),
         )
         .await

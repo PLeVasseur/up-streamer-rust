@@ -145,7 +145,7 @@ async fn endpoint_from_config(
                         .build()
                         .await?,
                 );
-                Ok(OwnedFrameEndpoint::from_zero_copy(
+                Ok(OwnedFrameEndpoint::from_zero_copy_copying_adapter(
                     &endpoint.name,
                     &endpoint.authority,
                     transport,
@@ -208,7 +208,7 @@ async fn endpoint_from_config(
                     mw_com_config_path,
                 };
                 let transport = UTransportLola::build(config)?;
-                Ok(OwnedFrameEndpoint::from_zero_copy(
+                Ok(OwnedFrameEndpoint::from_zero_copy_copying_adapter(
                     &endpoint.name,
                     &endpoint.authority,
                     transport,
@@ -224,7 +224,7 @@ async fn endpoint_from_config(
         }
         TransportKind::Iceoryx2ZeroCopy => {
             let transport = UTransportIceoryx2::build(MessagingPattern::PublishSubscribe)?;
-            Ok(OwnedFrameEndpoint::from_zero_copy(
+            Ok(OwnedFrameEndpoint::from_zero_copy_copying_adapter(
                 &endpoint.name,
                 &endpoint.authority,
                 transport,

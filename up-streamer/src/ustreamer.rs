@@ -208,6 +208,18 @@ impl UStreamer {
             ));
         }
 
+        let ingress_mode = ingress.mode();
+        let egress_mode = egress.mode();
+        tracing::debug!(
+            ingress = %ingress.name,
+            ingress_authority = %ingress.authority,
+            ?ingress_mode,
+            egress = %egress.name,
+            egress_authority = %egress.authority,
+            ?egress_mode,
+            "route_create"
+        );
+
         let (tx, mut rx) = mpsc::channel::<UOwnedFrame>(self.message_queue_size);
         let mut registrations = Vec::new();
         for route_filter in self.filters_for_route(ingress, egress) {
@@ -240,8 +252,10 @@ impl UStreamer {
             tracing::debug!(
                 ingress = %ingress_name,
                 ingress_authority = %ingress_authority,
+                ?ingress_mode,
                 egress = %egress_name,
                 egress_authority = %egress_authority,
+                ?egress_mode,
                 "egress_worker_create"
             );
             while let Some(frame) = rx.recv().await {
@@ -250,8 +264,10 @@ impl UStreamer {
                     tracing::debug!(
                         ingress = %ingress_name,
                         ingress_authority = %ingress_authority,
+                        ?ingress_mode,
                         egress = %egress_name,
                         egress_authority = %egress_authority,
+                        ?egress_mode,
                         ?frame_id,
                         "egress_duplicate_frame_skip"
                     );
@@ -267,23 +283,29 @@ impl UStreamer {
                 tracing::debug!(
                     ingress = %ingress_name,
                     ingress_authority = %ingress_authority,
+                    ?ingress_mode,
                     egress = %egress_name,
                     egress_authority = %egress_authority,
+                    ?egress_mode,
                     "egress_send_attempt"
                 );
                 match egress_transport.send_owned(frame).await {
                     Ok(()) => tracing::debug!(
                         ingress = %ingress_name,
                         ingress_authority = %ingress_authority,
+                        ?ingress_mode,
                         egress = %egress_name,
                         egress_authority = %egress_authority,
+                        ?egress_mode,
                         "egress_send_ok"
                     ),
                     Err(err) => tracing::debug!(
                         ingress = %ingress_name,
                         ingress_authority = %ingress_authority,
+                        ?ingress_mode,
                         egress = %egress_name,
                         egress_authority = %egress_authority,
+                        ?egress_mode,
                         ?err,
                         "egress_send_failed"
                     ),
@@ -512,13 +534,31 @@ mod tests {
     };
     use up_rust::{
         frame_wire::{ProtobufUMessageFrame, UFrameWireFormat},
-        payload::{RawBytes, UWireError},
+        payload::{PlacementDefault, RawBytes, StableContainerPayload, UWireError},
         zero_copy::{UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport},
         PayloadEncoding, ProtobufAnyPayload, ProtobufPayload, UFrameBuilder, UFrameMetadata,
         UOwnedListener, UOwnedTransport,
     };
 
     use super::*;
+
+    #[repr(C)]
+    #[derive(
+        Clone,
+        Copy,
+        Debug,
+        Default,
+        Eq,
+        PartialEq,
+        PlacementDefault,
+        up_rust::StablePayload,
+        up_rust::ByteBackedStablePayload,
+    )]
+    #[stable_payload(type_name = "example.vehicle.VehiclePose")]
+    struct VehiclePose {
+        x: u32,
+        y: u32,
+    }
 
     #[derive(Default)]
     struct StaticSubscriptions {
@@ -774,9 +814,9 @@ mod tests {
             &self,
             header: UFrameMetadata,
             payload_len: usize,
-            _alignment: usize,
+            alignment: usize,
         ) -> Result<Self::Tx, UStatus> {
-            Ok(UVecTxBuffer::new(header, payload_len))
+            UVecTxBuffer::with_alignment(header, payload_len, alignment).map_err(UStatus::from)
         }
 
         async fn send_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
@@ -938,6 +978,46 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].metadata().encoding(), Some(&encoding));
         assert_eq!(sent[0].payload_bytes(), b"native-layout");
+    }
+
+    #[tokio::test]
+    async fn routes_owned_to_owned_preserves_stable_container_payload_bytes() {
+        let ingress = Arc::new(MemoryOwnedTransport::default());
+        let egress = Arc::new(MemoryOwnedTransport::default());
+        let mut streamer = UStreamer::new(
+            "test",
+            8,
+            subscription_source_with(topic("authority-a"), topic("authority-b")),
+        )
+        .await
+        .expect("streamer should build");
+
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress.clone()),
+            )
+            .await
+            .expect("route should register");
+
+        let pose = VehiclePose { x: 3, y: 5 };
+        let frame =
+            UOwnedFrame::from_payload_as::<StableContainerPayload<VehiclePose>, VehiclePose>(
+                UFrameMetadata::publish(topic("authority-a")),
+                &pose,
+            )
+            .expect("stable-container payload should encode as owned bytes");
+        let expected_payload = frame.payload_bytes().to_vec();
+        ingress.inject(frame).await;
+        yield_to_forwarder().await;
+
+        let sent = egress.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(
+            sent[0].metadata().encoding(),
+            Some(&StableContainerPayload::<VehiclePose>::encoding())
+        );
+        assert_eq!(sent[0].payload_bytes(), expected_payload.as_slice());
     }
 
     #[tokio::test]
@@ -1140,7 +1220,11 @@ mod tests {
 
         streamer
             .add_route_ref(
-                &OwnedFrameEndpoint::from_zero_copy("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_zero_copy_copying_adapter(
+                    "in",
+                    "authority-a",
+                    ingress.clone(),
+                ),
                 &OwnedFrameEndpoint::from_owned("out", "authority-b", egress.clone()),
             )
             .await
@@ -1210,7 +1294,7 @@ mod tests {
         streamer
             .add_route_ref(
                 &OwnedFrameEndpoint::from_owned("owned-in", "authority-a", owned_ingress.clone()),
-                &OwnedFrameEndpoint::from_zero_copy(
+                &OwnedFrameEndpoint::from_zero_copy_copying_adapter(
                     "zc-out",
                     "authority-b",
                     zero_copy_egress.clone(),
@@ -1220,7 +1304,7 @@ mod tests {
             .expect("owned route should register");
         streamer
             .add_route_ref(
-                &OwnedFrameEndpoint::from_zero_copy(
+                &OwnedFrameEndpoint::from_zero_copy_copying_adapter(
                     "zc-in",
                     "authority-c",
                     zero_copy_ingress.clone(),
