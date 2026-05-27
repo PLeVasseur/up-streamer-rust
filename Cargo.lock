@@ -117,7 +117,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -128,7 +128,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -882,7 +882,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "up-rust 0.11.0-SNAPSHOT",
+ "up-rust",
  "up-streamer",
  "up-transport-iceoryx2-rust",
  "up-transport-lola-rust",
@@ -1285,7 +1285,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1386,7 +1386,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1431,7 +1431,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "up-rust 0.11.0-SNAPSHOT",
+ "up-rust",
  "up-transport-mqtt5",
  "up-transport-vsomeip",
  "up-transport-zenoh",
@@ -1979,7 +1979,7 @@ dependencies = [
  "hyper",
  "libc",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tokio",
  "tower-service",
  "tracing",
@@ -2458,7 +2458,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi 0.5.2",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2877,7 +2877,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3530,7 +3530,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "syn 2.0.117",
@@ -3674,7 +3674,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -3713,7 +3713,7 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.6.3",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -4035,7 +4035,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4102,7 +4102,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4507,7 +4507,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4741,7 +4741,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -5392,7 +5392,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "up-rust 0.11.0-SNAPSHOT",
+ "up-rust",
  "up-streamer",
  "up-transport-iceoryx2-rust",
  "up-transport-vsomeip",
@@ -5403,6 +5403,7 @@ dependencies = [
 [[package]]
 name = "up-rust"
 version = "0.11.0-SNAPSHOT"
+source = "git+https://github.com/PLeVasseur/up-rust.git?rev=6db506f0deff5de4f1093d1378d7dd40d3bb9f5d#6db506f0deff5de4f1093d1378d7dd40d3bb9f5d"
 dependencies = [
  "async-trait",
  "base64",
@@ -5423,24 +5424,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "up-rust"
-version = "0.11.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-rust.git?rev=303e1ad44c3a26179e15fe1f677ea578b1f1d2c6#303e1ad44c3a26179e15fe1f677ea578b1f1d2c6"
-dependencies = [
- "async-trait",
- "base64",
- "bytes",
- "mediatype",
- "rand 0.9.4",
- "regex",
- "tracing",
- "uriparse",
- "uuid-simd",
-]
-
-[[package]]
 name = "up-rust-macros"
 version = "0.11.0-SNAPSHOT"
+source = "git+https://github.com/PLeVasseur/up-rust.git?rev=6db506f0deff5de4f1093d1378d7dd40d3bb9f5d#6db506f0deff5de4f1093d1378d7dd40d3bb9f5d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5456,7 +5442,7 @@ dependencies = [
  "protobuf",
  "tokio",
  "tracing",
- "up-rust 0.11.0-SNAPSHOT",
+ "up-rust",
  "up-transport-iceoryx2-rust",
  "up-transport-lola-rust",
  "up-transport-zenoh",
@@ -5466,28 +5452,30 @@ dependencies = [
 [[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.2.0"
+source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=b55a435b92ec334b32793947dd3efcc52963b564#b55a435b92ec334b32793947dd3efcc52963b564"
 dependencies = [
  "async-trait",
  "hostname",
  "iceoryx2",
  "iceoryx2-bb-container",
  "tokio",
- "up-rust 0.11.0-SNAPSHOT",
+ "up-rust",
 ]
 
 [[package]]
 name = "up-transport-lola-rust"
 version = "0.2.0"
+source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=8735429c48b40a892da41ed4c159ea3cbd0b5e83#8735429c48b40a892da41ed4c159ea3cbd0b5e83"
 dependencies = [
  "async-trait",
  "tokio",
- "up-rust 0.11.0-SNAPSHOT",
+ "up-rust",
 ]
 
 [[package]]
 name = "up-transport-mqtt5"
 version = "0.5.0"
-source = "git+https://github.com/PLeVasseur/up-client-mqtt5-rust.git?rev=0f3b3a5b2b448cb9316da15a21a0138df71f132e#0f3b3a5b2b448cb9316da15a21a0138df71f132e"
+source = "git+https://github.com/PLeVasseur/up-client-mqtt5-rust.git?rev=9f31a34c7f8263e8d55b7f8c62f6322e2769f23c#9f31a34c7f8263e8d55b7f8c62f6322e2769f23c"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -5499,13 +5487,13 @@ dependencies = [
  "slab",
  "testcontainers",
  "tokio",
- "up-rust 0.11.0-SNAPSHOT (git+https://github.com/PLeVasseur/up-rust.git?rev=303e1ad44c3a26179e15fe1f677ea578b1f1d2c6)",
+ "up-rust",
 ]
 
 [[package]]
 name = "up-transport-vsomeip"
 version = "0.5.0"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=198f722f03c00fac87d878f710aae9dcc9ae55d7#198f722f03c00fac87d878f710aae9dcc9ae55d7"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=ef9b77f2776f51dd89b5d524afc6d477d4023be6#ef9b77f2776f51dd89b5d524afc6d477d4023be6"
 dependencies = [
  "async-trait",
  "bimap",
@@ -5520,7 +5508,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "up-rust 0.11.0-SNAPSHOT (git+https://github.com/PLeVasseur/up-rust.git?rev=303e1ad44c3a26179e15fe1f677ea578b1f1d2c6)",
+ "up-rust",
  "vsomeip-proc-macro",
  "vsomeip-sys",
 ]
@@ -5528,13 +5516,14 @@ dependencies = [
 [[package]]
 name = "up-transport-zenoh"
 version = "0.10.0"
+source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=ad6c4fd84a201742cb410272b0e7039b596157e6#ad6c4fd84a201742cb410272b0e7039b596157e6"
 dependencies = [
  "anyhow",
  "async-trait",
  "bytes",
  "tokio",
  "tracing",
- "up-rust 0.11.0-SNAPSHOT",
+ "up-rust",
  "zenoh",
 ]
 
@@ -5596,7 +5585,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "up-rust 0.11.0-SNAPSHOT",
+ "up-rust",
 ]
 
 [[package]]
@@ -5701,7 +5690,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 [[package]]
 name = "vsomeip-proc-macro"
 version = "0.5.0"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=198f722f03c00fac87d878f710aae9dcc9ae55d7#198f722f03c00fac87d878f710aae9dcc9ae55d7"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=ef9b77f2776f51dd89b5d524afc6d477d4023be6#ef9b77f2776f51dd89b5d524afc6d477d4023be6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5712,7 +5701,7 @@ dependencies = [
 [[package]]
 name = "vsomeip-sys"
 version = "0.5.0"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=198f722f03c00fac87d878f710aae9dcc9ae55d7#198f722f03c00fac87d878f710aae9dcc9ae55d7"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=ef9b77f2776f51dd89b5d524afc6d477d4023be6#ef9b77f2776f51dd89b5d524afc6d477d4023be6"
 dependencies = [
  "autocxx",
  "autocxx-build",
@@ -5929,7 +5918,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]

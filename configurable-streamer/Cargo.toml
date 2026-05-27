@@ -43,3 +43,6 @@ up-transport-mqtt5 = { workspace = true, optional = true }
 up-transport-vsomeip = { workspace = true, optional = true }
 up-transport-zenoh = { workspace = true }
 usubscription-static-file = { path = "../utils/usubscription-static-file" }
+
+[lints]
+workspace = true

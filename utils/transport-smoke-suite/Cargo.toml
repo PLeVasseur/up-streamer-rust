@@ -33,3 +33,6 @@ walkdir = { version = "2.5.0" }
 
 [dev-dependencies]
 tempfile = { version = "3.19.1" }
+
+[lints]
+workspace = true

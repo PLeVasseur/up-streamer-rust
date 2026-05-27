@@ -75,3 +75,6 @@ up-transport-mqtt5 = { workspace = true, optional = true }
 up-transport-vsomeip = { workspace = true, optional = true }
 up-transport-zenoh = { workspace = true, optional = true }
 zenoh = { workspace = true }
+
+[lints]
+workspace = true

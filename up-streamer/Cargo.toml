@@ -49,5 +49,5 @@ harness = false
 no-default-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
-[lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
+[lints]
+workspace = true
