@@ -23,6 +23,8 @@
 //! [`up_rust::transport::UOwnedFrameEndpoint`] as an adapter boundary: zero-copy
 //! ingress leases are copied into owned frames before routing, and owned egress
 //! frames are copied into zero-copy transmit loans.
+//! This is owned routing with copying adapters, not zero-copy-preserving
+//! forwarding.
 //!
 //! This design lets one streamer bridge owned and zero-copy transports without
 //! requiring every transport to expose the same concrete receive lease type. It
@@ -33,6 +35,11 @@
 
 mod endpoint;
 pub use endpoint::{OwnedFrameEndpoint, TransportMode};
+
+mod data_plane_health;
+pub use data_plane_health::{
+    DataPlaneFailure, DataPlaneFailureKind, DataPlaneHealth, DataPlaneRoute,
+};
 
 mod subscription_sync_health;
 pub use subscription_sync_health::SubscriptionSyncHealth;

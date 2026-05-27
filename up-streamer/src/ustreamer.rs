@@ -13,7 +13,7 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -24,7 +24,10 @@ use up_rust::{
     transport::UOwnedFrameEndpointRegistration, UCode, UOwnedFrame, UOwnedListener, UStatus, UUri,
 };
 
-use crate::{OwnedFrameEndpoint, SubscriptionSyncHealth};
+use crate::{
+    DataPlaneFailureKind, DataPlaneHealth, DataPlaneRoute, OwnedFrameEndpoint,
+    SubscriptionSyncHealth,
+};
 
 const RECENT_FRAME_ID_LIMIT: usize = 1024;
 
@@ -63,12 +66,28 @@ struct RouteBinding {
 
 struct IngressForwarder {
     tx: mpsc::Sender<UOwnedFrame>,
+    route: DataPlaneRoute,
+    data_plane_health: Arc<Mutex<DataPlaneHealth>>,
 }
 
 #[async_trait::async_trait]
 impl UOwnedListener for IngressForwarder {
     async fn on_receive_owned(&self, frame: UOwnedFrame) {
-        let _ = self.tx.send(frame).await;
+        if self.tx.send(frame).await.is_err() {
+            tracing::warn!(
+                ingress = %self.route.ingress_name,
+                ingress_authority = %self.route.ingress_authority,
+                egress = %self.route.egress_name,
+                egress_authority = %self.route.egress_authority,
+                "ingress_queue_closed"
+            );
+            record_data_plane_failure(
+                &self.data_plane_health,
+                DataPlaneFailureKind::IngressQueueClosed,
+                self.route.clone(),
+                "route ingress queue closed before frame could be forwarded",
+            );
+        }
     }
 }
 
@@ -89,6 +108,7 @@ pub struct UStreamer {
     usubscription: Arc<dyn USubscription>,
     subscription_snapshot: FetchSubscriptionsResponse,
     subscription_sync_health: SubscriptionSyncHealth,
+    data_plane_health: Arc<Mutex<DataPlaneHealth>>,
     routes: HashMap<RouteKey, RouteBinding>,
 }
 
@@ -113,6 +133,7 @@ impl UStreamer {
             usubscription,
             subscription_snapshot: FetchSubscriptionsResponse::default(),
             subscription_sync_health: SubscriptionSyncHealth::default(),
+            data_plane_health: Arc::new(Mutex::new(DataPlaneHealth::default())),
             routes: HashMap::new(),
         };
         let _ = streamer.refresh_subscriptions().await;
@@ -132,6 +153,14 @@ impl UStreamer {
     /// Returns the last successfully fetched subscription snapshot.
     pub fn subscription_snapshot(&self) -> &FetchSubscriptionsResponse {
         &self.subscription_snapshot
+    }
+
+    /// Returns data-plane health metadata for route dispatch failures.
+    pub fn data_plane_health(&self) -> DataPlaneHealth {
+        self.data_plane_health
+            .lock()
+            .expect("data-plane health lock poisoned")
+            .clone()
     }
 
     /// Fetches subscriptions and rewires existing routes to match the new
@@ -201,6 +230,7 @@ impl UStreamer {
         }
 
         let route_key = RouteKey::new(ingress, egress);
+        let route = data_plane_route(ingress, egress);
         if self.routes.contains_key(&route_key) {
             return Err(UStatus::fail_with_code(
                 UCode::ALREADY_EXISTS,
@@ -228,7 +258,11 @@ impl UStreamer {
                 .register_owned_listener(
                     &route_filter.source,
                     route_filter.sink.as_ref(),
-                    Arc::new(IngressForwarder { tx: tx.clone() }),
+                    Arc::new(IngressForwarder {
+                        tx: tx.clone(),
+                        route: route.clone(),
+                        data_plane_health: self.data_plane_health.clone(),
+                    }),
                 )
                 .await
             {
@@ -246,6 +280,7 @@ impl UStreamer {
         let egress_name = egress.name.clone();
         let egress_authority = egress.authority.clone();
         let egress_transport = egress.transport.clone();
+        let data_plane_health = self.data_plane_health.clone();
         let dispatch_task = tokio::spawn(async move {
             let mut recent_frame_ids = HashSet::new();
             let mut recent_frame_order = VecDeque::new();
@@ -299,16 +334,24 @@ impl UStreamer {
                         ?egress_mode,
                         "egress_send_ok"
                     ),
-                    Err(err) => tracing::debug!(
-                        ingress = %ingress_name,
-                        ingress_authority = %ingress_authority,
-                        ?ingress_mode,
-                        egress = %egress_name,
-                        egress_authority = %egress_authority,
-                        ?egress_mode,
-                        ?err,
-                        "egress_send_failed"
-                    ),
+                    Err(err) => {
+                        tracing::warn!(
+                            ingress = %ingress_name,
+                            ingress_authority = %ingress_authority,
+                            ?ingress_mode,
+                            egress = %egress_name,
+                            egress_authority = %egress_authority,
+                            ?egress_mode,
+                            ?err,
+                            "egress_send_failed"
+                        );
+                        record_data_plane_failure(
+                            &data_plane_health,
+                            DataPlaneFailureKind::EgressSend,
+                            route.clone(),
+                            format!("{err:?}"),
+                        );
+                    }
                 }
             }
         });
@@ -423,6 +466,8 @@ impl UStreamer {
                         route_filter.sink.as_ref(),
                         Arc::new(IngressForwarder {
                             tx: binding.tx.clone(),
+                            route: data_plane_route(&binding.ingress, &binding.egress),
+                            data_plane_health: self.data_plane_health.clone(),
                         }),
                     )
                     .await
@@ -448,10 +493,24 @@ impl UStreamer {
             let Some(binding) = self.routes.get_mut(&route_key) else {
                 continue;
             };
+            let route = data_plane_route(&binding.ingress, &binding.egress);
             let old_registrations = std::mem::take(&mut binding.registrations);
             for registration in old_registrations {
                 if let Err(err) = registration.unregister().await {
-                    tracing::debug!(?err, "route_rewire_unregister_old_failed");
+                    tracing::warn!(
+                        ingress = %route.ingress_name,
+                        ingress_authority = %route.ingress_authority,
+                        egress = %route.egress_name,
+                        egress_authority = %route.egress_authority,
+                        ?err,
+                        "route_rewire_unregister_old_failed"
+                    );
+                    record_data_plane_failure(
+                        &self.data_plane_health,
+                        DataPlaneFailureKind::RouteRewireUnregister,
+                        route.clone(),
+                        format!("{err:?}"),
+                    );
                     new_registrations.push(registration);
                 }
             }
@@ -519,6 +578,27 @@ impl Drop for UStreamer {
 fn authority_to_wildcard_filter(authority_name: &str) -> UUri {
     UUri::try_from_parts(authority_name, 0xFFFF_FFFF, 0xFF, 0xFFFF)
         .expect("wildcard URI authority must be valid")
+}
+
+fn data_plane_route(ingress: &OwnedFrameEndpoint, egress: &OwnedFrameEndpoint) -> DataPlaneRoute {
+    DataPlaneRoute {
+        ingress_name: ingress.name.clone(),
+        ingress_authority: ingress.authority.clone(),
+        egress_name: egress.name.clone(),
+        egress_authority: egress.authority.clone(),
+    }
+}
+
+fn record_data_plane_failure(
+    health: &Arc<Mutex<DataPlaneHealth>>,
+    kind: DataPlaneFailureKind,
+    route: DataPlaneRoute,
+    message: impl Into<String>,
+) {
+    health
+        .lock()
+        .expect("data-plane health lock poisoned")
+        .record(kind, route, message.into());
 }
 
 #[cfg(test)]
@@ -629,8 +709,10 @@ mod tests {
         listeners: Mutex<Vec<RegisteredOwnedListener>>,
         filters: Mutex<Vec<(UUri, Option<UUri>)>>,
         sent: Mutex<Vec<UOwnedFrame>>,
+        fail_send: Mutex<bool>,
         fail_on_registration: Mutex<Option<usize>>,
         register_attempts: Mutex<usize>,
+        fail_on_unregister: Mutex<bool>,
     }
 
     #[derive(Clone)]
@@ -685,6 +767,20 @@ mod tests {
             }
         }
 
+        fn fail_sends() -> Self {
+            Self {
+                fail_send: Mutex::new(true),
+                ..Default::default()
+            }
+        }
+
+        fn fail_on_unregister() -> Self {
+            Self {
+                fail_on_unregister: Mutex::new(true),
+                ..Default::default()
+            }
+        }
+
         fn listener_count(&self) -> usize {
             self.listeners
                 .lock()
@@ -696,6 +792,9 @@ mod tests {
     #[async_trait]
     impl UOwnedTransport for MemoryOwnedTransport {
         async fn send_owned(&self, frame: UOwnedFrame) -> Result<(), UStatus> {
+            if *self.fail_send.lock().expect("fail_send lock poisoned") {
+                return Err(UStatus::fail_with_code(UCode::UNAVAILABLE, "send failed"));
+            }
             self.sent.lock().expect("sent lock poisoned").push(frame);
             Ok(())
         }
@@ -743,6 +842,16 @@ mod tests {
             _sink_filter: Option<&UUri>,
             listener: Arc<dyn UOwnedListener>,
         ) -> Result<(), UStatus> {
+            if *self
+                .fail_on_unregister
+                .lock()
+                .expect("fail_on_unregister lock poisoned")
+            {
+                return Err(UStatus::fail_with_code(
+                    UCode::UNAVAILABLE,
+                    "listener unregister failed",
+                ));
+            }
             let mut listeners = self.listeners.lock().expect("listeners lock poisoned");
             if let Some(index) = listeners
                 .iter()
@@ -1207,6 +1316,102 @@ mod tests {
         ingress.inject(frame("authority-a")).await;
         yield_to_forwarder().await;
 
+        assert_eq!(egress.sent().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn egress_send_failure_updates_data_plane_health() {
+        let ingress = Arc::new(MemoryOwnedTransport::default());
+        let egress = Arc::new(MemoryOwnedTransport::fail_sends());
+        let mut streamer = UStreamer::new(
+            "test",
+            8,
+            subscription_source_with(topic("authority-a"), topic("authority-b")),
+        )
+        .await
+        .expect("streamer should build");
+
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress),
+            )
+            .await
+            .expect("route should register");
+        ingress.inject(frame("authority-a")).await;
+        yield_to_forwarder().await;
+
+        let health = streamer.data_plane_health();
+        assert_eq!(health.egress_send_failures, 1);
+        let failure = health.last_failure.expect("last failure recorded");
+        assert_eq!(failure.kind, DataPlaneFailureKind::EgressSend);
+        assert_eq!(failure.route.ingress_authority, "authority-a");
+        assert_eq!(failure.route.egress_authority, "authority-b");
+    }
+
+    #[tokio::test]
+    async fn ingress_forwarder_records_closed_route_queue() {
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        let data_plane_health = Arc::new(Mutex::new(DataPlaneHealth::default()));
+        let forwarder = IngressForwarder {
+            tx,
+            route: DataPlaneRoute {
+                ingress_name: "in".to_string(),
+                ingress_authority: "authority-a".to_string(),
+                egress_name: "out".to_string(),
+                egress_authority: "authority-b".to_string(),
+            },
+            data_plane_health: data_plane_health.clone(),
+        };
+
+        forwarder.on_receive_owned(frame("authority-a")).await;
+
+        let health = data_plane_health
+            .lock()
+            .expect("data-plane health lock poisoned")
+            .clone();
+        assert_eq!(health.ingress_queue_failures, 1);
+        assert_eq!(
+            health.last_failure.expect("last failure recorded").kind,
+            DataPlaneFailureKind::IngressQueueClosed
+        );
+    }
+
+    #[tokio::test]
+    async fn rewire_unregister_failure_records_health_and_suppresses_duplicate_callbacks() {
+        let ingress = Arc::new(MemoryOwnedTransport::fail_on_unregister());
+        let egress = Arc::new(MemoryOwnedTransport::default());
+        let mut streamer = UStreamer::new(
+            "test",
+            8,
+            subscription_source_with(topic("authority-a"), topic("authority-b")),
+        )
+        .await
+        .expect("streamer should build");
+
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("in", "authority-a", ingress.clone()),
+                &OwnedFrameEndpoint::from_owned("out", "authority-b", egress.clone()),
+            )
+            .await
+            .expect("route should register");
+        streamer
+            .refresh_subscriptions()
+            .await
+            .expect("refresh should keep route installed");
+        assert_eq!(ingress.listener_count(), 4);
+
+        ingress.inject(frame("authority-a")).await;
+        yield_to_forwarder().await;
+
+        let health = streamer.data_plane_health();
+        assert_eq!(health.route_rewire_unregister_failures, 2);
+        assert_eq!(
+            health.last_failure.expect("last failure recorded").kind,
+            DataPlaneFailureKind::RouteRewireUnregister
+        );
         assert_eq!(egress.sent().len(), 1);
     }
 

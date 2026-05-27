@@ -17,6 +17,7 @@ The crate does not depend on generated Protocol Buffers envelopes. Payload repre
 | `OwnedFrameEndpoint::from_zero_copy_copying_adapter` | Wraps a true zero-copy transport through an explicit copying adapter. |
 | `PayloadFormat` | Chosen by applications at frame boundaries; the streamer does not reinterpret payload bytes. |
 | `UFrameWireFormat` | Only used if an application intentionally carries an encoded whole frame as payload bytes. |
+| `UStreamer::data_plane_health` | Reports egress send failures, closed ingress queues, and route refresh unregister failures. |
 
 ## Usage
 
@@ -76,6 +77,10 @@ The route above is useful for bridging network/broker transports with shared-mem
 - `TransportMode::ZeroCopy`: the endpoint is backed by a zero-copy transport, but streamer routing still crosses the owned-frame adapter boundary.
 
 Zero-copy ingress routes copy receive leases into owned frames and use native subscription snapshots to register exact topic services when needed by transports such as iceoryx2.
+
+## Health
+
+`UStreamer::subscription_sync_health()` reports uSubscription refresh outcomes. `UStreamer::data_plane_health()` reports route data-plane failures such as egress send errors, closed ingress queues, and old listener registrations that could not be removed during route refresh. Egress send failures are logged at `warn` level and reflected in data-plane health; they are not hidden as debug-only telemetry.
 
 ## Transport Implementer Checklist
 
