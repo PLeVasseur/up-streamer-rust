@@ -88,3 +88,7 @@ panic = "abort"
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(docsrs)'] }
 unsafe_code = "forbid"
+deprecated_safe_2024 = "deny"
+ffi_unwind_calls = "deny"
+static_mut_refs = "deny"
+clashing_extern_declarations = "deny"
