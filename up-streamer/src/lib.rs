@@ -29,12 +29,25 @@
 //! This design lets one streamer bridge owned and zero-copy transports without
 //! requiring every transport to expose the same concrete receive lease type. It
 //! does not claim end-to-end zero-copy forwarding across the streamer boundary.
+//!
+//! With the `experimental-loaned-frame` feature, the crate also exposes a small
+//! copy-minimized helper for copying a loaned ingress frame directly into a
+//! zero-copy egress transmit loan. That helper avoids an intermediate owned
+//! payload allocation, but it still copies payload bytes and is not strict
+//! zero-copy forwarding.
 
 #![warn(rustdoc::bare_urls, rustdoc::broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod endpoint;
 pub use endpoint::{OwnedFrameEndpoint, TransportMode};
+
+#[cfg(feature = "experimental-loaned-frame")]
+#[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+mod copy_minimized;
+#[cfg(feature = "experimental-loaned-frame")]
+#[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+pub use copy_minimized::send_loaned_frame_copy_minimized;
 
 mod data_plane_health;
 pub use data_plane_health::{

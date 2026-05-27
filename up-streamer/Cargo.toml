@@ -24,6 +24,7 @@ readme = "README.md"
 [features]
 default = []
 lola-transport = ["dep:up-transport-lola-rust"]
+experimental-loaned-frame = ["up-rust/experimental-loaned-frame"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

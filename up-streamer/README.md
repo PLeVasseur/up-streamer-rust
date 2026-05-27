@@ -82,6 +82,10 @@ Zero-copy ingress routes copy receive leases into owned frames and use native su
 
 `UStreamer::subscription_sync_health()` reports uSubscription refresh outcomes. `UStreamer::data_plane_health()` reports route data-plane failures such as egress send errors, closed ingress queues, and old listener registrations that could not be removed during route refresh. Egress send failures are logged at `warn` level and reflected in data-plane health; they are not hidden as debug-only telemetry.
 
+## Experimental Copy-Minimized Helper
+
+The `experimental-loaned-frame` feature exposes `send_loaned_frame_copy_minimized` for experiments that hold an ingress `LoanedFrame` lease and copy its ordered payload slices directly into a zero-copy egress transmit loan. This avoids an intermediate owned payload allocation, but it still copies payload bytes into the egress loan and is not zero-copy-preserving forwarding.
+
 ## Transport Implementer Checklist
 
 1. Implement `UOwnedTransport` for network, brokered, or in-process transports that own payload buffers.
