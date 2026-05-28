@@ -11,9 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use std::sync::Arc;
-#[cfg(feature = "lola-transport")]
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -40,6 +38,7 @@ use up_transport_iceoryx2_rust::{transport::UTransportIceoryx2, Iceoryx2PubSub, 
 use up_transport_lola_rust::{LolaRxLease, LolaTransportConfig, UTransportLola};
 use up_transport_zenoh::{zenoh_config::Config as ZenohConfig, UPTransportZenoh};
 
+static ACTUAL_TRANSPORT_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 #[cfg(feature = "lola-transport")]
 static LOLA_STREAMER_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
@@ -116,7 +115,9 @@ where
     async fn on_receive_zero_copy(&self, frame: T) {
         let _ = self.0.send(UOwnedFrame::new(
             frame.metadata().clone(),
-            frame.payload_to_vec(),
+            frame
+                .try_payload_to_vec()
+                .expect("zero-copy payload slices should match payload_len"),
         ));
     }
 }
@@ -190,6 +191,13 @@ fn iceoryx2_transport() -> Arc<Iceoryx2PubSub> {
         .expect("iceoryx2 transport should build")
 }
 
+async fn actual_transport_guard() -> tokio::sync::MutexGuard<'static, ()> {
+    ACTUAL_TRANSPORT_LOCK
+        .get_or_init(|| tokio::sync::Mutex::new(()))
+        .lock()
+        .await
+}
+
 #[cfg(feature = "lola-transport")]
 fn lola_transport(authority: &str) -> Arc<UTransportLola> {
     let mw_com_config_path = concat!(
@@ -219,6 +227,7 @@ async fn lola_streamer_guard() -> tokio::sync::MutexGuard<'static, ()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy() {
+    let _actual_guard = actual_transport_guard().await;
     let unique = format!("native-streamer-{}", std::process::id());
     let zenoh_authority = format!("zenoh-{unique}");
     let iceoryx_authority = format!("iceoryx-{unique}");
@@ -279,6 +288,7 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf() {
+    let _actual_guard = actual_transport_guard().await;
     let unique = format!("native-streamer-pb-{}", std::process::id());
     let zenoh_authority = format!("zenoh-{unique}");
     let iceoryx_authority = format!("iceoryx-{unique}");
@@ -338,6 +348,7 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf_umessage_frame_payload() {
+    let _actual_guard = actual_transport_guard().await;
     let unique = format!("native-streamer-outer-pb-{}", std::process::id());
     let zenoh_authority = format!("zenoh-{unique}");
     let iceoryx_authority = format!("iceoryx-{unique}");
@@ -409,6 +420,7 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf_umessa
 
 #[tokio::test(flavor = "multi_thread")]
 async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned() {
+    let _actual_guard = actual_transport_guard().await;
     let unique = format!("native-streamer-reverse-{}", std::process::id());
     let iceoryx_authority = format!("iceoryx-{unique}");
     let zenoh_authority = format!("zenoh-{unique}");
@@ -461,6 +473,7 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn iceoryx2_ingress_fans_out_to_streamer_and_local_listener() {
+    let _actual_guard = actual_transport_guard().await;
     let unique = format!("native-streamer-fanout-{}", std::process::id());
     let iceoryx_authority = format!("iceoryx-{unique}");
     let zenoh_authority = format!("zenoh-{unique}");
@@ -526,6 +539,7 @@ async fn iceoryx2_ingress_fans_out_to_streamer_and_local_listener() {
 #[cfg(feature = "lola-transport")]
 #[tokio::test(flavor = "multi_thread")]
 async fn lola_publish_ingress_fans_out_to_streamer_and_local_listener() {
+    let _actual_guard = actual_transport_guard().await;
     let _guard = lola_streamer_guard().await;
     let unique = format!("native-streamer-lola-pub-{}", std::process::id());
     let lola_authority = format!("lola-{unique}");
@@ -596,6 +610,7 @@ async fn lola_publish_ingress_fans_out_to_streamer_and_local_listener() {
 #[cfg(feature = "lola-transport")]
 #[tokio::test(flavor = "multi_thread")]
 async fn lola_targeted_ingress_fans_out_to_streamer_and_local_listener() {
+    let _actual_guard = actual_transport_guard().await;
     let _guard = lola_streamer_guard().await;
     let unique = format!("native-streamer-lola-p2p-{}", std::process::id());
     let lola_authority = format!("lola-{unique}");
@@ -679,6 +694,7 @@ async fn lola_targeted_ingress_fans_out_to_streamer_and_local_listener() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned_with_protobuf() {
+    let _actual_guard = actual_transport_guard().await;
     let unique = format!("native-streamer-reverse-pb-{}", std::process::id());
     let iceoryx_authority = format!("iceoryx-{unique}");
     let zenoh_authority = format!("zenoh-{unique}");
@@ -738,6 +754,7 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned_with_protobuf() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn routes_real_zenoh_zero_copy_to_real_iceoryx2_zero_copy() {
+    let _actual_guard = actual_transport_guard().await;
     let unique = format!("native-streamer-zc-{}", std::process::id());
     let zenoh_authority = format!("zenoh-{unique}");
     let iceoryx_authority = format!("iceoryx-{unique}");
@@ -794,6 +811,7 @@ async fn routes_real_zenoh_zero_copy_to_real_iceoryx2_zero_copy() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_zero_copy() {
+    let _actual_guard = actual_transport_guard().await;
     let unique = format!("native-streamer-zc-reverse-{}", std::process::id());
     let iceoryx_authority = format!("iceoryx-{unique}");
     let zenoh_authority = format!("zenoh-{unique}");

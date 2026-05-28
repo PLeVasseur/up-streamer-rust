@@ -108,6 +108,8 @@ pub enum DataPlaneFailureKind {
     IngressQueueFull,
     /// Route refresh could not unregister an old ingress listener registration.
     RouteRewireUnregister,
+    /// A copy-minimized route rejected payload metadata or egress loan layout before send.
+    CopyMinimizedPayloadLayout,
 }
 
 /// Details for the most recent data-plane failure.
@@ -132,6 +134,8 @@ pub struct DataPlaneHealth {
     pub ingress_queue_full_drops: u64,
     /// Count of old listener unregister failures during route refresh.
     pub route_rewire_unregister_failures: u64,
+    /// Count of copy-minimized frames rejected before egress send for payload layout reasons.
+    pub copy_minimized_payload_layout_failures: u64,
     /// Time at which the most recent data-plane failure was recorded.
     pub last_failure_at: Option<SystemTime>,
     /// Most recent data-plane failure details.
@@ -158,6 +162,11 @@ impl DataPlaneHealth {
             DataPlaneFailureKind::RouteRewireUnregister => {
                 self.route_rewire_unregister_failures =
                     self.route_rewire_unregister_failures.saturating_add(1);
+            }
+            DataPlaneFailureKind::CopyMinimizedPayloadLayout => {
+                self.copy_minimized_payload_layout_failures = self
+                    .copy_minimized_payload_layout_failures
+                    .saturating_add(1);
             }
         }
         self.last_failure_at = Some(SystemTime::now());

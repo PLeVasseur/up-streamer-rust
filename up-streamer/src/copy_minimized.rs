@@ -12,7 +12,8 @@
  ********************************************************************************/
 
 use up_rust::{
-    copy_loaned_frame_payload_to_tx, zero_copy::UZeroCopyTransport, LoanedFrame, UStatus,
+    copy_loaned_frame_payload_to_tx, zero_copy::UZeroCopyTransport, LoanedFrame, PayloadLayout,
+    StableContainerPayloadInfo, UCode, UStatus, UTxLoanSpec,
 };
 
 /// Sends a loaned frame through a zero-copy transport with one payload copy.
@@ -31,11 +32,71 @@ pub async fn send_loaned_frame_copy_minimized<T>(
 where
     T: UZeroCopyTransport + ?Sized,
 {
-    let mut tx = transport
-        .reserve(frame.metadata().clone(), frame.payload_len(), alignment)
-        .await?;
+    let spec = loan_spec_for_copy_minimized(frame, alignment)?;
+    let mut tx = transport.loan_tx(spec).await?;
     copy_loaned_frame_payload_to_tx(frame, &mut tx).map_err(UStatus::from)?;
     transport.send_zero_copy(tx).await
+}
+
+pub(crate) fn loan_spec_for_copy_minimized(
+    frame: &(impl LoanedFrame + ?Sized),
+    alignment: usize,
+) -> Result<UTxLoanSpec, UStatus> {
+    validate_stable_container_copy_minimized(frame, alignment)?;
+
+    let metadata = frame.metadata().clone();
+    if !frame.has_payload() {
+        return UTxLoanSpec::no_payload(metadata);
+    }
+    if frame.payload_len() == 0 {
+        return UTxLoanSpec::present_empty_payload(metadata);
+    }
+
+    let layout = PayloadLayout::new(frame.payload_len(), alignment).map_err(UStatus::from)?;
+    UTxLoanSpec::payload(metadata, layout)
+}
+
+fn validate_stable_container_copy_minimized(
+    frame: &(impl LoanedFrame + ?Sized),
+    alignment: usize,
+) -> Result<(), UStatus> {
+    let Some(encoding) = frame.metadata().encoding() else {
+        return Ok(());
+    };
+    let Some(custom) = encoding.custom_encoding() else {
+        return Ok(());
+    };
+    if custom.id() != StableContainerPayloadInfo::ENCODING_ID {
+        return Ok(());
+    }
+
+    let info = StableContainerPayloadInfo::parse(encoding).map_err(|error| {
+        UStatus::fail_with_code(
+            UCode::INVALID_ARGUMENT,
+            format!("invalid stable-container metadata on copy-minimized route: {error}"),
+        )
+    })?;
+    if frame.payload_len() != info.size {
+        return Err(UStatus::fail_with_code(
+            UCode::INVALID_ARGUMENT,
+            format!(
+                "stable-container payload length {} does not match advertised size {}",
+                frame.payload_len(),
+                info.size
+            ),
+        ));
+    }
+    if alignment < info.alignment {
+        return Err(UStatus::fail_with_code(
+            UCode::INVALID_ARGUMENT,
+            format!(
+                "copy-minimized stable-container route requires egress alignment at least {}, configured {}",
+                info.alignment, alignment
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -46,7 +107,7 @@ mod tests {
     use tokio::sync::Mutex;
     use up_rust::{
         zero_copy::{UVecTxBuffer, UZeroCopyTransport},
-        UFrameBuilder, UOwnedFrame, UStatus, UUri,
+        UFrameBuilder, UOwnedFrame, UStatus, UTxLoanSpec, UUri,
     };
 
     use super::*;
@@ -61,13 +122,13 @@ mod tests {
         type Tx = UVecTxBuffer;
         type Rx = UOwnedFrame;
 
-        async fn reserve(
-            &self,
-            metadata: up_rust::UFrameMetadata,
-            payload_len: usize,
-            alignment: usize,
-        ) -> Result<Self::Tx, UStatus> {
-            UVecTxBuffer::with_alignment(metadata, payload_len, alignment).map_err(UStatus::from)
+        async fn loan_tx(&self, spec: UTxLoanSpec) -> Result<Self::Tx, UStatus> {
+            UVecTxBuffer::with_alignment(
+                spec.metadata().clone(),
+                spec.payload_len(),
+                spec.payload_alignment(),
+            )
+            .map_err(UStatus::from)
         }
 
         async fn send_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {

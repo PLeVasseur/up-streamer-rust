@@ -101,20 +101,6 @@ impl OwnedFrameEndpoint {
         }
     }
 
-    /// Compatibility alias for [`Self::from_zero_copy_copying_adapter`].
-    ///
-    /// Prefer [`Self::from_zero_copy_copying_adapter`] in new code so the copy
-    /// boundary is explicit at call sites.
-    #[deprecated(
-        note = "use from_zero_copy_copying_adapter; this constructor copies at the owned/zero-copy boundary"
-    )]
-    pub fn from_zero_copy<T>(name: &str, authority: &str, transport: Arc<T>) -> Self
-    where
-        T: UZeroCopyTransport + Send + Sync + 'static,
-    {
-        Self::from_zero_copy_copying_adapter(name, authority, transport)
-    }
-
     /// Creates a streamer endpoint backed by a true zero-copy transport through a copying adapter.
     ///
     /// This constructor adapts the transport to the streamer's owned-frame router.

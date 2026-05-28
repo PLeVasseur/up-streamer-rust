@@ -49,12 +49,12 @@ tokio = { version = "1.44", default-features = false, features = [
     "macros",
     "signal",
 ] }
-up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "425c4c578896533c1717e79e11463d8cb683ef8f", default-features = false }
-up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "a12b74a75d2d747a5c87bd5b3fd312a05b25e5a2" }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "67cc8d72a720b6e19ae2e02d6a77b5b232ddc89b" }
-up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "86b62f0d1d40db87f517038e72be0043b97cc0a0" }
-up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "3a2f60c0ec5c3f5e1539b3e3c080faa9e68d7c8f", default-features = false }
-up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "05fd6f5459c9de51ab68e45cb5a5b2835ebe70a8", default-features = false }
+up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "b45bf7f28a3a943ed4c9153571f5d6892458d937", default-features = false }
+up-transport-zenoh = { git = "https://github.com/eclipse-uprotocol/up-transport-zenoh-rust.git", rev = "943c1b919503cb3946229482743493b8ad290113" }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "653e4e803c87623f9e75e3be72316e217a4eba61" }
+up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "3169c6b3d6ba183dd442496853573c65814f4766" }
+up-transport-mqtt5 = { git = "https://github.com/eclipse-uprotocol/up-transport-mqtt5-rust.git", rev = "7ed05a7b97790c4e69f31eb1aeeb59053704b8c7", default-features = false }
+up-transport-vsomeip = { git = "https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust.git", rev = "a660c2d741ccba3cb80d2b2d0858a99084b97a9e", default-features = false }
 zenoh = { version = "1.2.1", features = [
     "default",
     "plugins",

@@ -21,8 +21,7 @@ use up_rust::usubscription::{
 };
 use up_rust::{
     zero_copy::{UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport},
-    UCode, UFrameBuilder, UFrameMetadata, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus,
-    UUri,
+    UCode, UFrameBuilder, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UTxLoanSpec, UUri,
 };
 use up_streamer::{OwnedFrameEndpoint, TransportMode, UStreamer};
 
@@ -220,13 +219,13 @@ impl UZeroCopyTransport for MemoryZeroCopyTransport {
     type Tx = UVecTxBuffer;
     type Rx = UOwnedFrame;
 
-    async fn reserve(
-        &self,
-        header: UFrameMetadata,
-        payload_len: usize,
-        _alignment: usize,
-    ) -> Result<Self::Tx, UStatus> {
-        Ok(UVecTxBuffer::new(header, payload_len))
+    async fn loan_tx(&self, spec: UTxLoanSpec) -> Result<Self::Tx, UStatus> {
+        UVecTxBuffer::with_alignment(
+            spec.metadata().clone(),
+            spec.payload_len(),
+            spec.payload_alignment(),
+        )
+        .map_err(UStatus::from)
     }
 
     async fn send_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {

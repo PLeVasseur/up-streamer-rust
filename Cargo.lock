@@ -501,7 +501,7 @@ dependencies = [
  "bitflags 2.11.1",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2026,9 +2026,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5554e05d563007b0d4f9b6e4ba68be13be96b448d68f88cf59f78583be157ecf"
+checksum = "aa70a19527472fb5c7ec3f76b0f77e241ce390302eee8a39c0f859c038360f15"
 dependencies = [
  "iceoryx2-bb-concurrency",
  "iceoryx2-bb-container",
@@ -2051,9 +2051,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-bb-concurrency"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ae8ed45659debc35d7d159b878e1f693d24f7edbcf13df3a0cd85922f68feb4e"
+checksum = "232b2c9276d276974ced52f9470e73636524eecb07628b03b3f6b306cfc645d3"
 dependencies = [
  "iceoryx2-bb-elementary-traits",
  "iceoryx2-pal-concurrency-sync",
@@ -2061,9 +2061,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-bb-container"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1af11eb065e1eb8c97ff0a02d1a881c59445458b9e53e0eab90d71f02c0d463"
+checksum = "16f5dd1a9f404bd5789a98614363f7f5ad7fa757a2cf8b20a83b6b1580f5b8c0"
 dependencies = [
  "iceoryx2-bb-concurrency",
  "iceoryx2-bb-derive-macros",
@@ -2075,9 +2075,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-bb-derive-macros"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87cc2fb728e72ec24ab28efc0604168f9369df948a15e853a1720e16a324b6c0"
+checksum = "7a8f63bbb07a2a4092f154da74516d3238899b4d3498f6156bd4b7d9170368ef"
 dependencies = [
  "iceoryx2-bb-elementary",
  "iceoryx2-bb-elementary-traits",
@@ -2088,9 +2088,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-bb-elementary"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8ec2929c7b6762381c2ecbcb08e618ca0a2472f7f00eba71f76b8565468995"
+checksum = "2a8655f486ccddb8cfaf8c3a4811ec7ca055f49186779f388928a6a741c99a6b"
 dependencies = [
  "iceoryx2-bb-elementary-traits",
  "iceoryx2-pal-concurrency-sync",
@@ -2098,15 +2098,15 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-bb-elementary-traits"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b00e34ad13ade5816e70dbb0147cbd40fee9007ca2f0e05eab96fccff5e4a89"
+checksum = "487b7bb44cb35688a037610e3d367ce8d9d31720ce1b0d3ad0619ec19b95b6f4"
 
 [[package]]
 name = "iceoryx2-bb-linux"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "143278bda2202281e2691ad0a4aed52f7750300794e998aed6b7aa2428687883"
+checksum = "0bcc939836845926763f027518c33a7fa03c36907d12330387bc72b7df8e686e"
 dependencies = [
  "iceoryx2-bb-concurrency",
  "iceoryx2-bb-container",
@@ -2119,9 +2119,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-bb-lock-free"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1df276922f861c229f4ad84f07d847b301da98e70223c74ebd10f3e8b8034bc6"
+checksum = "908daf57ca2fad15af8df83e1a571aeeaffb0392432bcc588356b15b496f32c0"
 dependencies = [
  "iceoryx2-bb-concurrency",
  "iceoryx2-bb-elementary",
@@ -2131,9 +2131,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-bb-loggers"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6077f4d8c33dbaf5253208529c7092f8e62198764ca64269a9c597a42c13adb"
+checksum = "e447da3f13cc7bcdfa208dea63a9cc24fd0dccea80943040b3e074fbf54dbc00"
 dependencies = [
  "iceoryx2-bb-print",
  "iceoryx2-log-types",
@@ -2143,9 +2143,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-bb-memory"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "369adada8bd2b6ba7607b991654d082ffbfb39dda0e79390aa0ee9363d72b496"
+checksum = "5cca425d22230f7e3ac4944002349cbce90ef76f2358a0961eb9c259c68b321b"
 dependencies = [
  "iceoryx2-bb-concurrency",
  "iceoryx2-bb-elementary",
@@ -2157,9 +2157,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-bb-posix"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "faf932dbbae40c0cf746499a6d1f437901a404aafefa24e887492668ee76622a"
+checksum = "7e03397688249c464214f3534546f6c231a1368ac12a4fe89ea33b4a33a692c8"
 dependencies = [
  "enum-iterator",
  "iceoryx2-bb-concurrency",
@@ -2178,18 +2178,18 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-bb-print"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a96fcdba18e895927a41fede8de81c01adb9c24d101812688615a6477d4ad29"
+checksum = "433a64f537be4df813ef00e71884a2062df90bf5c55447e4ffafb4827eafe173"
 dependencies = [
  "iceoryx2-pal-print",
 ]
 
 [[package]]
 name = "iceoryx2-bb-system-types"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1dbb27b1d3da4f36d635463523cf11a6c2e82f7d3bb1bc5bd5668473022951f"
+checksum = "dd6573fdf227176a90a97a8b49efe41216f971d099ac5797d902249dee7e6806"
 dependencies = [
  "iceoryx2-bb-container",
  "iceoryx2-bb-derive-macros",
@@ -2203,9 +2203,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-cal"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0558d04959b0248b7231eedd5ad4fc648cdc84594fb36dff2a1bfc956078106d"
+checksum = "f527b34fc6ace4ea1a9a539c234ff07b51cdb281d677481e5f7f7e15c809214e"
 dependencies = [
  "iceoryx2-bb-concurrency",
  "iceoryx2-bb-container",
@@ -2227,9 +2227,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-log"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "00011aead6c59195d298c227de5e70bf9c5c39827a37e21d67bc76911b8d19ca"
+checksum = "7f55e205c7d00876d8f8259cc5c259e150aad7eb93167def6aa2bfa6dc2c7537"
 dependencies = [
  "iceoryx2-log-types",
  "iceoryx2-pal-concurrency-sync",
@@ -2237,27 +2237,27 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-log-types"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d3035cab1a982496be6b0247e0cf3c7fe3abe100b59e84989956433d220be26"
+checksum = "38f0fc0134ef60a5b7d8bfb700cf35af76fc40180f46aaee7fc0152145442ede"
 
 [[package]]
 name = "iceoryx2-pal-concurrency-sync"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4aa5148a4383f3797cf108f521a20be949ff64c8e140f93e669133f7bd63880"
+checksum = "09a4e7f4a2e8ca8bb94892254bd59b811eecd6e6cc78b0fd27eea91ca4dd6aab"
 
 [[package]]
 name = "iceoryx2-pal-configuration"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a6b673a89aec16f1df01886a6c67958246abe3315a08928e0a9ba88ab909ac0"
+checksum = "f9664fb2564d62f6af5babece4c8b2170f2c3605e93578eb38161d6c4bd6db5d"
 
 [[package]]
 name = "iceoryx2-pal-os-api"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "12d1345f57d1103239b223837e28627b431f7f01a9cba8dc2562b49bed18a79e"
+checksum = "5a4d7c695c8caf78a6ffd254733be993b0bece78e0b9330d80cf87cc905fff3d"
 dependencies = [
  "bindgen",
  "cc",
@@ -2267,9 +2267,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-pal-posix"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fc96a6eef990cf13264f2445f8cd37c9f8157969648172fff92c56bece6da8e"
+checksum = "35c318f15cc0ec35f15b6f9767fa8af9c0a07f8f1a0a60d3adb40b7f03945343"
 dependencies = [
  "bindgen",
  "cc",
@@ -2281,9 +2281,9 @@ dependencies = [
 
 [[package]]
 name = "iceoryx2-pal-print"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3786d8e03773fa68e2a90bdd9961523bcc47b52a81a34abe42a1d69bbca856aa"
+checksum = "fe15e255ef982e229d5919959e02c7c80296e31a44a2d8f13fa5bc4654a8d9f4"
 dependencies = [
  "iceoryx2-pal-posix",
 ]
@@ -2487,15 +2487,6 @@ name = "itertools"
 version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
 dependencies = [
  "either",
 ]
@@ -5403,7 +5394,7 @@ dependencies = [
 [[package]]
 name = "up-rust"
 version = "0.11.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-rust.git?rev=425c4c578896533c1717e79e11463d8cb683ef8f#425c4c578896533c1717e79e11463d8cb683ef8f"
+source = "git+https://github.com/PLeVasseur/up-rust.git?rev=b45bf7f28a3a943ed4c9153571f5d6892458d937#b45bf7f28a3a943ed4c9153571f5d6892458d937"
 dependencies = [
  "async-trait",
  "base64",
@@ -5426,7 +5417,7 @@ dependencies = [
 [[package]]
 name = "up-rust-macros"
 version = "0.11.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-rust.git?rev=425c4c578896533c1717e79e11463d8cb683ef8f#425c4c578896533c1717e79e11463d8cb683ef8f"
+source = "git+https://github.com/PLeVasseur/up-rust.git?rev=b45bf7f28a3a943ed4c9153571f5d6892458d937#b45bf7f28a3a943ed4c9153571f5d6892458d937"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5452,7 +5443,7 @@ dependencies = [
 [[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.2.0"
-source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=86b62f0d1d40db87f517038e72be0043b97cc0a0#86b62f0d1d40db87f517038e72be0043b97cc0a0"
+source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=3169c6b3d6ba183dd442496853573c65814f4766#3169c6b3d6ba183dd442496853573c65814f4766"
 dependencies = [
  "async-trait",
  "hostname",
@@ -5465,7 +5456,7 @@ dependencies = [
 [[package]]
 name = "up-transport-lola-rust"
 version = "0.2.0"
-source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=67cc8d72a720b6e19ae2e02d6a77b5b232ddc89b#67cc8d72a720b6e19ae2e02d6a77b5b232ddc89b"
+source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=653e4e803c87623f9e75e3be72316e217a4eba61#653e4e803c87623f9e75e3be72316e217a4eba61"
 dependencies = [
  "async-trait",
  "tokio",
@@ -5475,7 +5466,7 @@ dependencies = [
 [[package]]
 name = "up-transport-mqtt5"
 version = "0.5.0"
-source = "git+https://github.com/PLeVasseur/up-client-mqtt5-rust.git?rev=3a2f60c0ec5c3f5e1539b3e3c080faa9e68d7c8f#3a2f60c0ec5c3f5e1539b3e3c080faa9e68d7c8f"
+source = "git+https://github.com/eclipse-uprotocol/up-transport-mqtt5-rust.git?rev=7ed05a7b97790c4e69f31eb1aeeb59053704b8c7#7ed05a7b97790c4e69f31eb1aeeb59053704b8c7"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -5493,7 +5484,7 @@ dependencies = [
 [[package]]
 name = "up-transport-vsomeip"
 version = "0.5.0"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=05fd6f5459c9de51ab68e45cb5a5b2835ebe70a8#05fd6f5459c9de51ab68e45cb5a5b2835ebe70a8"
+source = "git+https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust.git?rev=a660c2d741ccba3cb80d2b2d0858a99084b97a9e#a660c2d741ccba3cb80d2b2d0858a99084b97a9e"
 dependencies = [
  "async-trait",
  "bimap",
@@ -5516,7 +5507,7 @@ dependencies = [
 [[package]]
 name = "up-transport-zenoh"
 version = "0.10.0"
-source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=a12b74a75d2d747a5c87bd5b3fd312a05b25e5a2#a12b74a75d2d747a5c87bd5b3fd312a05b25e5a2"
+source = "git+https://github.com/eclipse-uprotocol/up-transport-zenoh-rust.git?rev=943c1b919503cb3946229482743493b8ad290113#943c1b919503cb3946229482743493b8ad290113"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5690,7 +5681,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 [[package]]
 name = "vsomeip-proc-macro"
 version = "0.5.0"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=05fd6f5459c9de51ab68e45cb5a5b2835ebe70a8#05fd6f5459c9de51ab68e45cb5a5b2835ebe70a8"
+source = "git+https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust.git?rev=a660c2d741ccba3cb80d2b2d0858a99084b97a9e#a660c2d741ccba3cb80d2b2d0858a99084b97a9e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5701,7 +5692,7 @@ dependencies = [
 [[package]]
 name = "vsomeip-sys"
 version = "0.5.0"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=05fd6f5459c9de51ab68e45cb5a5b2835ebe70a8#05fd6f5459c9de51ab68e45cb5a5b2835ebe70a8"
+source = "git+https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust.git?rev=a660c2d741ccba3cb80d2b2d0858a99084b97a9e#a660c2d741ccba3cb80d2b2d0858a99084b97a9e"
 dependencies = [
  "autocxx",
  "autocxx-build",

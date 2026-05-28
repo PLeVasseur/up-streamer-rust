@@ -52,7 +52,7 @@ Reference the `CONFIG.json5` configuration file to understand the basic configur
 
 `up_streamer_config.route_queue_policy` is optional and defaults to `"backpressure"`. Endpoint-level `route_queue_policy` overrides the default for that endpoint's outgoing routes. The supported values are `"backpressure"` and `"drop_and_report"`; drop-and-report records full ingress queue drops in `UStreamer::data_plane_health()`.
 
-Endpoint `routing_mode` is optional and defaults to `"owned"`. Use `"copy_minimized"` only when both the source endpoint and every forwarding target are zero-copy endpoints and the binary is built with `experimental-loaned-frame`. `copy_minimized_payload_alignment` defaults to `1` and is passed to the egress transmit-loan reservation.
+Endpoint `routing_mode` is optional and defaults to `"owned"`. Use `"copy_minimized"` only when both the source endpoint and every forwarding target are zero-copy endpoints and the binary is built with `experimental-loaned-frame`. `copy_minimized_payload_alignment` defaults to `1` and is passed to the egress transmit-loan request. Stable-container copy-minimized routes fail safe instead of forwarding when this alignment is smaller than the stable-container `align` metadata or when the stable-container metadata is malformed.
 
 The `ZENOH_CONFIG.json5` file is used to set Zenoh configurations. By default, it is only used to set listening endpoints, but can be used with more configurations according to [Zenoh's page on it](https://zenoh.io/docs/manual/configuration/#configuration-files).
 

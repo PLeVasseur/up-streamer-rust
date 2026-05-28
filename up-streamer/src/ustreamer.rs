@@ -31,6 +31,8 @@ use up_rust::{
 };
 
 #[cfg(feature = "experimental-loaned-frame")]
+use crate::copy_minimized::loan_spec_for_copy_minimized;
+#[cfg(feature = "experimental-loaned-frame")]
 use crate::{CopyMinimizedRouteOptions, ZeroCopyFrameEndpoint};
 use crate::{
     DataPlaneFailureKind, DataPlaneHealth, DataPlaneRoute, OwnedFrameEndpoint, RouteDiagnostic,
@@ -865,17 +867,33 @@ where
                     }
                 }
 
-                let metadata = frame.metadata().clone();
-                let payload_len = frame.payload_len();
-                let send_result = match egress_transport
-                    .reserve(metadata, payload_len, alignment)
-                    .await
-                {
+                let loaned = ZeroCopyLoanedFrame::new(frame);
+                let spec = match loan_spec_for_copy_minimized(&loaned, alignment) {
+                    Ok(spec) => spec,
+                    Err(err) => {
+                        tracing::warn!(
+                            ingress = %ingress_name,
+                            ingress_authority = %ingress_authority,
+                            egress = %egress_name,
+                            egress_authority = %egress_authority,
+                            route_kind = ?RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+                            ?err,
+                            "egress_payload_layout_rejected"
+                        );
+                        record_data_plane_failure(
+                            &dispatch_health,
+                            DataPlaneFailureKind::CopyMinimizedPayloadLayout,
+                            route.clone(),
+                            format!("{err:?}"),
+                        );
+                        continue;
+                    }
+                };
+
+                let send_result = match egress_transport.loan_tx(spec).await {
                     Ok(mut tx) => {
-                        let copy_result = {
-                            let loaned = ZeroCopyLoanedFrame::new(frame);
-                            copy_loaned_frame_payload_to_tx(&loaned, &mut tx).map_err(UStatus::from)
-                        };
+                        let copy_result = copy_loaned_frame_payload_to_tx(&loaned, &mut tx)
+                            .map_err(UStatus::from);
                         match copy_result {
                             Ok(_) => egress_transport.send_zero_copy(tx).await,
                             Err(err) => Err(err),
@@ -1405,7 +1423,7 @@ mod tests {
         payload::{PlacementDefault, RawBytes, StableContainerPayload, UWireError},
         zero_copy::{UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport},
         PayloadEncoding, ProtobufAnyPayload, ProtobufPayload, UFrameBuilder, UFrameMetadata,
-        UOwnedListener, UOwnedTransport,
+        UOwnedListener, UOwnedTransport, UTxLoanSpec,
     };
 
     use super::*;
@@ -1657,7 +1675,7 @@ mod tests {
         sent: Mutex<Vec<UOwnedFrame>>,
         fail_send: Mutex<bool>,
         fail_on_unregister: Mutex<bool>,
-        reserve_alignments: Mutex<Vec<usize>>,
+        loan_alignments: Mutex<Vec<usize>>,
     }
 
     #[derive(Clone)]
@@ -1704,6 +1722,7 @@ mod tests {
             self.sent.lock().expect("sent lock poisoned").clone()
         }
 
+        #[cfg(feature = "experimental-loaned-frame")]
         fn fail_sends() -> Self {
             Self {
                 fail_send: Mutex::new(true),
@@ -1711,6 +1730,7 @@ mod tests {
             }
         }
 
+        #[cfg(feature = "experimental-loaned-frame")]
         fn fail_on_unregister() -> Self {
             Self {
                 fail_on_unregister: Mutex::new(true),
@@ -1718,6 +1738,7 @@ mod tests {
             }
         }
 
+        #[cfg(feature = "experimental-loaned-frame")]
         fn listener_count(&self) -> usize {
             self.listeners
                 .lock()
@@ -1725,10 +1746,11 @@ mod tests {
                 .len()
         }
 
-        fn reserve_alignments(&self) -> Vec<usize> {
-            self.reserve_alignments
+        #[cfg(feature = "experimental-loaned-frame")]
+        fn loan_alignments(&self) -> Vec<usize> {
+            self.loan_alignments
                 .lock()
-                .expect("reserve_alignments lock poisoned")
+                .expect("loan_alignments lock poisoned")
                 .clone()
         }
     }
@@ -1738,17 +1760,17 @@ mod tests {
         type Tx = UVecTxBuffer;
         type Rx = UOwnedFrame;
 
-        async fn reserve(
-            &self,
-            header: UFrameMetadata,
-            payload_len: usize,
-            alignment: usize,
-        ) -> Result<Self::Tx, UStatus> {
-            self.reserve_alignments
+        async fn loan_tx(&self, spec: UTxLoanSpec) -> Result<Self::Tx, UStatus> {
+            self.loan_alignments
                 .lock()
-                .expect("reserve_alignments lock poisoned")
-                .push(alignment);
-            UVecTxBuffer::with_alignment(header, payload_len, alignment).map_err(UStatus::from)
+                .expect("loan_alignments lock poisoned")
+                .push(spec.payload_alignment());
+            UVecTxBuffer::with_alignment(
+                spec.metadata().clone(),
+                spec.payload_len(),
+                spec.payload_alignment(),
+            )
+            .map_err(UStatus::from)
         }
 
         async fn send_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
@@ -1850,12 +1872,52 @@ mod tests {
     }
 
     fn point_to_point_frame(source_authority: &str, sink_authority: &str) -> UOwnedFrame {
-        let source =
-            UUri::try_from_parts(source_authority, 0x4210, 1, 0x9001).expect("valid source URI");
-        let sink = UUri::try_from_parts(sink_authority, 0x4220, 1, 0).expect("valid sink URI");
-        UFrameBuilder::notification(source, sink)
-            .build_with_raw_payload("streamed")
-            .expect("valid notification frame")
+        UFrameBuilder::notification(
+            point_to_point_source(source_authority),
+            point_to_point_sink(sink_authority),
+        )
+        .build_with_raw_payload("streamed")
+        .expect("valid notification frame")
+    }
+
+    fn point_to_point_source(authority: &str) -> UUri {
+        UUri::try_from_parts(authority, 0x4210, 1, 0x9001).expect("valid source URI")
+    }
+
+    fn point_to_point_sink(authority: &str) -> UUri {
+        UUri::try_from_parts(authority, 0x4220, 1, 0).expect("valid sink URI")
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    fn point_to_point_metadata(source_authority: &str, sink_authority: &str) -> UFrameMetadata {
+        UFrameMetadata::notification(
+            point_to_point_source(source_authority),
+            point_to_point_sink(sink_authority),
+        )
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    fn stable_point_to_point_frame(source_authority: &str, sink_authority: &str) -> UOwnedFrame {
+        UOwnedFrame::from_payload_as::<StableContainerPayload<VehiclePose>, VehiclePose>(
+            point_to_point_metadata(source_authority, sink_authority),
+            &VehiclePose { x: 3, y: 5 },
+        )
+        .expect("stable-container payload should encode as owned bytes")
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    fn malformed_stable_point_to_point_frame(
+        source_authority: &str,
+        sink_authority: &str,
+    ) -> UOwnedFrame {
+        let encoding = PayloadEncoding::custom(
+            up_rust::StableContainerPayloadInfo::ENCODING_ID,
+            "application/vnd.uprotocol.stable-container;variant=fixed;size=8;align=4",
+        );
+        UOwnedFrame::new(
+            point_to_point_metadata(source_authority, sink_authority).with_encoding(encoding),
+            vec![0_u8; std::mem::size_of::<VehiclePose>()],
+        )
     }
 
     async fn yield_to_forwarder() {
@@ -2525,7 +2587,7 @@ mod tests {
         let sent = egress.sent();
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].payload_bytes(), b"streamed");
-        assert_eq!(egress.reserve_alignments(), vec![8]);
+        assert_eq!(egress.loan_alignments(), vec![8]);
 
         streamer
             .delete_copy_minimized_route_ref(&in_ep, &out_ep)
@@ -2536,6 +2598,85 @@ mod tests {
             .await;
         yield_to_forwarder().await;
         assert_eq!(egress.sent().len(), 1);
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[tokio::test]
+    async fn copy_minimized_route_rejects_underaligned_stable_container_payload() {
+        let ingress = Arc::new(MemoryZeroCopyTransport::default());
+        let egress = Arc::new(MemoryZeroCopyTransport::default());
+        let in_ep = zero_copy_endpoint("in", "authority-a", ingress.clone());
+        let out_ep = zero_copy_endpoint("out", "authority-b", egress.clone());
+        let mut streamer = UStreamer::new("test", 8, subscription_source())
+            .await
+            .expect("streamer should build");
+
+        streamer
+            .add_copy_minimized_route_ref_with_options(
+                &in_ep,
+                &out_ep,
+                CopyMinimizedRouteOptions {
+                    alignment: 1,
+                    queue_policy: RouteQueuePolicy::Backpressure,
+                },
+            )
+            .await
+            .expect("copy-minimized route should register");
+
+        ingress
+            .inject(stable_point_to_point_frame("authority-a", "authority-b"))
+            .await;
+        yield_to_forwarder().await;
+
+        assert!(egress.sent().is_empty());
+        assert!(egress.loan_alignments().is_empty());
+        let health = streamer.data_plane_health();
+        assert_eq!(health.copy_minimized_payload_layout_failures, 1);
+        assert_eq!(
+            health.last_failure.expect("last failure recorded").kind,
+            DataPlaneFailureKind::CopyMinimizedPayloadLayout
+        );
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[tokio::test]
+    async fn copy_minimized_route_rejects_malformed_stable_container_metadata() {
+        let ingress = Arc::new(MemoryZeroCopyTransport::default());
+        let egress = Arc::new(MemoryZeroCopyTransport::default());
+        let in_ep = zero_copy_endpoint("in", "authority-a", ingress.clone());
+        let out_ep = zero_copy_endpoint("out", "authority-b", egress.clone());
+        let mut streamer = UStreamer::new("test", 8, subscription_source())
+            .await
+            .expect("streamer should build");
+
+        streamer
+            .add_copy_minimized_route_ref_with_options(
+                &in_ep,
+                &out_ep,
+                CopyMinimizedRouteOptions {
+                    alignment: std::mem::align_of::<VehiclePose>(),
+                    queue_policy: RouteQueuePolicy::Backpressure,
+                },
+            )
+            .await
+            .expect("copy-minimized route should register");
+
+        ingress
+            .inject(malformed_stable_point_to_point_frame(
+                "authority-a",
+                "authority-b",
+            ))
+            .await;
+        yield_to_forwarder().await;
+
+        assert!(egress.sent().is_empty());
+        assert!(egress.loan_alignments().is_empty());
+        let health = streamer.data_plane_health();
+        assert_eq!(health.copy_minimized_payload_layout_failures, 1);
+        assert_eq!(
+            health.last_failure.expect("last failure recorded").kind,
+            DataPlaneFailureKind::CopyMinimizedPayloadLayout
+        );
     }
 
     #[cfg(feature = "experimental-loaned-frame")]

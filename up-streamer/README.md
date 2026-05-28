@@ -95,6 +95,12 @@ The `experimental-loaned-frame` feature exposes `ZeroCopyFrameEndpoint` and `USt
 
 Copy-minimized routing participates in normal route lifecycle: add, delete, subscription refresh, data-plane health, duplicate suppression, route diagnostics, and queue policy. It avoids an intermediate `UOwnedFrame` payload allocation in the route logic, but it still copies payload bytes into the egress loan and is not zero-copy-preserving forwarding. Owned routing remains the default.
 
+Stable-container copy-minimized routing is fail-safe: the route parses the
+type-agnostic stable-container metadata and rejects the frame before egress send
+when metadata is malformed or when the configured egress payload alignment is
+smaller than the advertised stable-container `align` value. The rejection is
+reported in data-plane health and the underaligned payload is not forwarded.
+
 The feature also keeps the lower-level `send_loaned_frame_copy_minimized` helper for callers that manually manage their own listener lifecycle.
 
 ## Transport Implementer Checklist
