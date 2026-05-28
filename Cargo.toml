@@ -50,11 +50,11 @@ tokio = { version = "1.44", default-features = false, features = [
     "signal",
 ] }
 up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "425c4c578896533c1717e79e11463d8cb683ef8f", default-features = false }
-up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "bfcc88d11fe14404f749d82a057615bd7a16af7a" }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "cf9c53ac5f5ef16f2ae3335cc066a4e7327b0e46" }
-up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "02dba3ea7e14a73cdba739512cde00307a71f0bf" }
-up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "edcdb7ce82a95fe6d4c6b03553b3136f4fdbb57a", default-features = false }
-up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "7a7418e401698b35cc66f4cc26d29bed2cc88395", default-features = false }
+up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "a12b74a75d2d747a5c87bd5b3fd312a05b25e5a2" }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "67cc8d72a720b6e19ae2e02d6a77b5b232ddc89b" }
+up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "86b62f0d1d40db87f517038e72be0043b97cc0a0" }
+up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "3a2f60c0ec5c3f5e1539b3e3c080faa9e68d7c8f", default-features = false }
+up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "05fd6f5459c9de51ab68e45cb5a5b2835ebe70a8", default-features = false }
 zenoh = { version = "1.2.1", features = [
     "default",
     "plugins",
