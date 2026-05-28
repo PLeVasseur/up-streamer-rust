@@ -26,6 +26,7 @@ lola-transport = ["dep:up-transport-lola-rust"]
 mqtt-transport = ["dep:up-transport-mqtt5"]
 vsomeip-transport = ["dep:up-transport-vsomeip"]
 bundled-vsomeip = ["up-transport-vsomeip/bundled"]
+experimental-loaned-frame = ["up-rust/experimental-loaned-frame", "up-streamer/experimental-loaned-frame"]
 
 [dependencies]
 async-trait = { workspace = true }

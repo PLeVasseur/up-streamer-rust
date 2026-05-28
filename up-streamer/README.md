@@ -18,6 +18,7 @@ The crate does not depend on generated Protocol Buffers envelopes. Payload repre
 | `PayloadFormat` | Chosen by applications at frame boundaries; the streamer does not reinterpret payload bytes. |
 | `UFrameWireFormat` | Only used if an application intentionally carries an encoded whole frame as payload bytes. |
 | `UStreamer::data_plane_health` | Reports egress send failures, closed ingress queues, and route refresh unregister failures. |
+| `UStreamer::route_diagnostics` | Reports installed route endpoints, endpoint modes, and whether each route is owned, adapter-backed, or copy-minimized. |
 
 ## Usage
 
@@ -71,6 +72,8 @@ Ok(())
 
 The route above is useful for bridging network/broker transports with shared-memory transports. It should not be described as end-to-end zero-copy forwarding because `UStreamer` routes owned frames internally.
 
+Routes use bounded ingress queues. The default `RouteQueuePolicy::Backpressure` preserves historical behavior by awaiting queue capacity in listener callbacks. `RouteQueuePolicy::DropAndReport` is available through `add_route_ref_with_options` for deployments that prefer bounded-latency drops; full-queue drops are logged and counted in data-plane health.
+
 ## Transport Modes
 
 - `TransportMode::Owned`: the egress path calls `send_owned` with an owned frame.
@@ -80,11 +83,19 @@ Zero-copy ingress routes copy receive leases into owned frames and use native su
 
 ## Health
 
-`UStreamer::subscription_sync_health()` reports uSubscription refresh outcomes. `UStreamer::data_plane_health()` reports route data-plane failures such as egress send errors, closed ingress queues, and old listener registrations that could not be removed during route refresh. Egress send failures are logged at `warn` level and reflected in data-plane health; they are not hidden as debug-only telemetry.
+`UStreamer::subscription_sync_health()` reports uSubscription refresh outcomes. `UStreamer::data_plane_health()` reports route data-plane failures such as egress send errors, closed ingress queues, drop-and-report full queues, and old listener registrations that could not be removed during route refresh. Egress send failures are logged at `warn` level and reflected in data-plane health; they are not hidden as debug-only telemetry.
 
-## Experimental Copy-Minimized Helper
+If route refresh cannot unregister an old listener, the old registration can remain active alongside the new one. Streamer reports degraded data-plane health and suppresses duplicate frame IDs in the route worker so duplicate callbacks do not normally produce duplicate egress sends.
 
-The `experimental-loaned-frame` feature exposes `send_loaned_frame_copy_minimized` for experiments that hold an ingress `LoanedFrame` lease and copy its ordered payload slices directly into a zero-copy egress transmit loan. This avoids an intermediate owned payload allocation, but it still copies payload bytes into the egress loan and is not zero-copy-preserving forwarding.
+`UStreamer::route_diagnostics()` returns route-level diagnostics with the public route identity, ingress/egress transport modes, and route kind. This avoids relying on logs to determine whether a route is owned-to-owned, adapter-backed, or experimental copy-minimized.
+
+## Experimental Copy-Minimized Routing
+
+The `experimental-loaned-frame` feature exposes `ZeroCopyFrameEndpoint` and `UStreamer::add_copy_minimized_route_ref`. These APIs register zero-copy ingress listeners, keep each ingress receive lease alive until the route worker handles it, and copy ordered payload slices directly into a zero-copy egress transmit loan.
+
+Copy-minimized routing participates in normal route lifecycle: add, delete, subscription refresh, data-plane health, duplicate suppression, route diagnostics, and queue policy. It avoids an intermediate `UOwnedFrame` payload allocation in the route logic, but it still copies payload bytes into the egress loan and is not zero-copy-preserving forwarding. Owned routing remains the default.
+
+The feature also keeps the lower-level `send_loaned_frame_copy_minimized` helper for callers that manually manage their own listener lifecycle.
 
 ## Transport Implementer Checklist
 
@@ -93,6 +104,7 @@ The `experimental-loaned-frame` feature exposes `send_loaned_frame_copy_minimize
 3. Preserve `UAttributes` and `PayloadEncoding` across the transport boundary.
 4. Expose only application payload bytes through `payload_mut()`, `payload_reader()`, or `contiguous_payload()`.
 5. Use `OwnedFrameEndpoint::from_zero_copy_copying_adapter` only when the streamer intentionally crosses from zero-copy leases into owned routing.
+6. Use `ZeroCopyFrameEndpoint` only for experimental copy-minimized routes, and document that the route still performs a lease-to-loan payload copy.
 
 ## Verification
 

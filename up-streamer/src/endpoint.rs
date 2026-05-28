@@ -37,6 +37,55 @@ pub struct OwnedFrameEndpoint {
     pub(crate) transport: UOwnedFrameEndpoint,
 }
 
+/// Named zero-copy streamer endpoint for experimental copy-minimized routing.
+///
+/// Unlike [`OwnedFrameEndpoint::from_zero_copy_copying_adapter`], this endpoint
+/// preserves the transport receive lease until the route worker copies its
+/// ordered payload slices directly into an egress transmit loan. The route still
+/// copies payload bytes into the egress loan; it does not provide strict
+/// zero-copy-preserving forwarding.
+#[cfg(feature = "experimental-loaned-frame")]
+#[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+#[derive(Clone)]
+pub struct ZeroCopyFrameEndpoint<T>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+{
+    pub(crate) name: String,
+    pub(crate) authority: String,
+    pub(crate) transport: Arc<T>,
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+impl<T> ZeroCopyFrameEndpoint<T>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+{
+    /// Creates a zero-copy endpoint for experimental copy-minimized routes.
+    pub fn new(name: &str, authority: &str, transport: Arc<T>) -> Self {
+        Self {
+            name: name.to_string(),
+            authority: authority.to_string(),
+            transport,
+        }
+    }
+
+    /// Human-readable endpoint name used in diagnostics and route keys.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// uProtocol authority represented by this endpoint.
+    pub fn authority(&self) -> &str {
+        &self.authority
+    }
+
+    /// Copy-minimized routes require true zero-copy endpoint capability.
+    pub fn mode(&self) -> TransportMode {
+        TransportMode::ZeroCopy
+    }
+}
+
 impl OwnedFrameEndpoint {
     /// Creates a streamer endpoint backed by an [`up_rust::UOwnedTransport`].
     ///

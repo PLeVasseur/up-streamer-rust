@@ -30,16 +30,19 @@
 //! requiring every transport to expose the same concrete receive lease type. It
 //! does not claim end-to-end zero-copy forwarding across the streamer boundary.
 //!
-//! With the `experimental-loaned-frame` feature, the crate also exposes a small
-//! copy-minimized helper for copying a loaned ingress frame directly into a
-//! zero-copy egress transmit loan. That helper avoids an intermediate owned
+//! With the `experimental-loaned-frame` feature, the crate also exposes
+//! copy-minimized route APIs for copying a loaned ingress frame directly into a
+//! zero-copy egress transmit loan. This route mode avoids an intermediate owned
 //! payload allocation, but it still copies payload bytes and is not strict
-//! zero-copy forwarding.
+//! zero-copy forwarding. Owned routing remains the default.
 
 #![warn(rustdoc::bare_urls, rustdoc::broken_intra_doc_links)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 mod endpoint;
+#[cfg(feature = "experimental-loaned-frame")]
+#[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+pub use endpoint::ZeroCopyFrameEndpoint;
 pub use endpoint::{OwnedFrameEndpoint, TransportMode};
 
 #[cfg(feature = "experimental-loaned-frame")]
@@ -50,8 +53,12 @@ mod copy_minimized;
 pub use copy_minimized::send_loaned_frame_copy_minimized;
 
 mod data_plane_health;
+#[cfg(feature = "experimental-loaned-frame")]
+#[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+pub use data_plane_health::CopyMinimizedRouteOptions;
 pub use data_plane_health::{
-    DataPlaneFailure, DataPlaneFailureKind, DataPlaneHealth, DataPlaneRoute,
+    DataPlaneFailure, DataPlaneFailureKind, DataPlaneHealth, DataPlaneRoute, RouteDiagnostic,
+    RouteKind, RouteOptions, RouteQueuePolicy,
 };
 
 mod subscription_sync_health;

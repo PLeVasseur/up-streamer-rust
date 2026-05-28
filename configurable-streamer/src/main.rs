@@ -15,7 +15,7 @@ mod config;
 
 #[cfg(feature = "mqtt-transport")]
 use crate::config::MqttMode;
-use crate::config::{Config, EndpointConfig, TransportKind};
+use crate::config::{Config, EndpointConfig, RouteQueuePolicyConfig, RoutingMode, TransportKind};
 use clap::Parser;
 use std::collections::HashMap;
 use std::fs::File;
@@ -25,7 +25,11 @@ use std::sync::Arc;
 use tracing::info;
 use up_rust::usubscription::USubscription;
 use up_rust::{UCode, UStatus};
-use up_streamer::{OwnedFrameEndpoint, UStreamer};
+#[cfg(feature = "experimental-loaned-frame")]
+use up_streamer::{CopyMinimizedRouteOptions, ZeroCopyFrameEndpoint};
+use up_streamer::{OwnedFrameEndpoint, RouteOptions, RouteQueuePolicy, UStreamer};
+#[cfg(feature = "experimental-loaned-frame")]
+use up_transport_iceoryx2_rust::Iceoryx2PubSub;
 use up_transport_iceoryx2_rust::{transport::UTransportIceoryx2, MessagingPattern};
 #[cfg(feature = "lola-transport")]
 use up_transport_lola_rust::{LolaTransportConfig, UTransportLola};
@@ -47,6 +51,50 @@ struct StreamerArgs {
 
 fn invalid_config(message: impl Into<String>) -> UStatus {
     UStatus::fail_with_code(UCode::INVALID_ARGUMENT, message.into())
+}
+
+impl From<RouteQueuePolicyConfig> for RouteQueuePolicy {
+    fn from(value: RouteQueuePolicyConfig) -> Self {
+        match value {
+            RouteQueuePolicyConfig::Backpressure => Self::Backpressure,
+            RouteQueuePolicyConfig::DropAndReport => Self::DropAndReport,
+        }
+    }
+}
+
+enum ConfiguredEndpoint {
+    Owned(OwnedFrameEndpoint),
+    ZeroCopyAdapted {
+        owned: OwnedFrameEndpoint,
+        #[cfg(feature = "experimental-loaned-frame")]
+        copy_minimized: ConfiguredZeroCopyEndpoint,
+    },
+}
+
+impl ConfiguredEndpoint {
+    fn owned(&self) -> &OwnedFrameEndpoint {
+        match self {
+            Self::Owned(endpoint) => endpoint,
+            Self::ZeroCopyAdapted { owned, .. } => owned,
+        }
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    fn copy_minimized(&self) -> Option<&ConfiguredZeroCopyEndpoint> {
+        match self {
+            Self::Owned(_) => None,
+            Self::ZeroCopyAdapted { copy_minimized, .. } => Some(copy_minimized),
+        }
+    }
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+enum ConfiguredZeroCopyEndpoint {
+    #[cfg(feature = "zenoh-zero-copy")]
+    Zenoh(ZeroCopyFrameEndpoint<UPTransportZenoh>),
+    #[cfg(feature = "lola-transport")]
+    Lola(ZeroCopyFrameEndpoint<UTransportLola>),
+    Iceoryx2(ZeroCopyFrameEndpoint<Iceoryx2PubSub>),
 }
 
 #[cfg(any(feature = "lola-transport", feature = "vsomeip-transport"))]
@@ -97,7 +145,7 @@ impl From<MqttMode> for MqttTransportMode {
 async fn endpoint_from_config(
     endpoint: &EndpointConfig,
     base_dir: &Path,
-) -> Result<OwnedFrameEndpoint, UStatus> {
+) -> Result<ConfiguredEndpoint, UStatus> {
     match endpoint.transport {
         TransportKind::ZenohOwned => {
             let zenoh_config = match endpoint.zenoh_config_file.as_ref() {
@@ -118,11 +166,11 @@ async fn endpoint_from_config(
                     .build()
                     .await?,
             );
-            Ok(OwnedFrameEndpoint::from_owned(
+            Ok(ConfiguredEndpoint::Owned(OwnedFrameEndpoint::from_owned(
                 &endpoint.name,
                 &endpoint.authority,
                 transport,
-            ))
+            )))
         }
         TransportKind::ZenohZeroCopy => {
             #[cfg(feature = "zenoh-zero-copy")]
@@ -145,11 +193,20 @@ async fn endpoint_from_config(
                         .build()
                         .await?,
                 );
-                Ok(OwnedFrameEndpoint::from_zero_copy_copying_adapter(
+                let owned = OwnedFrameEndpoint::from_zero_copy_copying_adapter(
                     &endpoint.name,
                     &endpoint.authority,
-                    transport,
-                ))
+                    transport.clone(),
+                );
+                Ok(ConfiguredEndpoint::ZeroCopyAdapted {
+                    owned,
+                    #[cfg(feature = "experimental-loaned-frame")]
+                    copy_minimized: ConfiguredZeroCopyEndpoint::Zenoh(ZeroCopyFrameEndpoint::new(
+                        &endpoint.name,
+                        &endpoint.authority,
+                        transport,
+                    )),
+                })
             }
             #[cfg(not(feature = "zenoh-zero-copy"))]
             {
@@ -208,11 +265,20 @@ async fn endpoint_from_config(
                     mw_com_config_path,
                 };
                 let transport = UTransportLola::build(config)?;
-                Ok(OwnedFrameEndpoint::from_zero_copy_copying_adapter(
+                let owned = OwnedFrameEndpoint::from_zero_copy_copying_adapter(
                     &endpoint.name,
                     &endpoint.authority,
-                    transport,
-                ))
+                    transport.clone(),
+                );
+                Ok(ConfiguredEndpoint::ZeroCopyAdapted {
+                    owned,
+                    #[cfg(feature = "experimental-loaned-frame")]
+                    copy_minimized: ConfiguredZeroCopyEndpoint::Lola(ZeroCopyFrameEndpoint::new(
+                        &endpoint.name,
+                        &endpoint.authority,
+                        transport,
+                    )),
+                })
             }
             #[cfg(not(feature = "lola-transport"))]
             {
@@ -224,11 +290,20 @@ async fn endpoint_from_config(
         }
         TransportKind::Iceoryx2ZeroCopy => {
             let transport = UTransportIceoryx2::build(MessagingPattern::PublishSubscribe)?;
-            Ok(OwnedFrameEndpoint::from_zero_copy_copying_adapter(
+            let owned = OwnedFrameEndpoint::from_zero_copy_copying_adapter(
                 &endpoint.name,
                 &endpoint.authority,
-                transport,
-            ))
+                transport.clone(),
+            );
+            Ok(ConfiguredEndpoint::ZeroCopyAdapted {
+                owned,
+                #[cfg(feature = "experimental-loaned-frame")]
+                copy_minimized: ConfiguredZeroCopyEndpoint::Iceoryx2(ZeroCopyFrameEndpoint::new(
+                    &endpoint.name,
+                    &endpoint.authority,
+                    transport,
+                )),
+            })
         }
         TransportKind::Mqtt5Owned => {
             #[cfg(feature = "mqtt-transport")]
@@ -243,11 +318,11 @@ async fn endpoint_from_config(
                 let transport =
                     Arc::new(Mqtt5Transport::new(options, endpoint.authority.clone()).await?);
                 transport.connect().await?;
-                Ok(OwnedFrameEndpoint::from_owned(
+                Ok(ConfiguredEndpoint::Owned(OwnedFrameEndpoint::from_owned(
                     &endpoint.name,
                     &endpoint.authority,
                     transport,
-                ))
+                )))
             }
             #[cfg(not(feature = "mqtt-transport"))]
             {
@@ -289,11 +364,11 @@ async fn endpoint_from_config(
                     &config_file,
                     None,
                 )?);
-                Ok(OwnedFrameEndpoint::from_owned(
+                Ok(ConfiguredEndpoint::Owned(OwnedFrameEndpoint::from_owned(
                     &endpoint.name,
                     &endpoint.authority,
                     transport,
-                ))
+                )))
             }
             #[cfg(not(feature = "vsomeip-transport"))]
             {
@@ -308,8 +383,9 @@ async fn endpoint_from_config(
 
 async fn wire_forwarding_rules(
     streamer: &mut UStreamer,
-    endpoints: &HashMap<String, OwnedFrameEndpoint>,
+    endpoints: &HashMap<String, ConfiguredEndpoint>,
     endpoint_configs: &[EndpointConfig],
+    default_queue_policy: RouteQueuePolicy,
 ) -> Result<(), UStatus> {
     for endpoint_config in endpoint_configs {
         let left_endpoint = endpoints.get(&endpoint_config.name).ok_or_else(|| {
@@ -329,13 +405,111 @@ async fn wire_forwarding_rules(
                     format!("Unknown forwarding target endpoint: {forwarding_target}"),
                 )
             })?;
-            streamer
-                .add_route_ref(left_endpoint, right_endpoint)
-                .await?;
+            let queue_policy = endpoint_config
+                .route_queue_policy
+                .map(RouteQueuePolicy::from)
+                .unwrap_or(default_queue_policy);
+            let route_options = RouteOptions { queue_policy };
+            match endpoint_config.routing_mode {
+                RoutingMode::Owned => {
+                    streamer
+                        .add_route_ref_with_options(
+                            left_endpoint.owned(),
+                            right_endpoint.owned(),
+                            route_options,
+                        )
+                        .await?;
+                }
+                RoutingMode::CopyMinimized => {
+                    let alignment = endpoint_config
+                        .copy_minimized_payload_alignment
+                        .unwrap_or(1);
+                    add_copy_minimized_forwarding_rule(
+                        streamer,
+                        left_endpoint,
+                        right_endpoint,
+                        CopyMinimizedRouteRequest {
+                            alignment,
+                            queue_policy,
+                        },
+                    )
+                    .await?;
+                }
+            }
         }
     }
 
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct CopyMinimizedRouteRequest {
+    alignment: usize,
+    queue_policy: RouteQueuePolicy,
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+async fn add_copy_minimized_forwarding_rule(
+    streamer: &mut UStreamer,
+    left_endpoint: &ConfiguredEndpoint,
+    right_endpoint: &ConfiguredEndpoint,
+    request: CopyMinimizedRouteRequest,
+) -> Result<(), UStatus> {
+    let left = left_endpoint.copy_minimized().ok_or_else(|| {
+        invalid_config("copy_minimized routing requires a zero-copy ingress endpoint")
+    })?;
+    let right = right_endpoint.copy_minimized().ok_or_else(|| {
+        invalid_config("copy_minimized routing requires a zero-copy egress endpoint")
+    })?;
+    let options = CopyMinimizedRouteOptions {
+        alignment: request.alignment,
+        queue_policy: request.queue_policy,
+    };
+
+    macro_rules! add_to_right {
+        ($left:expr, $right:expr) => {
+            match $right {
+                #[cfg(feature = "zenoh-zero-copy")]
+                ConfiguredZeroCopyEndpoint::Zenoh(right) => {
+                    streamer
+                        .add_copy_minimized_route_ref_with_options($left, right, options)
+                        .await
+                }
+                #[cfg(feature = "lola-transport")]
+                ConfiguredZeroCopyEndpoint::Lola(right) => {
+                    streamer
+                        .add_copy_minimized_route_ref_with_options($left, right, options)
+                        .await
+                }
+                ConfiguredZeroCopyEndpoint::Iceoryx2(right) => {
+                    streamer
+                        .add_copy_minimized_route_ref_with_options($left, right, options)
+                        .await
+                }
+            }
+        };
+    }
+
+    match left {
+        #[cfg(feature = "zenoh-zero-copy")]
+        ConfiguredZeroCopyEndpoint::Zenoh(left) => add_to_right!(left, right),
+        #[cfg(feature = "lola-transport")]
+        ConfiguredZeroCopyEndpoint::Lola(left) => add_to_right!(left, right),
+        ConfiguredZeroCopyEndpoint::Iceoryx2(left) => add_to_right!(left, right),
+    }
+}
+
+#[cfg(not(feature = "experimental-loaned-frame"))]
+async fn add_copy_minimized_forwarding_rule(
+    _streamer: &mut UStreamer,
+    _left_endpoint: &ConfiguredEndpoint,
+    _right_endpoint: &ConfiguredEndpoint,
+    request: CopyMinimizedRouteRequest,
+) -> Result<(), UStatus> {
+    let _ = (request.alignment, request.queue_policy);
+    Err(invalid_config(
+        "copy_minimized routing requires configurable-streamer feature 'experimental-loaned-frame'",
+    ))
 }
 
 #[tokio::main]
@@ -387,7 +561,13 @@ async fn main() -> Result<(), UStatus> {
         }
     }
 
-    wire_forwarding_rules(&mut streamer, &endpoints, &config.endpoints).await?;
+    wire_forwarding_rules(
+        &mut streamer,
+        &endpoints,
+        &config.endpoints,
+        RouteQueuePolicy::from(config.up_streamer_config.route_queue_policy),
+    )
+    .await?;
 
     println!("READY streamer_initialized");
     info!("Streamer initialized; waiting for shutdown signal");

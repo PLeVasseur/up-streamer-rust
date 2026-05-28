@@ -1,6 +1,7 @@
 {
   up_streamer_config: {
     message_queue_size: 32,
+    route_queue_policy: "backpressure",
   },
   usubscription_config: {
     file_path: "subscription_data.json",
@@ -11,6 +12,7 @@
       authority: "authority-a",
       transport: "zenoh_owned",
       zenoh_config_file: "ZENOH_CONFIG.json5",
+      routing_mode: "owned",
       forwarding: ["lola-zc"],
     },
     {
@@ -24,6 +26,7 @@
       lola_sample_alignment: 8,
       lola_max_samples: 16,
       lola_mw_com_config_file: "MW_COM_CONFIG_LOLA.json",
+      routing_mode: "owned",
       forwarding: ["zenoh-owned"],
     },
   ],

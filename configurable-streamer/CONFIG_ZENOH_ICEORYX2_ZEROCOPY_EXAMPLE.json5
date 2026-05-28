@@ -1,6 +1,7 @@
 {
   up_streamer_config: {
     message_queue_size: 32,
+    route_queue_policy: "backpressure",
   },
   usubscription_config: {
     file_path: "subscription_data.json",
@@ -11,12 +12,16 @@
       authority: "authority-a",
       transport: "zenoh_zero_copy",
       zenoh_config_file: "ZENOH_CONFIG.json5",
+      routing_mode: "copy_minimized",
+      copy_minimized_payload_alignment: 8,
       forwarding: ["iceoryx2-zc"],
     },
     {
       name: "iceoryx2-zc",
       authority: "authority-b",
       transport: "iceoryx2_zero_copy",
+      routing_mode: "copy_minimized",
+      copy_minimized_payload_alignment: 8,
       forwarding: ["zenoh-zc"],
     },
   ],

@@ -25,6 +25,8 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct UpStreamerConfig {
     pub(crate) message_queue_size: u16,
+    #[serde(default)]
+    pub(crate) route_queue_policy: RouteQueuePolicyConfig,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -72,6 +74,12 @@ pub struct EndpointConfig {
     #[serde(default)]
     pub(crate) local_resource: Option<u16>,
     #[serde(default)]
+    pub(crate) routing_mode: RoutingMode,
+    #[serde(default)]
+    pub(crate) route_queue_policy: Option<RouteQueuePolicyConfig>,
+    #[serde(default)]
+    pub(crate) copy_minimized_payload_alignment: Option<usize>,
+    #[serde(default)]
     pub(crate) forwarding: Vec<String>,
 }
 
@@ -92,4 +100,20 @@ pub enum MqttMode {
     #[default]
     InVehicle,
     OffVehicle,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingMode {
+    #[default]
+    Owned,
+    CopyMinimized,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteQueuePolicyConfig {
+    #[default]
+    Backpressure,
+    DropAndReport,
 }

@@ -15,6 +15,8 @@
 
 use std::time::SystemTime;
 
+use crate::TransportMode;
+
 /// Public route identity attached to data-plane health failures.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DataPlaneRoute {
@@ -28,6 +30,72 @@ pub struct DataPlaneRoute {
     pub egress_authority: String,
 }
 
+/// Public classification for how a streamer route forwards frames.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum RouteKind {
+    /// The route uses owned transports on both sides.
+    OwnedToOwned,
+    /// The route receives owned frames and copies into a zero-copy egress adapter.
+    OwnedToZeroCopyAdapter,
+    /// The route copies zero-copy ingress leases into owned frames before egress.
+    ZeroCopyAdapterToOwned,
+    /// The route uses owned-frame copying adapters on both zero-copy endpoints.
+    ZeroCopyAdapterToZeroCopyAdapter,
+    /// The route copies ingress zero-copy lease slices directly into egress transmit loans.
+    CopyMinimizedZeroCopyToZeroCopy,
+}
+
+/// Public route diagnostic snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RouteDiagnostic {
+    /// Route identity.
+    pub route: DataPlaneRoute,
+    /// Ingress endpoint capability mode.
+    pub ingress_mode: TransportMode,
+    /// Egress endpoint capability mode.
+    pub egress_mode: TransportMode,
+    /// Route forwarding classification.
+    pub route_kind: RouteKind,
+}
+
+/// Behavior when an ingress listener receives a frame while the route queue is full.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum RouteQueuePolicy {
+    /// Preserve current behavior by awaiting queue capacity and applying backpressure.
+    #[default]
+    Backpressure,
+    /// Drop the frame immediately, log, and report data-plane health degradation.
+    DropAndReport,
+}
+
+/// Options for owned-frame streamer routes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RouteOptions {
+    /// Ingress queue behavior for this route.
+    pub queue_policy: RouteQueuePolicy,
+}
+
+/// Options for experimental copy-minimized routes.
+#[cfg(feature = "experimental-loaned-frame")]
+#[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CopyMinimizedRouteOptions {
+    /// Alignment requested from the zero-copy egress transmit loan.
+    pub alignment: usize,
+    /// Ingress queue behavior for this route.
+    pub queue_policy: RouteQueuePolicy,
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+impl Default for CopyMinimizedRouteOptions {
+    fn default() -> Self {
+        Self {
+            alignment: 1,
+            queue_policy: RouteQueuePolicy::Backpressure,
+        }
+    }
+}
+
 /// Data-plane failure category.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DataPlaneFailureKind {
@@ -36,6 +104,8 @@ pub enum DataPlaneFailureKind {
     /// The ingress listener could not enqueue a received frame because the route
     /// queue was closed.
     IngressQueueClosed,
+    /// The ingress listener dropped a received frame because the route queue was full.
+    IngressQueueFull,
     /// Route refresh could not unregister an old ingress listener registration.
     RouteRewireUnregister,
 }
@@ -58,6 +128,8 @@ pub struct DataPlaneHealth {
     pub egress_send_failures: u64,
     /// Count of frames dropped because an ingress route queue was closed.
     pub ingress_queue_failures: u64,
+    /// Count of frames dropped by explicit drop-and-report queue policy.
+    pub ingress_queue_full_drops: u64,
     /// Count of old listener unregister failures during route refresh.
     pub route_rewire_unregister_failures: u64,
     /// Time at which the most recent data-plane failure was recorded.
@@ -79,6 +151,9 @@ impl DataPlaneHealth {
             }
             DataPlaneFailureKind::IngressQueueClosed => {
                 self.ingress_queue_failures = self.ingress_queue_failures.saturating_add(1);
+            }
+            DataPlaneFailureKind::IngressQueueFull => {
+                self.ingress_queue_full_drops = self.ingress_queue_full_drops.saturating_add(1);
             }
             DataPlaneFailureKind::RouteRewireUnregister => {
                 self.route_rewire_unregister_failures =

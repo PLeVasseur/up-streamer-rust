@@ -3,7 +3,9 @@
 This is a standalone implementation of a uStreamer.
 It is implemented to dynamically link between any number of uEntities that use a mix of either Zenoh or MQTT5.
 
-The configurable streamer routes native `UOwnedFrame` values. Owned transports are used directly; true zero-copy transports are connected through an owned-frame adapter that copies zero-copy receive leases into owned frames and copies owned egress payloads into transmit loans. Payload codecs remain an application concern: the streamer preserves `PayloadEncoding` and payload bytes but does not deserialize or reinterpret them.
+The configurable streamer routes native `UOwnedFrame` values by default. Owned transports are used directly; true zero-copy transports are connected through an owned-frame adapter that copies zero-copy receive leases into owned frames and copies owned egress payloads into transmit loans. Payload codecs remain an application concern: the streamer preserves `PayloadEncoding` and payload bytes but does not deserialize or reinterpret them.
+
+When built with `--features experimental-loaned-frame`, routes between zero-copy endpoints can opt into `routing_mode: "copy_minimized"`. That mode keeps the ingress receive lease out of the owned-frame route logic and copies ordered payload slices directly into the egress transmit loan. It avoids an intermediate owned payload allocation, but it still copies payload bytes and is not zero-copy-preserving forwarding. Omitted `routing_mode` defaults to `"owned"`.
 
 ## Supported Setups
 
@@ -47,6 +49,10 @@ There are currently no example entities for notification type messages. These do
 ## Understanding the Configuration Files
 
 Reference the `CONFIG.json5` configuration file to understand the basic configuration options for the Streamer.
+
+`up_streamer_config.route_queue_policy` is optional and defaults to `"backpressure"`. Endpoint-level `route_queue_policy` overrides the default for that endpoint's outgoing routes. The supported values are `"backpressure"` and `"drop_and_report"`; drop-and-report records full ingress queue drops in `UStreamer::data_plane_health()`.
+
+Endpoint `routing_mode` is optional and defaults to `"owned"`. Use `"copy_minimized"` only when both the source endpoint and every forwarding target are zero-copy endpoints and the binary is built with `experimental-loaned-frame`. `copy_minimized_payload_alignment` defaults to `1` and is passed to the egress transmit-loan reservation.
 
 The `ZENOH_CONFIG.json5` file is used to set Zenoh configurations. By default, it is only used to set listening endpoints, but can be used with more configurations according to [Zenoh's page on it](https://zenoh.io/docs/manual/configuration/#configuration-files).
 

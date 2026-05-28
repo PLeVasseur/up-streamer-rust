@@ -16,17 +16,25 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{sync::mpsc, sync::mpsc::error::TrySendError, task::JoinHandle};
 use up_rust::usubscription::{
     from_proto_uri, FetchSubscriptionsRequest, FetchSubscriptionsResponse, USubscription,
+};
+#[cfg(feature = "experimental-loaned-frame")]
+use up_rust::{
+    copy_loaned_frame_payload_to_tx,
+    zero_copy::{UZeroCopyListener, UZeroCopyRxFrame, UZeroCopyTransport},
+    ZeroCopyLoanedFrame,
 };
 use up_rust::{
     transport::UOwnedFrameEndpointRegistration, UCode, UOwnedFrame, UOwnedListener, UStatus, UUri,
 };
 
+#[cfg(feature = "experimental-loaned-frame")]
+use crate::{CopyMinimizedRouteOptions, ZeroCopyFrameEndpoint};
 use crate::{
-    DataPlaneFailureKind, DataPlaneHealth, DataPlaneRoute, OwnedFrameEndpoint,
-    SubscriptionSyncHealth,
+    DataPlaneFailureKind, DataPlaneHealth, DataPlaneRoute, OwnedFrameEndpoint, RouteDiagnostic,
+    RouteKind, RouteOptions, RouteQueuePolicy, SubscriptionSyncHealth,
 };
 
 const RECENT_FRAME_ID_LIMIT: usize = 1024;
@@ -47,11 +55,42 @@ struct RouteFilter {
 
 impl RouteKey {
     fn new(ingress: &OwnedFrameEndpoint, egress: &OwnedFrameEndpoint) -> Self {
+        Self::from_parts(
+            &ingress.name,
+            &ingress.authority,
+            &egress.name,
+            &egress.authority,
+        )
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    fn new_zero_copy<I, E>(
+        ingress: &ZeroCopyFrameEndpoint<I>,
+        egress: &ZeroCopyFrameEndpoint<E>,
+    ) -> Self
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        Self::from_parts(
+            &ingress.name,
+            &ingress.authority,
+            &egress.name,
+            &egress.authority,
+        )
+    }
+
+    fn from_parts(
+        ingress_name: &str,
+        ingress_authority: &str,
+        egress_name: &str,
+        egress_authority: &str,
+    ) -> Self {
         Self {
-            ingress_name: ingress.name.clone(),
-            ingress_authority: ingress.authority.clone(),
-            egress_name: egress.name.clone(),
-            egress_authority: egress.authority.clone(),
+            ingress_name: ingress_name.to_string(),
+            ingress_authority: ingress_authority.to_string(),
+            egress_name: egress_name.to_string(),
+            egress_authority: egress_authority.to_string(),
         }
     }
 }
@@ -60,6 +99,7 @@ struct RouteBinding {
     ingress: OwnedFrameEndpoint,
     egress: OwnedFrameEndpoint,
     tx: mpsc::Sender<UOwnedFrame>,
+    queue_policy: RouteQueuePolicy,
     registrations: Vec<UOwnedFrameEndpointRegistration>,
     dispatch_task: JoinHandle<()>,
 }
@@ -67,26 +107,40 @@ struct RouteBinding {
 struct IngressForwarder {
     tx: mpsc::Sender<UOwnedFrame>,
     route: DataPlaneRoute,
+    queue_policy: RouteQueuePolicy,
     data_plane_health: Arc<Mutex<DataPlaneHealth>>,
 }
 
 #[async_trait::async_trait]
 impl UOwnedListener for IngressForwarder {
     async fn on_receive_owned(&self, frame: UOwnedFrame) {
-        if self.tx.send(frame).await.is_err() {
-            tracing::warn!(
-                ingress = %self.route.ingress_name,
-                ingress_authority = %self.route.ingress_authority,
-                egress = %self.route.egress_name,
-                egress_authority = %self.route.egress_authority,
-                "ingress_queue_closed"
-            );
-            record_data_plane_failure(
-                &self.data_plane_health,
-                DataPlaneFailureKind::IngressQueueClosed,
-                self.route.clone(),
-                "route ingress queue closed before frame could be forwarded",
-            );
+        match self.queue_policy {
+            RouteQueuePolicy::Backpressure => {
+                if self.tx.send(frame).await.is_err() {
+                    record_ingress_queue_closed(&self.data_plane_health, &self.route);
+                }
+            }
+            RouteQueuePolicy::DropAndReport => match self.tx.try_send(frame) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    tracing::warn!(
+                        ingress = %self.route.ingress_name,
+                        ingress_authority = %self.route.ingress_authority,
+                        egress = %self.route.egress_name,
+                        egress_authority = %self.route.egress_authority,
+                        "ingress_queue_full_drop"
+                    );
+                    record_data_plane_failure(
+                        &self.data_plane_health,
+                        DataPlaneFailureKind::IngressQueueFull,
+                        self.route.clone(),
+                        "route ingress queue full; frame dropped by drop-and-report policy",
+                    );
+                }
+                Err(TrySendError::Closed(_)) => {
+                    record_ingress_queue_closed(&self.data_plane_health, &self.route);
+                }
+            },
         }
     }
 }
@@ -110,6 +164,8 @@ pub struct UStreamer {
     subscription_sync_health: SubscriptionSyncHealth,
     data_plane_health: Arc<Mutex<DataPlaneHealth>>,
     routes: HashMap<RouteKey, RouteBinding>,
+    #[cfg(feature = "experimental-loaned-frame")]
+    copy_minimized_routes: HashMap<RouteKey, Box<dyn CopyMinimizedRouteOps>>,
 }
 
 impl UStreamer {
@@ -135,6 +191,8 @@ impl UStreamer {
             subscription_sync_health: SubscriptionSyncHealth::default(),
             data_plane_health: Arc::new(Mutex::new(DataPlaneHealth::default())),
             routes: HashMap::new(),
+            #[cfg(feature = "experimental-loaned-frame")]
+            copy_minimized_routes: HashMap::new(),
         };
         let _ = streamer.refresh_subscriptions().await;
         Ok(streamer)
@@ -161,6 +219,26 @@ impl UStreamer {
             .lock()
             .expect("data-plane health lock poisoned")
             .clone()
+    }
+
+    /// Returns route diagnostics for installed owned and copy-minimized routes.
+    pub fn route_diagnostics(&self) -> Vec<RouteDiagnostic> {
+        let mut diagnostics = Vec::with_capacity(self.routes.len());
+        diagnostics.extend(self.routes.values().map(|binding| RouteDiagnostic {
+            route: data_plane_route(&binding.ingress, &binding.egress),
+            ingress_mode: binding.ingress.mode(),
+            egress_mode: binding.egress.mode(),
+            route_kind: route_kind_for_modes(binding.ingress.mode(), binding.egress.mode()),
+        }));
+
+        #[cfg(feature = "experimental-loaned-frame")]
+        diagnostics.extend(
+            self.copy_minimized_routes
+                .values()
+                .map(|binding| binding.diagnostic()),
+        );
+
+        diagnostics
     }
 
     /// Fetches subscriptions and rewires existing routes to match the new
@@ -215,6 +293,27 @@ impl UStreamer {
         ingress: &OwnedFrameEndpoint,
         egress: &OwnedFrameEndpoint,
     ) -> Result<(), UStatus> {
+        self.add_route_ref_with_options(ingress, egress, RouteOptions::default())
+            .await
+    }
+
+    /// Adds a route from `ingress` to `egress` with explicit route options.
+    ///
+    /// The default [`RouteOptions`] preserves backpressure on full route queues.
+    /// Use [`RouteQueuePolicy::DropAndReport`] only when bounded latency and
+    /// explicit drop accounting are preferred over listener backpressure.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when authorities are identical, no successful
+    /// subscription snapshot is available, the route already exists, or ingress
+    /// listener registration fails.
+    pub async fn add_route_ref_with_options(
+        &mut self,
+        ingress: &OwnedFrameEndpoint,
+        egress: &OwnedFrameEndpoint,
+        options: RouteOptions,
+    ) -> Result<(), UStatus> {
         if ingress.authority == egress.authority {
             return Err(UStatus::fail_with_code(
                 UCode::INVALID_ARGUMENT,
@@ -231,7 +330,7 @@ impl UStreamer {
 
         let route_key = RouteKey::new(ingress, egress);
         let route = data_plane_route(ingress, egress);
-        if self.routes.contains_key(&route_key) {
+        if self.route_key_exists(&route_key) {
             return Err(UStatus::fail_with_code(
                 UCode::ALREADY_EXISTS,
                 "route already exists",
@@ -261,6 +360,7 @@ impl UStreamer {
                     Arc::new(IngressForwarder {
                         tx: tx.clone(),
                         route: route.clone(),
+                        queue_policy: options.queue_policy,
                         data_plane_health: self.data_plane_health.clone(),
                     }),
                 )
@@ -362,6 +462,7 @@ impl UStreamer {
                 ingress: ingress.clone(),
                 egress: egress.clone(),
                 tx,
+                queue_policy: options.queue_policy,
                 registrations,
                 dispatch_task,
             },
@@ -382,6 +483,177 @@ impl UStreamer {
         egress: OwnedFrameEndpoint,
     ) -> Result<(), UStatus> {
         self.add_route_ref(&ingress, &egress).await
+    }
+
+    /// Adds a route with explicit options, consuming endpoint values after registration.
+    ///
+    /// This is a convenience wrapper around [`Self::add_route_ref_with_options`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::add_route_ref_with_options`].
+    pub async fn add_route_with_options(
+        &mut self,
+        ingress: OwnedFrameEndpoint,
+        egress: OwnedFrameEndpoint,
+        options: RouteOptions,
+    ) -> Result<(), UStatus> {
+        self.add_route_ref_with_options(&ingress, &egress, options)
+            .await
+    }
+
+    /// Adds an experimental copy-minimized route between zero-copy endpoints.
+    ///
+    /// This route mode keeps ingress receive leases out of the owned-frame router
+    /// and copies ordered payload slices directly into egress transmit loans. It
+    /// still copies payload bytes into the egress loan and must not be described
+    /// as zero-copy-preserving forwarding.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when authorities are identical, no successful
+    /// subscription snapshot is available, the route already exists, or ingress
+    /// zero-copy listener registration fails.
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+    pub async fn add_copy_minimized_route_ref<I, E>(
+        &mut self,
+        ingress: &ZeroCopyFrameEndpoint<I>,
+        egress: &ZeroCopyFrameEndpoint<E>,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        I::Rx: UZeroCopyRxFrame + Send + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        self.add_copy_minimized_route_ref_with_options(
+            ingress,
+            egress,
+            CopyMinimizedRouteOptions::default(),
+        )
+        .await
+    }
+
+    /// Adds an experimental copy-minimized route with explicit options.
+    ///
+    /// `options.alignment` is passed to the egress zero-copy transport when each
+    /// transmit loan is reserved. `options.queue_policy` controls the bounded
+    /// ingress worker queue and defaults to backpressure.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when authorities are identical, no successful
+    /// subscription snapshot is available, the route already exists, or ingress
+    /// zero-copy listener registration fails.
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+    pub async fn add_copy_minimized_route_ref_with_options<I, E>(
+        &mut self,
+        ingress: &ZeroCopyFrameEndpoint<I>,
+        egress: &ZeroCopyFrameEndpoint<E>,
+        options: CopyMinimizedRouteOptions,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        I::Rx: UZeroCopyRxFrame + Send + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        if ingress.authority == egress.authority {
+            return Err(UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                "ingress and egress authorities must differ",
+            ));
+        }
+
+        if self.subscription_sync_health.last_success_at.is_none() {
+            return Err(UStatus::fail_with_code(
+                UCode::FAILED_PRECONDITION,
+                "subscription snapshot is unavailable",
+            ));
+        }
+
+        let route_key = RouteKey::new_zero_copy(ingress, egress);
+        if self.route_key_exists(&route_key) {
+            return Err(UStatus::fail_with_code(
+                UCode::ALREADY_EXISTS,
+                "route already exists",
+            ));
+        }
+
+        tracing::debug!(
+            ingress = %ingress.name,
+            ingress_authority = %ingress.authority,
+            ingress_mode = ?ingress.mode(),
+            egress = %egress.name,
+            egress_authority = %egress.authority,
+            egress_mode = ?egress.mode(),
+            route_kind = ?RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+            "route_create"
+        );
+
+        let binding = CopyMinimizedRouteBinding::new(
+            ingress,
+            egress,
+            filters_for_authorities(
+                &self.subscription_snapshot,
+                &ingress.authority,
+                &egress.authority,
+            ),
+            self.message_queue_size,
+            options,
+            self.data_plane_health.clone(),
+        )
+        .await?;
+        self.copy_minimized_routes
+            .insert(route_key, Box::new(binding));
+        Ok(())
+    }
+
+    /// Adds a copy-minimized route, consuming endpoint values after registration.
+    ///
+    /// This is a convenience wrapper around [`Self::add_copy_minimized_route_ref`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::add_copy_minimized_route_ref`].
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+    pub async fn add_copy_minimized_route<I, E>(
+        &mut self,
+        ingress: ZeroCopyFrameEndpoint<I>,
+        egress: ZeroCopyFrameEndpoint<E>,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        I::Rx: UZeroCopyRxFrame + Send + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        self.add_copy_minimized_route_ref(&ingress, &egress).await
+    }
+
+    /// Adds a copy-minimized route with explicit options, consuming endpoint values.
+    ///
+    /// This is a convenience wrapper around
+    /// [`Self::add_copy_minimized_route_ref_with_options`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::add_copy_minimized_route_ref_with_options`].
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+    pub async fn add_copy_minimized_route_with_options<I, E>(
+        &mut self,
+        ingress: ZeroCopyFrameEndpoint<I>,
+        egress: ZeroCopyFrameEndpoint<E>,
+        options: CopyMinimizedRouteOptions,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        I::Rx: UZeroCopyRxFrame + Send + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        self.add_copy_minimized_route_ref_with_options(&ingress, &egress, options)
+            .await
     }
 
     /// Deletes a route from `ingress` to `egress` and unregisters its listeners.
@@ -443,6 +715,435 @@ impl UStreamer {
     ) -> Result<(), UStatus> {
         self.delete_route_ref(&ingress, &egress).await
     }
+
+    /// Deletes an experimental copy-minimized route and unregisters its listeners.
+    ///
+    /// If any unregister operation fails, the route is restored with the
+    /// remaining registrations so callers can retry deletion.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when authorities are identical, the route does not exist,
+    /// or an underlying unregister operation fails.
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+    pub async fn delete_copy_minimized_route_ref<I, E>(
+        &mut self,
+        ingress: &ZeroCopyFrameEndpoint<I>,
+        egress: &ZeroCopyFrameEndpoint<E>,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        if ingress.authority == egress.authority {
+            return Err(UStatus::fail_with_code(
+                UCode::INVALID_ARGUMENT,
+                "ingress and egress authorities must differ",
+            ));
+        }
+
+        let route_key = RouteKey::new_zero_copy(ingress, egress);
+        let Some(mut binding) = self.copy_minimized_routes.remove(&route_key) else {
+            return Err(UStatus::fail_with_code(UCode::NOT_FOUND, "route not found"));
+        };
+        if let Err(err) = binding.unregister_for_delete().await {
+            self.copy_minimized_routes.insert(route_key, binding);
+            return Err(err);
+        }
+        binding.abort_dispatch();
+        Ok(())
+    }
+
+    /// Deletes a copy-minimized route, consuming endpoint values after lookup.
+    ///
+    /// This is a convenience wrapper around [`Self::delete_copy_minimized_route_ref`].
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::delete_copy_minimized_route_ref`].
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
+    pub async fn delete_copy_minimized_route<I, E>(
+        &mut self,
+        ingress: ZeroCopyFrameEndpoint<I>,
+        egress: ZeroCopyFrameEndpoint<E>,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        self.delete_copy_minimized_route_ref(&ingress, &egress)
+            .await
+    }
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+#[async_trait::async_trait]
+trait CopyMinimizedRouteOps: Send {
+    fn diagnostic(&self) -> RouteDiagnostic;
+    async fn rewire(&mut self, snapshot: &FetchSubscriptionsResponse) -> Result<(), UStatus>;
+    async fn unregister_for_delete(&mut self) -> Result<(), UStatus>;
+    fn abort_dispatch(&self);
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+struct CopyMinimizedRouteBinding<I, E>
+where
+    I: UZeroCopyTransport + Send + Sync + 'static,
+    I::Rx: UZeroCopyRxFrame + Send + 'static,
+    E: UZeroCopyTransport + Send + Sync + 'static,
+{
+    ingress: ZeroCopyFrameEndpoint<I>,
+    egress: ZeroCopyFrameEndpoint<E>,
+    tx: mpsc::Sender<I::Rx>,
+    options: CopyMinimizedRouteOptions,
+    registrations: Vec<ZeroCopyEndpointRegistration<I>>,
+    dispatch_task: JoinHandle<()>,
+    data_plane_health: Arc<Mutex<DataPlaneHealth>>,
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+impl<I, E> CopyMinimizedRouteBinding<I, E>
+where
+    I: UZeroCopyTransport + Send + Sync + 'static,
+    I::Rx: UZeroCopyRxFrame + Send + 'static,
+    E: UZeroCopyTransport + Send + Sync + 'static,
+{
+    async fn new(
+        ingress: &ZeroCopyFrameEndpoint<I>,
+        egress: &ZeroCopyFrameEndpoint<E>,
+        filters: Vec<RouteFilter>,
+        message_queue_size: usize,
+        options: CopyMinimizedRouteOptions,
+        data_plane_health: Arc<Mutex<DataPlaneHealth>>,
+    ) -> Result<Self, UStatus> {
+        let (tx, mut rx) = mpsc::channel::<I::Rx>(message_queue_size);
+        let route = data_plane_route_for_parts(
+            &ingress.name,
+            &ingress.authority,
+            &egress.name,
+            &egress.authority,
+        );
+        let egress_transport = egress.transport.clone();
+        let dispatch_health = data_plane_health.clone();
+        let ingress_name = ingress.name.clone();
+        let ingress_authority = ingress.authority.clone();
+        let egress_name = egress.name.clone();
+        let egress_authority = egress.authority.clone();
+        let alignment = options.alignment;
+        let dispatch_task = tokio::spawn(async move {
+            let mut recent_frame_ids = HashSet::new();
+            let mut recent_frame_order = VecDeque::new();
+            tracing::debug!(
+                ingress = %ingress_name,
+                ingress_authority = %ingress_authority,
+                ingress_mode = ?crate::TransportMode::ZeroCopy,
+                egress = %egress_name,
+                egress_authority = %egress_authority,
+                egress_mode = ?crate::TransportMode::ZeroCopy,
+                route_kind = ?RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+                "egress_worker_create"
+            );
+            while let Some(frame) = rx.recv().await {
+                let frame_id = frame.metadata().attributes().id().clone();
+                if !recent_frame_ids.insert(frame_id.clone()) {
+                    tracing::debug!(
+                        ingress = %ingress_name,
+                        ingress_authority = %ingress_authority,
+                        egress = %egress_name,
+                        egress_authority = %egress_authority,
+                        ?frame_id,
+                        "egress_duplicate_frame_skip"
+                    );
+                    continue;
+                }
+                recent_frame_order.push_back(frame_id);
+                if recent_frame_order.len() > RECENT_FRAME_ID_LIMIT {
+                    if let Some(expired_frame_id) = recent_frame_order.pop_front() {
+                        recent_frame_ids.remove(&expired_frame_id);
+                    }
+                }
+
+                let metadata = frame.metadata().clone();
+                let payload_len = frame.payload_len();
+                let send_result = match egress_transport
+                    .reserve(metadata, payload_len, alignment)
+                    .await
+                {
+                    Ok(mut tx) => {
+                        let copy_result = {
+                            let loaned = ZeroCopyLoanedFrame::new(frame);
+                            copy_loaned_frame_payload_to_tx(&loaned, &mut tx).map_err(UStatus::from)
+                        };
+                        match copy_result {
+                            Ok(_) => egress_transport.send_zero_copy(tx).await,
+                            Err(err) => Err(err),
+                        }
+                    }
+                    Err(err) => Err(err),
+                };
+                match send_result {
+                    Ok(()) => tracing::debug!(
+                        ingress = %ingress_name,
+                        ingress_authority = %ingress_authority,
+                        egress = %egress_name,
+                        egress_authority = %egress_authority,
+                        route_kind = ?RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+                        "egress_send_ok"
+                    ),
+                    Err(err) => {
+                        tracing::warn!(
+                            ingress = %ingress_name,
+                            ingress_authority = %ingress_authority,
+                            egress = %egress_name,
+                            egress_authority = %egress_authority,
+                            route_kind = ?RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+                            ?err,
+                            "egress_send_failed"
+                        );
+                        record_data_plane_failure(
+                            &dispatch_health,
+                            DataPlaneFailureKind::EgressSend,
+                            route.clone(),
+                            format!("{err:?}"),
+                        );
+                    }
+                }
+            }
+        });
+
+        let mut binding = Self {
+            ingress: ZeroCopyFrameEndpoint::new(
+                &ingress.name,
+                &ingress.authority,
+                ingress.transport.clone(),
+            ),
+            egress: ZeroCopyFrameEndpoint::new(
+                &egress.name,
+                &egress.authority,
+                egress.transport.clone(),
+            ),
+            tx,
+            options,
+            registrations: Vec::new(),
+            dispatch_task,
+            data_plane_health,
+        };
+        for route_filter in filters {
+            match binding.register_filter(route_filter).await {
+                Ok(registration) => binding.registrations.push(registration),
+                Err(err) => {
+                    for registration in binding.registrations.drain(..) {
+                        let _ = registration.unregister().await;
+                    }
+                    binding.dispatch_task.abort();
+                    return Err(err);
+                }
+            }
+        }
+        Ok(binding)
+    }
+
+    async fn register_filter(
+        &self,
+        route_filter: RouteFilter,
+    ) -> Result<ZeroCopyEndpointRegistration<I>, UStatus> {
+        let listener: Arc<dyn UZeroCopyListener<I::Rx>> = Arc::new(CopyMinimizedIngressForwarder {
+            tx: self.tx.clone(),
+            route: data_plane_route_for_parts(
+                &self.ingress.name,
+                &self.ingress.authority,
+                &self.egress.name,
+                &self.egress.authority,
+            ),
+            queue_policy: self.options.queue_policy,
+            data_plane_health: self.data_plane_health.clone(),
+        });
+        self.ingress
+            .transport
+            .register_zero_copy_listener(
+                &route_filter.source,
+                route_filter.sink.as_ref(),
+                listener.clone(),
+            )
+            .await?;
+        Ok(ZeroCopyEndpointRegistration {
+            transport: self.ingress.transport.clone(),
+            source_filter: route_filter.source,
+            sink_filter: route_filter.sink,
+            listener,
+        })
+    }
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+#[async_trait::async_trait]
+impl<I, E> CopyMinimizedRouteOps for CopyMinimizedRouteBinding<I, E>
+where
+    I: UZeroCopyTransport + Send + Sync + 'static,
+    I::Rx: UZeroCopyRxFrame + Send + 'static,
+    E: UZeroCopyTransport + Send + Sync + 'static,
+{
+    fn diagnostic(&self) -> RouteDiagnostic {
+        RouteDiagnostic {
+            route: data_plane_route_for_parts(
+                &self.ingress.name,
+                &self.ingress.authority,
+                &self.egress.name,
+                &self.egress.authority,
+            ),
+            ingress_mode: crate::TransportMode::ZeroCopy,
+            egress_mode: crate::TransportMode::ZeroCopy,
+            route_kind: RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+        }
+    }
+
+    async fn rewire(&mut self, snapshot: &FetchSubscriptionsResponse) -> Result<(), UStatus> {
+        let filters =
+            filters_for_authorities(snapshot, &self.ingress.authority, &self.egress.authority);
+        let mut new_registrations = Vec::new();
+        for route_filter in filters {
+            match self.register_filter(route_filter).await {
+                Ok(registration) => new_registrations.push(registration),
+                Err(err) => {
+                    for registration in new_registrations {
+                        let _ = registration.unregister().await;
+                    }
+                    return Err(err);
+                }
+            }
+        }
+
+        let route = data_plane_route_for_parts(
+            &self.ingress.name,
+            &self.ingress.authority,
+            &self.egress.name,
+            &self.egress.authority,
+        );
+        let old_registrations = std::mem::take(&mut self.registrations);
+        for registration in old_registrations {
+            if let Err(err) = registration.unregister().await {
+                tracing::warn!(
+                    ingress = %route.ingress_name,
+                    ingress_authority = %route.ingress_authority,
+                    egress = %route.egress_name,
+                    egress_authority = %route.egress_authority,
+                    ?err,
+                    "route_rewire_unregister_old_failed"
+                );
+                record_data_plane_failure(
+                    &self.data_plane_health,
+                    DataPlaneFailureKind::RouteRewireUnregister,
+                    route.clone(),
+                    format!("{err:?}"),
+                );
+                new_registrations.push(registration);
+            }
+        }
+        self.registrations = new_registrations;
+        Ok(())
+    }
+
+    async fn unregister_for_delete(&mut self) -> Result<(), UStatus> {
+        let registrations = std::mem::take(&mut self.registrations);
+        let mut remaining_registrations = Vec::new();
+        let mut first_err = None;
+        for registration in registrations {
+            if let Err(err) = registration.unregister().await {
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+                remaining_registrations.push(registration);
+            }
+        }
+        if let Some(err) = first_err {
+            self.registrations = remaining_registrations;
+            return Err(err);
+        }
+        Ok(())
+    }
+
+    fn abort_dispatch(&self) {
+        self.dispatch_task.abort();
+    }
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+struct ZeroCopyEndpointRegistration<T>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+{
+    transport: Arc<T>,
+    source_filter: UUri,
+    sink_filter: Option<UUri>,
+    listener: Arc<dyn UZeroCopyListener<T::Rx>>,
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+impl<T> ZeroCopyEndpointRegistration<T>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+{
+    async fn unregister(&self) -> Result<(), UStatus> {
+        self.transport
+            .unregister_zero_copy_listener(
+                &self.source_filter,
+                self.sink_filter.as_ref(),
+                self.listener.clone(),
+            )
+            .await
+    }
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+struct CopyMinimizedIngressForwarder<Rx>
+where
+    Rx: UZeroCopyRxFrame + Send + 'static,
+{
+    tx: mpsc::Sender<Rx>,
+    route: DataPlaneRoute,
+    queue_policy: RouteQueuePolicy,
+    data_plane_health: Arc<Mutex<DataPlaneHealth>>,
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+#[async_trait::async_trait]
+impl<Rx> UZeroCopyListener<Rx> for CopyMinimizedIngressForwarder<Rx>
+where
+    Rx: UZeroCopyRxFrame + Send + 'static,
+{
+    async fn on_receive_zero_copy(&self, frame: Rx) {
+        match self.queue_policy {
+            RouteQueuePolicy::Backpressure => {
+                if self.tx.send(frame).await.is_err() {
+                    record_ingress_queue_closed(&self.data_plane_health, &self.route);
+                }
+            }
+            RouteQueuePolicy::DropAndReport => match self.tx.try_send(frame) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    tracing::warn!(
+                        ingress = %self.route.ingress_name,
+                        ingress_authority = %self.route.ingress_authority,
+                        egress = %self.route.egress_name,
+                        egress_authority = %self.route.egress_authority,
+                        route_kind = ?RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+                        "ingress_queue_full_drop"
+                    );
+                    record_data_plane_failure(
+                        &self.data_plane_health,
+                        DataPlaneFailureKind::IngressQueueFull,
+                        self.route.clone(),
+                        "route ingress queue full; frame dropped by drop-and-report policy",
+                    );
+                }
+                Err(TrySendError::Closed(_)) => {
+                    record_ingress_queue_closed(&self.data_plane_health, &self.route);
+                }
+            },
+        }
+    }
 }
 
 impl UStreamer {
@@ -467,6 +1168,7 @@ impl UStreamer {
                         Arc::new(IngressForwarder {
                             tx: binding.tx.clone(),
                             route: data_plane_route(&binding.ingress, &binding.egress),
+                            queue_policy: binding.queue_policy,
                             data_plane_health: self.data_plane_health.clone(),
                         }),
                     )
@@ -516,6 +1218,8 @@ impl UStreamer {
             }
             binding.registrations = new_registrations;
         }
+        #[cfg(feature = "experimental-loaned-frame")]
+        self.rewire_copy_minimized_routes(snapshot).await?;
         Ok(())
     }
 
@@ -526,6 +1230,30 @@ impl UStreamer {
     ) -> Vec<RouteFilter> {
         filters_for_snapshot(&self.subscription_snapshot, ingress, egress)
     }
+
+    fn route_key_exists(&self, route_key: &RouteKey) -> bool {
+        self.routes.contains_key(route_key) || {
+            #[cfg(feature = "experimental-loaned-frame")]
+            {
+                self.copy_minimized_routes.contains_key(route_key)
+            }
+            #[cfg(not(feature = "experimental-loaned-frame"))]
+            {
+                false
+            }
+        }
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    async fn rewire_copy_minimized_routes(
+        &mut self,
+        snapshot: &FetchSubscriptionsResponse,
+    ) -> Result<(), UStatus> {
+        for binding in self.copy_minimized_routes.values_mut() {
+            binding.rewire(snapshot).await?;
+        }
+        Ok(())
+    }
 }
 
 fn filters_for_snapshot(
@@ -533,9 +1261,17 @@ fn filters_for_snapshot(
     ingress: &OwnedFrameEndpoint,
     egress: &OwnedFrameEndpoint,
 ) -> Vec<RouteFilter> {
+    filters_for_authorities(snapshot, &ingress.authority, &egress.authority)
+}
+
+fn filters_for_authorities(
+    snapshot: &FetchSubscriptionsResponse,
+    ingress_authority: &str,
+    egress_authority: &str,
+) -> Vec<RouteFilter> {
     let mut filters = vec![RouteFilter {
-        source: authority_to_wildcard_filter(&ingress.authority),
-        sink: Some(authority_to_wildcard_filter(&egress.authority)),
+        source: authority_to_wildcard_filter(ingress_authority),
+        sink: Some(authority_to_wildcard_filter(egress_authority)),
     }];
 
     for subscription in &snapshot.subscriptions {
@@ -552,9 +1288,9 @@ fn filters_for_snapshot(
         let subscriber_uri = from_proto_uri(subscriber_uri);
         let topic_authority = topic.authority_name();
         let subscriber_authority = subscriber_uri.authority_name();
-        let topic_matches_ingress = topic_authority == ingress.authority || topic_authority == "*";
+        let topic_matches_ingress = topic_authority == ingress_authority || topic_authority == "*";
         let subscriber_matches_egress =
-            subscriber_authority == egress.authority || subscriber_authority == "*";
+            subscriber_authority == egress_authority || subscriber_authority == "*";
         let route_filter = RouteFilter {
             source: topic,
             sink: None,
@@ -572,6 +1308,10 @@ impl Drop for UStreamer {
         for binding in self.routes.values() {
             binding.dispatch_task.abort();
         }
+        #[cfg(feature = "experimental-loaned-frame")]
+        for binding in self.copy_minimized_routes.values() {
+            binding.abort_dispatch();
+        }
     }
 }
 
@@ -581,12 +1321,60 @@ fn authority_to_wildcard_filter(authority_name: &str) -> UUri {
 }
 
 fn data_plane_route(ingress: &OwnedFrameEndpoint, egress: &OwnedFrameEndpoint) -> DataPlaneRoute {
+    data_plane_route_for_parts(
+        &ingress.name,
+        &ingress.authority,
+        &egress.name,
+        &egress.authority,
+    )
+}
+
+fn data_plane_route_for_parts(
+    ingress_name: &str,
+    ingress_authority: &str,
+    egress_name: &str,
+    egress_authority: &str,
+) -> DataPlaneRoute {
     DataPlaneRoute {
-        ingress_name: ingress.name.clone(),
-        ingress_authority: ingress.authority.clone(),
-        egress_name: egress.name.clone(),
-        egress_authority: egress.authority.clone(),
+        ingress_name: ingress_name.to_string(),
+        ingress_authority: ingress_authority.to_string(),
+        egress_name: egress_name.to_string(),
+        egress_authority: egress_authority.to_string(),
     }
+}
+
+fn route_kind_for_modes(
+    ingress_mode: crate::TransportMode,
+    egress_mode: crate::TransportMode,
+) -> RouteKind {
+    match (ingress_mode, egress_mode) {
+        (crate::TransportMode::Owned, crate::TransportMode::Owned) => RouteKind::OwnedToOwned,
+        (crate::TransportMode::Owned, crate::TransportMode::ZeroCopy) => {
+            RouteKind::OwnedToZeroCopyAdapter
+        }
+        (crate::TransportMode::ZeroCopy, crate::TransportMode::Owned) => {
+            RouteKind::ZeroCopyAdapterToOwned
+        }
+        (crate::TransportMode::ZeroCopy, crate::TransportMode::ZeroCopy) => {
+            RouteKind::ZeroCopyAdapterToZeroCopyAdapter
+        }
+    }
+}
+
+fn record_ingress_queue_closed(health: &Arc<Mutex<DataPlaneHealth>>, route: &DataPlaneRoute) {
+    tracing::warn!(
+        ingress = %route.ingress_name,
+        ingress_authority = %route.ingress_authority,
+        egress = %route.egress_name,
+        egress_authority = %route.egress_authority,
+        "ingress_queue_closed"
+    );
+    record_data_plane_failure(
+        health,
+        DataPlaneFailureKind::IngressQueueClosed,
+        route.clone(),
+        "route ingress queue closed before frame could be forwarded",
+    );
 }
 
 fn record_data_plane_failure(
@@ -867,6 +1655,9 @@ mod tests {
     struct MemoryZeroCopyTransport {
         listeners: Mutex<Vec<RegisteredZeroCopyListener>>,
         sent: Mutex<Vec<UOwnedFrame>>,
+        fail_send: Mutex<bool>,
+        fail_on_unregister: Mutex<bool>,
+        reserve_alignments: Mutex<Vec<usize>>,
     }
 
     #[derive(Clone)]
@@ -912,6 +1703,34 @@ mod tests {
         fn sent(&self) -> Vec<UOwnedFrame> {
             self.sent.lock().expect("sent lock poisoned").clone()
         }
+
+        fn fail_sends() -> Self {
+            Self {
+                fail_send: Mutex::new(true),
+                ..Default::default()
+            }
+        }
+
+        fn fail_on_unregister() -> Self {
+            Self {
+                fail_on_unregister: Mutex::new(true),
+                ..Default::default()
+            }
+        }
+
+        fn listener_count(&self) -> usize {
+            self.listeners
+                .lock()
+                .expect("listeners lock poisoned")
+                .len()
+        }
+
+        fn reserve_alignments(&self) -> Vec<usize> {
+            self.reserve_alignments
+                .lock()
+                .expect("reserve_alignments lock poisoned")
+                .clone()
+        }
     }
 
     #[async_trait]
@@ -925,10 +1744,17 @@ mod tests {
             payload_len: usize,
             alignment: usize,
         ) -> Result<Self::Tx, UStatus> {
+            self.reserve_alignments
+                .lock()
+                .expect("reserve_alignments lock poisoned")
+                .push(alignment);
             UVecTxBuffer::with_alignment(header, payload_len, alignment).map_err(UStatus::from)
         }
 
         async fn send_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
+            if *self.fail_send.lock().expect("fail_send lock poisoned") {
+                return Err(UStatus::fail_with_code(UCode::UNAVAILABLE, "send failed"));
+            }
             self.sent
                 .lock()
                 .expect("sent lock poisoned")
@@ -959,6 +1785,16 @@ mod tests {
             _sink_filter: Option<&UUri>,
             listener: Arc<dyn UZeroCopyListener<Self::Rx>>,
         ) -> Result<(), UStatus> {
+            if *self
+                .fail_on_unregister
+                .lock()
+                .expect("fail_on_unregister lock poisoned")
+            {
+                return Err(UStatus::fail_with_code(
+                    UCode::UNAVAILABLE,
+                    "listener unregister failed",
+                ));
+            }
             let mut listeners = self.listeners.lock().expect("listeners lock poisoned");
             if let Some(index) = listeners
                 .iter()
@@ -1362,6 +2198,7 @@ mod tests {
                 egress_name: "out".to_string(),
                 egress_authority: "authority-b".to_string(),
             },
+            queue_policy: RouteQueuePolicy::Backpressure,
             data_plane_health: data_plane_health.clone(),
         };
 
@@ -1375,6 +2212,44 @@ mod tests {
         assert_eq!(
             health.last_failure.expect("last failure recorded").kind,
             DataPlaneFailureKind::IngressQueueClosed
+        );
+    }
+
+    #[tokio::test]
+    async fn ingress_forwarder_drop_and_report_records_full_route_queue() {
+        let (tx, _rx) = mpsc::channel(1);
+        let data_plane_health = Arc::new(Mutex::new(DataPlaneHealth::default()));
+        let forwarder = IngressForwarder {
+            tx,
+            route: DataPlaneRoute {
+                ingress_name: "in".to_string(),
+                ingress_authority: "authority-a".to_string(),
+                egress_name: "out".to_string(),
+                egress_authority: "authority-b".to_string(),
+            },
+            queue_policy: RouteQueuePolicy::DropAndReport,
+            data_plane_health: data_plane_health.clone(),
+        };
+
+        forwarder.on_receive_owned(frame("authority-a")).await;
+        forwarder.on_receive_owned(frame("authority-a")).await;
+
+        let health = data_plane_health
+            .lock()
+            .expect("data-plane health lock poisoned")
+            .clone();
+        assert_eq!(health.ingress_queue_full_drops, 1);
+        assert_eq!(
+            health.last_failure.expect("last failure recorded").kind,
+            DataPlaneFailureKind::IngressQueueFull
+        );
+    }
+
+    #[test]
+    fn route_options_default_to_backpressure() {
+        assert_eq!(
+            RouteOptions::default().queue_policy,
+            RouteQueuePolicy::Backpressure
         );
     }
 
@@ -1531,6 +2406,200 @@ mod tests {
 
         assert_eq!(zero_copy_egress.sent().len(), 1);
         assert_eq!(owned_egress.sent().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn route_diagnostics_report_owned_route_kinds() {
+        let mut streamer = UStreamer::new("test", 8, subscription_source())
+            .await
+            .expect("streamer should build");
+
+        let owned_in = Arc::new(MemoryOwnedTransport::default());
+        let owned_out = Arc::new(MemoryOwnedTransport::default());
+        let zc_in = Arc::new(MemoryZeroCopyTransport::default());
+        let zc_out = Arc::new(MemoryZeroCopyTransport::default());
+
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("owned-in-a", "authority-a", owned_in.clone()),
+                &OwnedFrameEndpoint::from_owned("owned-out-b", "authority-b", owned_out.clone()),
+            )
+            .await
+            .expect("owned to owned route should register");
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_owned("owned-in-c", "authority-c", owned_in.clone()),
+                &OwnedFrameEndpoint::from_zero_copy_copying_adapter(
+                    "zc-out-d",
+                    "authority-d",
+                    zc_out.clone(),
+                ),
+            )
+            .await
+            .expect("owned to zero-copy adapter route should register");
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_zero_copy_copying_adapter(
+                    "zc-in-e",
+                    "authority-e",
+                    zc_in.clone(),
+                ),
+                &OwnedFrameEndpoint::from_owned("owned-out-f", "authority-f", owned_out.clone()),
+            )
+            .await
+            .expect("zero-copy adapter to owned route should register");
+        streamer
+            .add_route_ref(
+                &OwnedFrameEndpoint::from_zero_copy_copying_adapter(
+                    "zc-in-g",
+                    "authority-g",
+                    zc_in,
+                ),
+                &OwnedFrameEndpoint::from_zero_copy_copying_adapter(
+                    "zc-out-h",
+                    "authority-h",
+                    zc_out,
+                ),
+            )
+            .await
+            .expect("zero-copy adapter to zero-copy adapter route should register");
+
+        let kinds: HashSet<_> = streamer
+            .route_diagnostics()
+            .into_iter()
+            .map(|diagnostic| diagnostic.route_kind)
+            .collect();
+
+        assert!(kinds.contains(&RouteKind::OwnedToOwned));
+        assert!(kinds.contains(&RouteKind::OwnedToZeroCopyAdapter));
+        assert!(kinds.contains(&RouteKind::ZeroCopyAdapterToOwned));
+        assert!(kinds.contains(&RouteKind::ZeroCopyAdapterToZeroCopyAdapter));
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    fn zero_copy_endpoint(
+        name: &str,
+        authority: &str,
+        transport: Arc<MemoryZeroCopyTransport>,
+    ) -> ZeroCopyFrameEndpoint<MemoryZeroCopyTransport> {
+        ZeroCopyFrameEndpoint::new(name, authority, transport)
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[tokio::test]
+    async fn copy_minimized_route_forwards_and_reports_diagnostics() {
+        let ingress = Arc::new(MemoryZeroCopyTransport::default());
+        let egress = Arc::new(MemoryZeroCopyTransport::default());
+        let in_ep = zero_copy_endpoint("in", "authority-a", ingress.clone());
+        let out_ep = zero_copy_endpoint("out", "authority-b", egress.clone());
+        let mut streamer = UStreamer::new("test", 8, subscription_source())
+            .await
+            .expect("streamer should build");
+
+        streamer
+            .add_copy_minimized_route_ref_with_options(
+                &in_ep,
+                &out_ep,
+                CopyMinimizedRouteOptions {
+                    alignment: 8,
+                    queue_policy: RouteQueuePolicy::Backpressure,
+                },
+            )
+            .await
+            .expect("copy-minimized route should register");
+
+        let diagnostics = streamer.route_diagnostics();
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].route_kind,
+            RouteKind::CopyMinimizedZeroCopyToZeroCopy
+        );
+        assert_eq!(diagnostics[0].ingress_mode, crate::TransportMode::ZeroCopy);
+        assert_eq!(diagnostics[0].egress_mode, crate::TransportMode::ZeroCopy);
+
+        ingress
+            .inject(point_to_point_frame("authority-a", "authority-b"))
+            .await;
+        yield_to_forwarder().await;
+
+        let sent = egress.sent();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].payload_bytes(), b"streamed");
+        assert_eq!(egress.reserve_alignments(), vec![8]);
+
+        streamer
+            .delete_copy_minimized_route_ref(&in_ep, &out_ep)
+            .await
+            .expect("copy-minimized route should delete");
+        ingress
+            .inject(point_to_point_frame("authority-a", "authority-b"))
+            .await;
+        yield_to_forwarder().await;
+        assert_eq!(egress.sent().len(), 1);
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[tokio::test]
+    async fn copy_minimized_route_refresh_keeps_route_and_suppresses_duplicates() {
+        let ingress = Arc::new(MemoryZeroCopyTransport::fail_on_unregister());
+        let egress = Arc::new(MemoryZeroCopyTransport::default());
+        let in_ep = zero_copy_endpoint("in", "authority-a", ingress.clone());
+        let out_ep = zero_copy_endpoint("out", "authority-b", egress.clone());
+        let mut streamer = UStreamer::new("test", 8, subscription_source())
+            .await
+            .expect("streamer should build");
+
+        streamer
+            .add_copy_minimized_route_ref(&in_ep, &out_ep)
+            .await
+            .expect("copy-minimized route should register");
+        streamer
+            .refresh_subscriptions()
+            .await
+            .expect("refresh should keep route installed");
+        assert_eq!(ingress.listener_count(), 2);
+
+        ingress
+            .inject(point_to_point_frame("authority-a", "authority-b"))
+            .await;
+        yield_to_forwarder().await;
+
+        assert_eq!(egress.sent().len(), 1);
+        assert_eq!(streamer.route_diagnostics().len(), 1);
+        let health = streamer.data_plane_health();
+        assert_eq!(health.route_rewire_unregister_failures, 1);
+        assert_eq!(
+            health.last_failure.expect("last failure recorded").kind,
+            DataPlaneFailureKind::RouteRewireUnregister
+        );
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[tokio::test]
+    async fn copy_minimized_egress_failure_updates_data_plane_health() {
+        let ingress = Arc::new(MemoryZeroCopyTransport::default());
+        let egress = Arc::new(MemoryZeroCopyTransport::fail_sends());
+        let in_ep = zero_copy_endpoint("in", "authority-a", ingress.clone());
+        let out_ep = zero_copy_endpoint("out", "authority-b", egress);
+        let mut streamer = UStreamer::new("test", 8, subscription_source())
+            .await
+            .expect("streamer should build");
+
+        streamer
+            .add_copy_minimized_route_ref(&in_ep, &out_ep)
+            .await
+            .expect("copy-minimized route should register");
+        ingress
+            .inject(point_to_point_frame("authority-a", "authority-b"))
+            .await;
+        yield_to_forwarder().await;
+
+        let health = streamer.data_plane_health();
+        assert_eq!(health.egress_send_failures, 1);
+        assert_eq!(
+            health.last_failure.expect("last failure recorded").kind,
+            DataPlaneFailureKind::EgressSend
+        );
     }
 
     #[tokio::test]

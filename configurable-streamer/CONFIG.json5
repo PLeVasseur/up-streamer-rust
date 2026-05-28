@@ -1,6 +1,7 @@
 {
   up_streamer_config: {
     message_queue_size: 32,
+    route_queue_policy: "backpressure",
   },
   usubscription_config: {
     file_path: "subscription_data.json",
