@@ -54,7 +54,7 @@ up-transport-zenoh = { git = "https://github.com/eclipse-uprotocol/up-transport-
 up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "653e4e803c87623f9e75e3be72316e217a4eba61" }
 up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "3169c6b3d6ba183dd442496853573c65814f4766" }
 up-transport-mqtt5 = { git = "https://github.com/eclipse-uprotocol/up-transport-mqtt5-rust.git", rev = "7ed05a7b97790c4e69f31eb1aeeb59053704b8c7", default-features = false }
-up-transport-vsomeip = { git = "https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust.git", rev = "a660c2d741ccba3cb80d2b2d0858a99084b97a9e", default-features = false }
+up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "e59e8a7cadf891be91532b539e290278b48ebb4f", default-features = false }
 zenoh = { version = "1.2.1", features = [
     "default",
     "plugins",
