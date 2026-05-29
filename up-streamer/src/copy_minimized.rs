@@ -12,8 +12,9 @@
  ********************************************************************************/
 
 use up_rust::{
-    copy_loaned_frame_payload_to_tx, zero_copy::UZeroCopyTransport, LoanedFrame, PayloadLayout,
-    StableContainerPayloadInfo, UCode, UStatus, UTxLoanSpec,
+    payload::{PayloadLayout, StableContainerPayloadInfo},
+    zero_copy::{copy_loaned_frame_payload_to_tx, LoanedFrame, UTxLoanSpec, UZeroCopyTransport},
+    UCode, UStatus,
 };
 
 /// Sends a loaned frame through a zero-copy transport with one payload copy.
@@ -106,8 +107,9 @@ mod tests {
     use async_trait::async_trait;
     use tokio::sync::Mutex;
     use up_rust::{
-        zero_copy::{UVecTxBuffer, UZeroCopyTransport},
-        UFrameBuilder, UOwnedFrame, UStatus, UTxLoanSpec, UUri,
+        transport::ValidatedTxLoanSpec,
+        zero_copy::{UVecRxLease, UVecTxBuffer, UZeroCopyTransportImpl},
+        UFrameBuilder, UOwnedFrame, UStatus, UUri,
     };
 
     use super::*;
@@ -118,11 +120,11 @@ mod tests {
     }
 
     #[async_trait]
-    impl UZeroCopyTransport for RecordingZeroCopyTransport {
+    impl UZeroCopyTransportImpl for RecordingZeroCopyTransport {
         type Tx = UVecTxBuffer;
-        type Rx = UOwnedFrame;
+        type Rx = UVecRxLease;
 
-        async fn loan_tx(&self, spec: UTxLoanSpec) -> Result<Self::Tx, UStatus> {
+        async fn loan_validated_tx(&self, spec: ValidatedTxLoanSpec) -> Result<Self::Tx, UStatus> {
             UVecTxBuffer::with_alignment(
                 spec.metadata().clone(),
                 spec.payload_len(),
@@ -131,7 +133,7 @@ mod tests {
             .map_err(UStatus::from)
         }
 
-        async fn send_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
+        async fn send_validated_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
             self.sent.lock().await.push(buffer.into_frame());
             Ok(())
         }

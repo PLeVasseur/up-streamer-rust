@@ -21,10 +21,9 @@ use up_rust::usubscription::{
     from_proto_uri, FetchSubscriptionsRequest, FetchSubscriptionsResponse, USubscription,
 };
 #[cfg(feature = "experimental-loaned-frame")]
-use up_rust::{
-    copy_loaned_frame_payload_to_tx,
-    zero_copy::{UZeroCopyListener, UZeroCopyRxFrame, UZeroCopyTransport},
-    ZeroCopyLoanedFrame,
+use up_rust::zero_copy::{
+    copy_loaned_frame_payload_to_tx, UFrameView, UZeroCopyListener, UZeroCopyRxLease,
+    UZeroCopyTransport, ZeroCopyLoanedFrame,
 };
 use up_rust::{
     transport::UOwnedFrameEndpointRegistration, UCode, UOwnedFrame, UOwnedListener, UStatus, UUri,
@@ -525,7 +524,7 @@ impl UStreamer {
     ) -> Result<(), UStatus>
     where
         I: UZeroCopyTransport + Send + Sync + 'static,
-        I::Rx: UZeroCopyRxFrame + Send + 'static,
+        I::Rx: UZeroCopyRxLease + Send + 'static,
         E: UZeroCopyTransport + Send + Sync + 'static,
     {
         self.add_copy_minimized_route_ref_with_options(
@@ -557,7 +556,7 @@ impl UStreamer {
     ) -> Result<(), UStatus>
     where
         I: UZeroCopyTransport + Send + Sync + 'static,
-        I::Rx: UZeroCopyRxFrame + Send + 'static,
+        I::Rx: UZeroCopyRxLease + Send + 'static,
         E: UZeroCopyTransport + Send + Sync + 'static,
     {
         if ingress.authority == egress.authority {
@@ -627,7 +626,7 @@ impl UStreamer {
     ) -> Result<(), UStatus>
     where
         I: UZeroCopyTransport + Send + Sync + 'static,
-        I::Rx: UZeroCopyRxFrame + Send + 'static,
+        I::Rx: UZeroCopyRxLease + Send + 'static,
         E: UZeroCopyTransport + Send + Sync + 'static,
     {
         self.add_copy_minimized_route_ref(&ingress, &egress).await
@@ -651,7 +650,7 @@ impl UStreamer {
     ) -> Result<(), UStatus>
     where
         I: UZeroCopyTransport + Send + Sync + 'static,
-        I::Rx: UZeroCopyRxFrame + Send + 'static,
+        I::Rx: UZeroCopyRxLease + Send + 'static,
         E: UZeroCopyTransport + Send + Sync + 'static,
     {
         self.add_copy_minimized_route_ref_with_options(&ingress, &egress, options)
@@ -793,7 +792,7 @@ trait CopyMinimizedRouteOps: Send {
 struct CopyMinimizedRouteBinding<I, E>
 where
     I: UZeroCopyTransport + Send + Sync + 'static,
-    I::Rx: UZeroCopyRxFrame + Send + 'static,
+    I::Rx: UZeroCopyRxLease + Send + 'static,
     E: UZeroCopyTransport + Send + Sync + 'static,
 {
     ingress: ZeroCopyFrameEndpoint<I>,
@@ -809,7 +808,7 @@ where
 impl<I, E> CopyMinimizedRouteBinding<I, E>
 where
     I: UZeroCopyTransport + Send + Sync + 'static,
-    I::Rx: UZeroCopyRxFrame + Send + 'static,
+    I::Rx: UZeroCopyRxLease + Send + 'static,
     E: UZeroCopyTransport + Send + Sync + 'static,
 {
     async fn new(
@@ -1000,7 +999,7 @@ where
 impl<I, E> CopyMinimizedRouteOps for CopyMinimizedRouteBinding<I, E>
 where
     I: UZeroCopyTransport + Send + Sync + 'static,
-    I::Rx: UZeroCopyRxFrame + Send + 'static,
+    I::Rx: UZeroCopyRxLease + Send + 'static,
     E: UZeroCopyTransport + Send + Sync + 'static,
 {
     fn diagnostic(&self) -> RouteDiagnostic {
@@ -1117,7 +1116,7 @@ where
 #[cfg(feature = "experimental-loaned-frame")]
 struct CopyMinimizedIngressForwarder<Rx>
 where
-    Rx: UZeroCopyRxFrame + Send + 'static,
+    Rx: UZeroCopyRxLease + Send + 'static,
 {
     tx: mpsc::Sender<Rx>,
     route: DataPlaneRoute,
@@ -1129,7 +1128,7 @@ where
 #[async_trait::async_trait]
 impl<Rx> UZeroCopyListener<Rx> for CopyMinimizedIngressForwarder<Rx>
 where
-    Rx: UZeroCopyRxFrame + Send + 'static,
+    Rx: UZeroCopyRxLease + Send + 'static,
 {
     async fn on_receive_zero_copy(&self, frame: Rx) {
         match self.queue_policy {
@@ -1413,6 +1412,8 @@ mod tests {
 
     use async_trait::async_trait;
     use protobuf::well_known_types::{any::Any, wrappers::StringValue};
+    #[cfg(feature = "experimental-loaned-frame")]
+    use up_rust::payload::StableContainerPayloadInfo;
     use up_rust::usubscription::{
         to_proto_uri, FetchSubscribersRequest, FetchSubscribersResponse, NotificationsRequest,
         ResetRequest, ResetResponse, SubscriberInfo, Subscription, SubscriptionRequest,
@@ -1421,9 +1422,10 @@ mod tests {
     use up_rust::{
         frame_wire::{ProtobufUMessageFrame, UFrameWireFormat},
         payload::{PlacementDefault, RawBytes, StableContainerPayload, UWireError},
-        zero_copy::{UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport},
+        transport::{UOwnedTransportImpl, ValidatedOwnedFrame, ValidatedTxLoanSpec},
+        zero_copy::{UVecRxLease, UVecTxBuffer, UZeroCopyListener, UZeroCopyTransportImpl},
         PayloadEncoding, ProtobufAnyPayload, ProtobufPayload, UFrameBuilder, UFrameMetadata,
-        UOwnedListener, UOwnedTransport, UTxLoanSpec,
+        UOwnedListener,
     };
 
     use super::*;
@@ -1596,16 +1598,19 @@ mod tests {
     }
 
     #[async_trait]
-    impl UOwnedTransport for MemoryOwnedTransport {
-        async fn send_owned(&self, frame: UOwnedFrame) -> Result<(), UStatus> {
+    impl UOwnedTransportImpl for MemoryOwnedTransport {
+        async fn send_validated_owned(&self, frame: ValidatedOwnedFrame) -> Result<(), UStatus> {
             if *self.fail_send.lock().expect("fail_send lock poisoned") {
                 return Err(UStatus::fail_with_code(UCode::UNAVAILABLE, "send failed"));
             }
-            self.sent.lock().expect("sent lock poisoned").push(frame);
+            self.sent
+                .lock()
+                .expect("sent lock poisoned")
+                .push(frame.into_inner());
             Ok(())
         }
 
-        async fn register_owned_listener(
+        async fn register_validated_owned_listener(
             &self,
             source_filter: &UUri,
             sink_filter: Option<&UUri>,
@@ -1642,7 +1647,7 @@ mod tests {
             Ok(())
         }
 
-        async fn unregister_owned_listener(
+        async fn unregister_validated_owned_listener(
             &self,
             _source_filter: &UUri,
             _sink_filter: Option<&UUri>,
@@ -1682,7 +1687,7 @@ mod tests {
     struct RegisteredZeroCopyListener {
         source_filter: UUri,
         sink_filter: Option<UUri>,
-        listener: Arc<dyn UZeroCopyListener<UOwnedFrame>>,
+        listener: Arc<dyn UZeroCopyListener<UVecRxLease>>,
     }
 
     impl RegisteredZeroCopyListener {
@@ -1712,7 +1717,7 @@ mod tests {
                 if registration.matches_frame(&frame) {
                     registration
                         .listener
-                        .on_receive_zero_copy(frame.clone())
+                        .on_receive_zero_copy(UVecRxLease::new(frame.clone()))
                         .await;
                 }
             }
@@ -1756,11 +1761,11 @@ mod tests {
     }
 
     #[async_trait]
-    impl UZeroCopyTransport for MemoryZeroCopyTransport {
+    impl UZeroCopyTransportImpl for MemoryZeroCopyTransport {
         type Tx = UVecTxBuffer;
-        type Rx = UOwnedFrame;
+        type Rx = UVecRxLease;
 
-        async fn loan_tx(&self, spec: UTxLoanSpec) -> Result<Self::Tx, UStatus> {
+        async fn loan_validated_tx(&self, spec: ValidatedTxLoanSpec) -> Result<Self::Tx, UStatus> {
             self.loan_alignments
                 .lock()
                 .expect("loan_alignments lock poisoned")
@@ -1773,7 +1778,7 @@ mod tests {
             .map_err(UStatus::from)
         }
 
-        async fn send_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
+        async fn send_validated_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
             if *self.fail_send.lock().expect("fail_send lock poisoned") {
                 return Err(UStatus::fail_with_code(UCode::UNAVAILABLE, "send failed"));
             }
@@ -1784,7 +1789,7 @@ mod tests {
             Ok(())
         }
 
-        async fn register_zero_copy_listener(
+        async fn register_validated_zero_copy_listener(
             &self,
             source_filter: &UUri,
             sink_filter: Option<&UUri>,
@@ -1801,7 +1806,7 @@ mod tests {
             Ok(())
         }
 
-        async fn unregister_zero_copy_listener(
+        async fn unregister_validated_zero_copy_listener(
             &self,
             _source_filter: &UUri,
             _sink_filter: Option<&UUri>,
@@ -1859,10 +1864,9 @@ mod tests {
     }
 
     fn frame(authority: &str) -> UOwnedFrame {
-        UOwnedFrame::new(
-            UFrameMetadata::publish(topic(authority)).with_encoding(RawBytes::encoding()),
-            b"streamed".as_slice(),
-        )
+        UFrameBuilder::publish(topic(authority))
+            .build_with_raw_payload(b"streamed".as_slice())
+            .expect("valid publish frame")
     }
 
     fn protobuf_payload(value: &str) -> StringValue {
@@ -1890,10 +1894,11 @@ mod tests {
 
     #[cfg(feature = "experimental-loaned-frame")]
     fn point_to_point_metadata(source_authority: &str, sink_authority: &str) -> UFrameMetadata {
-        UFrameMetadata::notification(
+        UFrameMetadata::try_notification(
             point_to_point_source(source_authority),
             point_to_point_sink(sink_authority),
         )
+        .expect("valid notification metadata")
     }
 
     #[cfg(feature = "experimental-loaned-frame")]
@@ -1911,10 +1916,10 @@ mod tests {
         sink_authority: &str,
     ) -> UOwnedFrame {
         let encoding = PayloadEncoding::custom(
-            up_rust::StableContainerPayloadInfo::ENCODING_ID,
+            StableContainerPayloadInfo::ENCODING_ID,
             "application/vnd.uprotocol.stable-container;variant=fixed;size=8;align=4",
         );
-        UOwnedFrame::new(
+        UOwnedFrame::with_payload_unchecked(
             point_to_point_metadata(source_authority, sink_authority).with_encoding(encoding),
             vec![0_u8; std::mem::size_of::<VehiclePose>()],
         )
@@ -1974,8 +1979,10 @@ mod tests {
             "com.example.streamed-native-v1",
             "application/vnd.example.streamed-native",
         );
-        let frame = UOwnedFrame::new(
-            UFrameMetadata::publish(topic("authority-a")).with_encoding(encoding.clone()),
+        let frame = UOwnedFrame::with_payload_unchecked(
+            UFrameMetadata::try_publish(topic("authority-a"))
+                .expect("valid publish metadata")
+                .with_encoding(encoding.clone()),
             b"native-layout".as_slice(),
         );
         ingress.inject(frame).await;
@@ -2010,7 +2017,7 @@ mod tests {
         let pose = VehiclePose { x: 3, y: 5 };
         let frame =
             UOwnedFrame::from_payload_as::<StableContainerPayload<VehiclePose>, VehiclePose>(
-                UFrameMetadata::publish(topic("authority-a")),
+                UFrameMetadata::try_publish(topic("authority-a")).expect("valid publish metadata"),
                 &pose,
             )
             .expect("stable-container payload should encode as owned bytes");
@@ -2049,7 +2056,7 @@ mod tests {
 
         let payload = protobuf_payload("protobuf payload routed by streamer");
         let frame = UOwnedFrame::from_serializable::<ProtobufPayload, _>(
-            UFrameMetadata::publish(topic("authority-a")),
+            UFrameMetadata::try_publish(topic("authority-a")).expect("valid publish metadata"),
             &payload,
         )
         .expect("protobuf payload should serialize");
@@ -2091,7 +2098,7 @@ mod tests {
         let payload = protobuf_payload("protobuf Any payload routed by streamer");
         let any = Any::pack(&payload).expect("protobuf Any should pack");
         let frame = UOwnedFrame::from_serializable::<ProtobufAnyPayload, _>(
-            UFrameMetadata::publish(topic("authority-a")),
+            UFrameMetadata::try_publish(topic("authority-a")).expect("valid publish metadata"),
             &any,
         )
         .expect("protobuf Any payload should serialize");
@@ -2136,14 +2143,16 @@ mod tests {
 
         let payload = protobuf_payload("protobuf payload inside protobuf UMessage frame");
         let inner_frame = UOwnedFrame::from_serializable::<ProtobufPayload, _>(
-            UFrameMetadata::publish(topic("authority-inner")),
+            UFrameMetadata::try_publish(topic("authority-inner")).expect("valid publish metadata"),
             &payload,
         )
         .expect("protobuf payload should serialize");
         let envelope = ProtobufUMessageFrame::serialize_frame(&inner_frame)
             .expect("protobuf UMessage frame should serialize");
-        let carrier = UOwnedFrame::new(
-            UFrameMetadata::publish(topic("authority-a")).with_encoding(RawBytes::encoding()),
+        let carrier = UOwnedFrame::with_payload_unchecked(
+            UFrameMetadata::try_publish(topic("authority-a"))
+                .expect("valid publish metadata")
+                .with_encoding(RawBytes::encoding()),
             envelope.clone(),
         );
 

@@ -25,8 +25,9 @@ use up_rust::usubscription::{
     Subscription, SubscriptionRequest, SubscriptionResponse, USubscription, UnsubscribeRequest,
 };
 use up_rust::{
-    zero_copy::{UVecTxBuffer, UZeroCopyListener, UZeroCopyTransport},
-    UFrameBuilder, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UTxLoanSpec, UUri,
+    transport::{UOwnedTransportImpl, ValidatedOwnedFrame, ValidatedTxLoanSpec},
+    zero_copy::{UVecRxLease, UVecTxBuffer, UZeroCopyListener, UZeroCopyTransportImpl},
+    UFrameBuilder, UOwnedFrame, UOwnedListener, UStatus, UUri,
 };
 use up_streamer::{OwnedFrameEndpoint, UStreamer};
 
@@ -140,15 +141,15 @@ impl MemoryOwnedTransport {
 }
 
 #[async_trait]
-impl UOwnedTransport for MemoryOwnedTransport {
-    async fn send_owned(&self, frame: UOwnedFrame) -> Result<(), UStatus> {
+impl UOwnedTransportImpl for MemoryOwnedTransport {
+    async fn send_validated_owned(&self, frame: ValidatedOwnedFrame) -> Result<(), UStatus> {
         black_box(frame.payload_bytes().len());
         self.sent.fetch_add(1, Ordering::SeqCst);
         self.sent_notify.notify_one();
         Ok(())
     }
 
-    async fn register_owned_listener(
+    async fn register_validated_owned_listener(
         &self,
         source_filter: &UUri,
         sink_filter: Option<&UUri>,
@@ -165,7 +166,7 @@ impl UOwnedTransport for MemoryOwnedTransport {
         Ok(())
     }
 
-    async fn unregister_owned_listener(
+    async fn unregister_validated_owned_listener(
         &self,
         _source_filter: &UUri,
         _sink_filter: Option<&UUri>,
@@ -193,7 +194,7 @@ struct MemoryZeroCopyTransport {
 struct RegisteredZeroCopyListener {
     source_filter: UUri,
     sink_filter: Option<UUri>,
-    listener: Arc<dyn UZeroCopyListener<UOwnedFrame>>,
+    listener: Arc<dyn UZeroCopyListener<UVecRxLease>>,
 }
 
 impl RegisteredZeroCopyListener {
@@ -223,7 +224,7 @@ impl MemoryZeroCopyTransport {
             if registration.matches_frame(&frame) {
                 registration
                     .listener
-                    .on_receive_zero_copy(frame.clone())
+                    .on_receive_zero_copy(UVecRxLease::new(frame.clone()))
                     .await;
             }
         }
@@ -237,11 +238,11 @@ impl MemoryZeroCopyTransport {
 }
 
 #[async_trait]
-impl UZeroCopyTransport for MemoryZeroCopyTransport {
+impl UZeroCopyTransportImpl for MemoryZeroCopyTransport {
     type Tx = UVecTxBuffer;
-    type Rx = UOwnedFrame;
+    type Rx = UVecRxLease;
 
-    async fn loan_tx(&self, spec: UTxLoanSpec) -> Result<Self::Tx, UStatus> {
+    async fn loan_validated_tx(&self, spec: ValidatedTxLoanSpec) -> Result<Self::Tx, UStatus> {
         UVecTxBuffer::with_alignment(
             spec.metadata().clone(),
             spec.payload_len(),
@@ -250,14 +251,14 @@ impl UZeroCopyTransport for MemoryZeroCopyTransport {
         .map_err(UStatus::from)
     }
 
-    async fn send_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
+    async fn send_validated_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
         black_box(buffer.as_ref().len());
         self.sent.fetch_add(1, Ordering::SeqCst);
         self.sent_notify.notify_one();
         Ok(())
     }
 
-    async fn register_zero_copy_listener(
+    async fn register_validated_zero_copy_listener(
         &self,
         source_filter: &UUri,
         sink_filter: Option<&UUri>,
@@ -274,7 +275,7 @@ impl UZeroCopyTransport for MemoryZeroCopyTransport {
         Ok(())
     }
 
-    async fn unregister_zero_copy_listener(
+    async fn unregister_validated_zero_copy_listener(
         &self,
         _source_filter: &UUri,
         _sink_filter: Option<&UUri>,

@@ -26,7 +26,7 @@ use up_rust::{
     frame_wire::{ProtobufUMessageFrame, UFrameWireFormat},
     payload::{RawBytes, UWireError},
     zero_copy::{
-        UZeroCopyListener, UZeroCopyPayloadCopyExt, UZeroCopyRxFrame, UZeroCopyTransport,
+        UZeroCopyListener, UZeroCopyPayloadCopyExt, UZeroCopyRxLease, UZeroCopyTransport,
         UZeroCopyTransportExt,
     },
     ProtobufPayload, UAttributes, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener,
@@ -110,15 +110,18 @@ struct ZeroCopyFrameSender(mpsc::UnboundedSender<UOwnedFrame>);
 #[async_trait]
 impl<T> UZeroCopyListener<T> for ZeroCopyFrameSender
 where
-    T: UZeroCopyRxFrame + Send + 'static,
+    T: UZeroCopyRxLease + Send + 'static,
 {
     async fn on_receive_zero_copy(&self, frame: T) {
-        let _ = self.0.send(UOwnedFrame::new(
-            frame.metadata().clone(),
-            frame
-                .try_payload_to_vec()
-                .expect("zero-copy payload slices should match payload_len"),
-        ));
+        let payload = frame
+            .try_payload_to_vec()
+            .expect("zero-copy payload slices should match payload_len");
+        let owned = if frame.has_payload() {
+            UOwnedFrame::with_payload_unchecked(frame.metadata().clone(), payload)
+        } else {
+            UOwnedFrame::without_payload_unchecked(frame.metadata().clone())
+        };
+        let _ = self.0.send(owned);
     }
 }
 
@@ -144,11 +147,15 @@ fn make_topic(authority: &str, resource: u16) -> UUri {
 
 fn metadata_header(topic: UUri) -> (UFrameMetadata, UUID) {
     let id = UUID::build();
-    let attributes = UAttributes::new(id.clone(), topic, None, UMessageType::Publish)
+    let attributes = UAttributes::try_new(id.clone(), topic, None, UMessageType::Publish)
+        .expect("valid publish attributes")
         .with_priority(UPriority::CS5)
         .with_ttl(3_000)
         .with_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00");
-    (UFrameMetadata::new(attributes, RawBytes::encoding()), id)
+    (
+        UFrameMetadata::try_new(attributes, RawBytes::encoding()).expect("valid publish metadata"),
+        id,
+    )
 }
 
 fn assert_streamed_metadata(frame: &UOwnedFrame, topic: &UUri, id: &UUID) {
@@ -327,7 +334,10 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf() {
 
     let payload = protobuf_payload("protobuf zenoh-to-iox");
     zenoh
-        .send_serialized::<ProtobufPayload, _>(UFrameMetadata::publish(topic), &payload)
+        .send_serialized::<ProtobufPayload, _>(
+            UFrameMetadata::try_publish(topic).expect("valid publish metadata"),
+            &payload,
+        )
         .await
         .expect("zenoh protobuf send should succeed");
 
@@ -387,14 +397,17 @@ async fn routes_real_zenoh_owned_to_real_iceoryx2_zero_copy_with_protobuf_umessa
 
     let payload = protobuf_payload("protobuf payload inside streamed protobuf UMessage frame");
     let inner_frame = UOwnedFrame::from_serializable::<ProtobufPayload, _>(
-        UFrameMetadata::publish(make_topic("inner", 0x910A)),
+        UFrameMetadata::try_publish(make_topic("inner", 0x910A)).expect("valid publish metadata"),
         &payload,
     )
     .expect("inner protobuf payload should serialize");
     let envelope = ProtobufUMessageFrame::serialize_frame(&inner_frame)
         .expect("outer protobuf UMessage frame should serialize");
     zenoh
-        .send_serialized::<RawBytes, _>(UFrameMetadata::publish(topic), &envelope)
+        .send_serialized::<RawBytes, _>(
+            UFrameMetadata::try_publish(topic).expect("valid publish metadata"),
+            &envelope,
+        )
         .await
         .expect("zenoh raw envelope send should succeed");
 
@@ -653,17 +666,19 @@ async fn lola_targeted_ingress_fans_out_to_streamer_and_local_listener() {
         .expect("route should register");
 
     let id = UUID::build();
-    let attributes = UAttributes::new(
+    let attributes = UAttributes::try_new(
         id.clone(),
         source.clone(),
         Some(sink.clone()),
         UMessageType::Notification,
     )
+    .expect("valid notification attributes")
     .with_priority(UPriority::CS5)
     .with_ttl(3_000)
     .with_traceparent("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00");
     lola.send_serialized_zero_copy::<RawBytes, _>(
-        UFrameMetadata::new(attributes, RawBytes::encoding()),
+        UFrameMetadata::try_new(attributes, RawBytes::encoding())
+            .expect("valid notification metadata"),
         &&b"lola-targeted-fanout"[..],
     )
     .await
@@ -733,7 +748,10 @@ async fn routes_real_iceoryx2_zero_copy_to_real_zenoh_owned_with_protobuf() {
 
     let payload = protobuf_payload("protobuf iox-to-zenoh");
     iceoryx2
-        .send_serialized_zero_copy::<ProtobufPayload, _>(UFrameMetadata::publish(topic), &payload)
+        .send_serialized_zero_copy::<ProtobufPayload, _>(
+            UFrameMetadata::try_publish(topic).expect("valid publish metadata"),
+            &payload,
+        )
         .await
         .expect("iceoryx2 protobuf send should succeed");
 

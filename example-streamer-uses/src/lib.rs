@@ -8,8 +8,8 @@ use async_trait::async_trait;
 use clap::Parser;
 use tokio::sync::mpsc;
 use up_rust::{
-    payload::RawBytes, UCode, UFrameMetadata, UMessageType, UOwnedFrame, UOwnedListener,
-    UOwnedTransport, UOwnedTransportExt, UStatus, UUri,
+    payload::RawBytes, UCode, UFrameBuilder, UFrameMetadata, UMessageType, UOwnedFrame,
+    UOwnedListener, UOwnedTransport, UOwnedTransportExt, UStatus, UUri,
 };
 #[cfg(feature = "mqtt-transport")]
 use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions};
@@ -445,22 +445,13 @@ impl UOwnedListener for PrintListener {
                     let _ = self.tx.send(frame);
                     return;
                 };
-                let response_metadata = UFrameMetadata::response(
+                let response = UFrameBuilder::response(
                     reply_to,
                     frame.metadata().attributes().id().clone(),
                     invoked_method,
-                );
-                let response_metadata = UFrameMetadata::new(
-                    response_metadata
-                        .attributes()
-                        .clone()
-                        .with_comm_status(UCode::OK),
-                    response_metadata.encoding().cloned(),
-                );
-                let response = UOwnedFrame::from_serializable::<RawBytes, _>(
-                    response_metadata,
-                    &&b"native response"[..],
                 )
+                .with_comm_status(UCode::OK)
+                .build_with_raw_payload(b"native response".as_slice())
                 .expect("raw response serialization should not fail");
                 println!("Sending Response message");
                 let _ = responder.send_owned(response).await;
@@ -509,7 +500,8 @@ pub async fn run_publisher(role: &'static str) -> Result<(), UStatus> {
         println!("Sending Publish message");
         transport
             .send_serialized::<RawBytes, _>(
-                UFrameMetadata::publish(source.clone()),
+                UFrameMetadata::try_publish(source.clone())
+                    .map_err(|error| cli::invalid_argument_status(error.to_string()))?,
                 &payload.as_bytes(),
             )
             .await?;
@@ -564,7 +556,8 @@ pub async fn run_client(role: &'static str) -> Result<(), UStatus> {
         let payload = format!("{role} native request #{count}");
         transport
             .send_serialized::<RawBytes, _>(
-                UFrameMetadata::request(method.clone(), reply_to.clone(), 5_000),
+                UFrameMetadata::try_request(method.clone(), reply_to.clone(), 5_000)
+                    .map_err(|error| cli::invalid_argument_status(error.to_string()))?,
                 &payload.as_bytes(),
             )
             .await?;
