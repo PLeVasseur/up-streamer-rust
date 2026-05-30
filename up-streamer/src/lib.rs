@@ -57,8 +57,8 @@ mod data_plane_health;
 #[cfg_attr(docsrs, doc(cfg(feature = "experimental-loaned-frame")))]
 pub use data_plane_health::CopyMinimizedRouteOptions;
 pub use data_plane_health::{
-    DataPlaneFailure, DataPlaneFailureKind, DataPlaneHealth, DataPlaneRoute, RouteDiagnostic,
-    RouteKind, RouteOptions, RouteQueuePolicy,
+    DataPlaneFailure, DataPlaneFailureKind, DataPlaneHealth, DataPlaneRoute, RouteCopySemantics,
+    RouteDiagnostic, RouteKind, RouteOptions, RouteQueuePolicy,
 };
 
 mod subscription_sync_health;

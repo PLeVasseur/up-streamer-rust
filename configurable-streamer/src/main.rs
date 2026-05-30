@@ -262,6 +262,10 @@ async fn endpoint_from_config(
                             endpoint.name
                         ))
                     })?,
+                    pull_mismatch_queue_capacity:
+                        LolaTransportConfig::DEFAULT_PULL_MISMATCH_QUEUE_CAPACITY,
+                    pull_mismatch_queue_full_policy:
+                        LolaTransportConfig::DEFAULT_PULL_MISMATCH_QUEUE_FULL_POLICY,
                     mw_com_config_path,
                 };
                 let transport = UTransportLola::build(config)?;

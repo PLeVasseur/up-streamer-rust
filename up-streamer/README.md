@@ -18,7 +18,7 @@ The crate does not depend on generated Protocol Buffers envelopes. Payload repre
 | `PayloadFormat` | Chosen by applications at frame boundaries; the streamer does not reinterpret payload bytes. |
 | `UFrameWireFormat` | Only used if an application intentionally carries an encoded whole frame as payload bytes. |
 | `UStreamer::data_plane_health` | Reports egress send failures, closed ingress queues, and route refresh unregister failures. |
-| `UStreamer::route_diagnostics` | Reports installed route endpoints, endpoint modes, and whether each route is owned, adapter-backed, or copy-minimized. |
+| `UStreamer::route_diagnostics` | Reports installed route endpoints, endpoint modes, queue policy, route kind, and explicit copy semantics. |
 
 ## Usage
 
@@ -87,13 +87,23 @@ Zero-copy ingress routes copy receive leases into owned frames and use native su
 
 If route refresh cannot unregister an old listener, the old registration can remain active alongside the new one. Streamer reports degraded data-plane health and suppresses duplicate frame IDs in the route worker so duplicate callbacks do not normally produce duplicate egress sends.
 
-`UStreamer::route_diagnostics()` returns route-level diagnostics with the public route identity, ingress/egress transport modes, and route kind. This avoids relying on logs to determine whether a route is owned-to-owned, adapter-backed, or experimental copy-minimized.
+`UStreamer::route_diagnostics()` returns route-level diagnostics with the public
+route identity, ingress/egress transport modes, queue policy, route kind, and
+`RouteCopySemantics`. This avoids relying on logs to determine whether a route is
+owned routing with no streamer copy claim, an owned-frame copying adapter
+boundary, or the experimental one-copy lease-to-loan route.
 
 ## Experimental Copy-Minimized Routing
 
 The `experimental-loaned-frame` feature exposes `ZeroCopyFrameEndpoint` and `UStreamer::add_copy_minimized_route_ref`. These APIs register zero-copy ingress listeners, keep each ingress receive lease alive until the route worker handles it, and copy ordered payload slices directly into a zero-copy egress transmit loan.
 
-Copy-minimized routing participates in normal route lifecycle: add, delete, subscription refresh, data-plane health, duplicate suppression, route diagnostics, and queue policy. It avoids an intermediate `UOwnedFrame` payload allocation in the route logic, but it still copies payload bytes into the egress loan and is not zero-copy-preserving forwarding. Owned routing remains the default.
+Copy-minimized routing participates in normal route lifecycle: add, delete,
+subscription refresh, data-plane health, duplicate suppression, route diagnostics,
+and queue policy. Diagnostics report
+`RouteCopySemantics::CopyMinimizedLeaseToLoanOneCopy`. It avoids an intermediate
+`UOwnedFrame` payload allocation in the route logic, but it still copies payload
+bytes into the egress loan and is not zero-copy-preserving forwarding. Owned
+routing remains the default.
 
 Stable-container copy-minimized routing is fail-safe: the route parses the
 type-agnostic stable-container metadata and rejects the frame before egress send

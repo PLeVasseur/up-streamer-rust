@@ -32,7 +32,7 @@ The old `up-linux-streamer-plugin` crate is intentionally not restored in this m
 
 The old bundled/unbundled lint workflows are replaced by `.github/workflows/native-frame-ci.yaml`. The scheduled smoke coverage is retained through `.github/workflows/transport-smoke-capstone.yaml`.
 
-The streamer library routes owned frames. Zero-copy transports are connected through explicit adapter boundaries that copy receive leases into owned frames and copy owned egress payloads into transmit loans. This keeps transport capabilities honest while letting one router bridge owned network/broker transports and shared-memory transports.
+The streamer library routes owned frames. Zero-copy transports are connected through explicit adapter boundaries that copy receive leases into owned frames and copy owned egress payloads into transmit loans. Route diagnostics expose explicit `RouteCopySemantics` so adapter-backed routes and experimental one-copy lease-to-loan routes are not mistaken for end-to-end zero-copy forwarding.
 
 ## Building
 

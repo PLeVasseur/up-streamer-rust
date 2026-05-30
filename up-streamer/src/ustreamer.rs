@@ -17,13 +17,15 @@ use std::{
 };
 
 use tokio::{sync::mpsc, sync::mpsc::error::TrySendError, task::JoinHandle};
+#[cfg(feature = "experimental-loaned-frame")]
+use up_rust::payload::UWireError;
 use up_rust::usubscription::{
     from_proto_uri, FetchSubscriptionsRequest, FetchSubscriptionsResponse, USubscription,
 };
 #[cfg(feature = "experimental-loaned-frame")]
 use up_rust::zero_copy::{
-    copy_loaned_frame_payload_to_tx, UFrameView, UZeroCopyListener, UZeroCopyRxLease,
-    UZeroCopyTransport, ZeroCopyLoanedFrame,
+    LoanedFrame, UFrameView, UTxBuffer, UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport,
+    ZeroCopyLoanedFrame,
 };
 use up_rust::{
     transport::UOwnedFrameEndpointRegistration, UCode, UOwnedFrame, UOwnedListener, UStatus, UUri,
@@ -34,8 +36,8 @@ use crate::copy_minimized::loan_spec_for_copy_minimized;
 #[cfg(feature = "experimental-loaned-frame")]
 use crate::{CopyMinimizedRouteOptions, ZeroCopyFrameEndpoint};
 use crate::{
-    DataPlaneFailureKind, DataPlaneHealth, DataPlaneRoute, OwnedFrameEndpoint, RouteDiagnostic,
-    RouteKind, RouteOptions, RouteQueuePolicy, SubscriptionSyncHealth,
+    DataPlaneFailureKind, DataPlaneHealth, DataPlaneRoute, OwnedFrameEndpoint, RouteCopySemantics,
+    RouteDiagnostic, RouteKind, RouteOptions, RouteQueuePolicy, SubscriptionSyncHealth,
 };
 
 const RECENT_FRAME_ID_LIMIT: usize = 1024;
@@ -225,11 +227,16 @@ impl UStreamer {
     /// Returns route diagnostics for installed owned and copy-minimized routes.
     pub fn route_diagnostics(&self) -> Vec<RouteDiagnostic> {
         let mut diagnostics = Vec::with_capacity(self.routes.len());
-        diagnostics.extend(self.routes.values().map(|binding| RouteDiagnostic {
-            route: data_plane_route(&binding.ingress, &binding.egress),
-            ingress_mode: binding.ingress.mode(),
-            egress_mode: binding.egress.mode(),
-            route_kind: route_kind_for_modes(binding.ingress.mode(), binding.egress.mode()),
+        diagnostics.extend(self.routes.values().map(|binding| {
+            let route_kind = route_kind_for_modes(binding.ingress.mode(), binding.egress.mode());
+            RouteDiagnostic {
+                route: data_plane_route(&binding.ingress, &binding.egress),
+                ingress_mode: binding.ingress.mode(),
+                egress_mode: binding.egress.mode(),
+                route_kind,
+                copy_semantics: copy_semantics_for_route_kind(route_kind),
+                queue_policy: binding.queue_policy,
+            }
         }));
 
         #[cfg(feature = "experimental-loaned-frame")]
@@ -340,6 +347,8 @@ impl UStreamer {
 
         let ingress_mode = ingress.mode();
         let egress_mode = egress.mode();
+        let route_kind = route_kind_for_modes(ingress_mode, egress_mode);
+        let copy_semantics = copy_semantics_for_route_kind(route_kind);
         tracing::debug!(
             ingress = %ingress.name,
             ingress_authority = %ingress.authority,
@@ -347,6 +356,9 @@ impl UStreamer {
             egress = %egress.name,
             egress_authority = %egress.authority,
             ?egress_mode,
+            ?route_kind,
+            ?copy_semantics,
+            queue_policy = ?options.queue_policy,
             "route_create"
         );
 
@@ -392,6 +404,9 @@ impl UStreamer {
                 egress = %egress_name,
                 egress_authority = %egress_authority,
                 ?egress_mode,
+                ?route_kind,
+                ?copy_semantics,
+                queue_policy = ?options.queue_policy,
                 "egress_worker_create"
             );
             while let Some(frame) = rx.recv().await {
@@ -405,6 +420,8 @@ impl UStreamer {
                         egress_authority = %egress_authority,
                         ?egress_mode,
                         ?frame_id,
+                        ?route_kind,
+                        ?copy_semantics,
                         "egress_duplicate_frame_skip"
                     );
                     continue;
@@ -423,6 +440,8 @@ impl UStreamer {
                     egress = %egress_name,
                     egress_authority = %egress_authority,
                     ?egress_mode,
+                    ?route_kind,
+                    ?copy_semantics,
                     "egress_send_attempt"
                 );
                 match egress_transport.send_owned(frame).await {
@@ -433,6 +452,8 @@ impl UStreamer {
                         egress = %egress_name,
                         egress_authority = %egress_authority,
                         ?egress_mode,
+                        ?route_kind,
+                        ?copy_semantics,
                         "egress_send_ok"
                     ),
                     Err(err) => {
@@ -443,6 +464,8 @@ impl UStreamer {
                             egress = %egress_name,
                             egress_authority = %egress_authority,
                             ?egress_mode,
+                            ?route_kind,
+                            ?copy_semantics,
                             ?err,
                             "egress_send_failed"
                         );
@@ -581,6 +604,8 @@ impl UStreamer {
             ));
         }
 
+        let route_kind = RouteKind::CopyMinimizedZeroCopyToZeroCopy;
+        let copy_semantics = copy_semantics_for_route_kind(route_kind);
         tracing::debug!(
             ingress = %ingress.name,
             ingress_authority = %ingress.authority,
@@ -588,7 +613,10 @@ impl UStreamer {
             egress = %egress.name,
             egress_authority = %egress.authority,
             egress_mode = ?egress.mode(),
-            route_kind = ?RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+            ?route_kind,
+            ?copy_semantics,
+            queue_policy = ?options.queue_policy,
+            egress_payload_alignment = options.alignment,
             "route_create"
         );
 
@@ -833,6 +861,8 @@ where
         let egress_name = egress.name.clone();
         let egress_authority = egress.authority.clone();
         let alignment = options.alignment;
+        let route_kind = RouteKind::CopyMinimizedZeroCopyToZeroCopy;
+        let copy_semantics = copy_semantics_for_route_kind(route_kind);
         let dispatch_task = tokio::spawn(async move {
             let mut recent_frame_ids = HashSet::new();
             let mut recent_frame_order = VecDeque::new();
@@ -843,7 +873,10 @@ where
                 egress = %egress_name,
                 egress_authority = %egress_authority,
                 egress_mode = ?crate::TransportMode::ZeroCopy,
-                route_kind = ?RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+                ?route_kind,
+                ?copy_semantics,
+                queue_policy = ?options.queue_policy,
+                egress_payload_alignment = alignment,
                 "egress_worker_create"
             );
             while let Some(frame) = rx.recv().await {
@@ -855,6 +888,8 @@ where
                         egress = %egress_name,
                         egress_authority = %egress_authority,
                         ?frame_id,
+                        ?route_kind,
+                        ?copy_semantics,
                         "egress_duplicate_frame_skip"
                     );
                     continue;
@@ -875,7 +910,8 @@ where
                             ingress_authority = %ingress_authority,
                             egress = %egress_name,
                             egress_authority = %egress_authority,
-                            route_kind = ?RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+                            ?route_kind,
+                            ?copy_semantics,
                             ?err,
                             "egress_payload_layout_rejected"
                         );
@@ -888,25 +924,36 @@ where
                         continue;
                     }
                 };
+                let payload_len = spec.payload_len();
+                let egress_payload_alignment = spec.payload_alignment();
 
                 let send_result = match egress_transport.loan_tx(spec).await {
                     Ok(mut tx) => {
-                        let copy_result = copy_loaned_frame_payload_to_tx(&loaned, &mut tx)
-                            .map_err(UStatus::from);
+                        let copy_result =
+                            copy_loaned_frame_payload_to_tx_with_count(&loaned, &mut tx)
+                                .map_err(UStatus::from);
                         match copy_result {
-                            Ok(_) => egress_transport.send_zero_copy(tx).await,
+                            Ok(copy_diagnostics) => egress_transport
+                                .send_zero_copy(tx)
+                                .await
+                                .map(|()| copy_diagnostics),
                             Err(err) => Err(err),
                         }
                     }
                     Err(err) => Err(err),
                 };
                 match send_result {
-                    Ok(()) => tracing::debug!(
+                    Ok((copied_payload_len, payload_slice_count)) => tracing::debug!(
                         ingress = %ingress_name,
                         ingress_authority = %ingress_authority,
                         egress = %egress_name,
                         egress_authority = %egress_authority,
-                        route_kind = ?RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+                        ?route_kind,
+                        ?copy_semantics,
+                        payload_len,
+                        egress_payload_alignment,
+                        copied_payload_len,
+                        payload_slice_count,
                         "egress_send_ok"
                     ),
                     Err(err) => {
@@ -915,7 +962,10 @@ where
                             ingress_authority = %ingress_authority,
                             egress = %egress_name,
                             egress_authority = %egress_authority,
-                            route_kind = ?RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+                            ?route_kind,
+                            ?copy_semantics,
+                            payload_len,
+                            egress_payload_alignment,
                             ?err,
                             "egress_send_failed"
                         );
@@ -1003,6 +1053,7 @@ where
     E: UZeroCopyTransport + Send + Sync + 'static,
 {
     fn diagnostic(&self) -> RouteDiagnostic {
+        let route_kind = RouteKind::CopyMinimizedZeroCopyToZeroCopy;
         RouteDiagnostic {
             route: data_plane_route_for_parts(
                 &self.ingress.name,
@@ -1012,7 +1063,9 @@ where
             ),
             ingress_mode: crate::TransportMode::ZeroCopy,
             egress_mode: crate::TransportMode::ZeroCopy,
-            route_kind: RouteKind::CopyMinimizedZeroCopyToZeroCopy,
+            route_kind,
+            copy_semantics: copy_semantics_for_route_kind(route_kind),
+            queue_policy: self.options.queue_policy,
         }
     }
 
@@ -1378,6 +1431,59 @@ fn route_kind_for_modes(
     }
 }
 
+fn copy_semantics_for_route_kind(route_kind: RouteKind) -> RouteCopySemantics {
+    match route_kind {
+        RouteKind::OwnedToOwned => RouteCopySemantics::OwnedNoStreamerCopyClaim,
+        RouteKind::OwnedToZeroCopyAdapter
+        | RouteKind::ZeroCopyAdapterToOwned
+        | RouteKind::ZeroCopyAdapterToZeroCopyAdapter => RouteCopySemantics::CopyingAdapterBoundary,
+        RouteKind::CopyMinimizedZeroCopyToZeroCopy => {
+            RouteCopySemantics::CopyMinimizedLeaseToLoanOneCopy
+        }
+    }
+}
+
+#[cfg(feature = "experimental-loaned-frame")]
+fn copy_loaned_frame_payload_to_tx_with_count(
+    frame: &(impl LoanedFrame + ?Sized),
+    buffer: &mut impl UTxBuffer,
+) -> Result<(usize, usize), UWireError> {
+    let expected = frame.payload_len();
+    let dst = buffer.payload_mut();
+    if dst.len() != expected {
+        return Err(UWireError::invalid_payload_length(expected, dst.len()));
+    }
+
+    let mut written = 0_usize;
+    let mut slice_count = 0_usize;
+    let mut copy_result = Ok(());
+    frame.visit_payload_slices(&mut |slice| {
+        if copy_result.is_err() {
+            return;
+        }
+        slice_count += 1;
+        let Some(end) = written.checked_add(slice.len()) else {
+            copy_result = Err(UWireError::invalid_payload("payload length overflow"));
+            return;
+        };
+        let Some(target) = dst.get_mut(written..end) else {
+            copy_result = Err(UWireError::buffer_too_small(expected, dst.len()));
+            return;
+        };
+        target.copy_from_slice(slice);
+        written = end;
+    });
+    copy_result?;
+
+    if written != expected {
+        return Err(UWireError::invalid_payload(format!(
+            "loaned frame payload slices yielded {written} bytes but payload_len returned {expected} bytes"
+        )));
+    }
+
+    Ok((written, slice_count))
+}
+
 fn record_ingress_queue_closed(health: &Arc<Mutex<DataPlaneHealth>>, route: &DataPlaneRoute) {
     tracing::warn!(
         ingress = %route.ingress_name,
@@ -1427,6 +1533,9 @@ mod tests {
         PayloadEncoding, ProtobufAnyPayload, ProtobufPayload, UFrameBuilder, UFrameMetadata,
         UOwnedListener,
     };
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    use up_rust::zero_copy::{UFrameView, UTxBuffer, UZeroCopyRxLease};
 
     use super::*;
 
@@ -1833,6 +1942,292 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[derive(Default)]
+    struct InstrumentedRxCounters {
+        payload_slices_calls: Mutex<usize>,
+        payload_reader_calls: Mutex<usize>,
+        contiguous_payload_calls: Mutex<usize>,
+        yielded_slices: Mutex<Vec<Vec<u8>>>,
+        drop_count: Mutex<usize>,
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[derive(Clone)]
+    struct InstrumentedRxLease {
+        metadata: UFrameMetadata,
+        segments: Vec<Vec<u8>>,
+        counters: Arc<InstrumentedRxCounters>,
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    impl InstrumentedRxLease {
+        fn new(frame: UOwnedFrame, counters: Arc<InstrumentedRxCounters>) -> Self {
+            Self {
+                metadata: frame.metadata().clone(),
+                segments: split_payload_segments(frame.payload_bytes()),
+                counters,
+            }
+        }
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    impl UFrameView for InstrumentedRxLease {
+        type PayloadReader<'a>
+            = std::io::Cursor<Vec<u8>>
+        where
+            Self: 'a;
+        type PayloadSlices<'a>
+            = std::vec::IntoIter<&'a [u8]>
+        where
+            Self: 'a;
+
+        fn metadata(&self) -> &UFrameMetadata {
+            &self.metadata
+        }
+
+        fn payload_len(&self) -> usize {
+            self.segments.iter().map(Vec::len).sum()
+        }
+
+        fn has_payload(&self) -> bool {
+            self.payload_len() > 0 || self.metadata.encoding().is_some()
+        }
+
+        fn payload_reader(&self) -> Self::PayloadReader<'_> {
+            *self
+                .counters
+                .payload_reader_calls
+                .lock()
+                .expect("payload_reader_calls lock poisoned") += 1;
+            std::io::Cursor::new(self.segments.concat())
+        }
+
+        fn payload_slices(&self) -> Self::PayloadSlices<'_> {
+            *self
+                .counters
+                .payload_slices_calls
+                .lock()
+                .expect("payload_slices_calls lock poisoned") += 1;
+            self.counters
+                .yielded_slices
+                .lock()
+                .expect("yielded_slices lock poisoned")
+                .extend(self.segments.iter().cloned());
+            self.segments
+                .iter()
+                .map(Vec::as_slice)
+                .collect::<Vec<_>>()
+                .into_iter()
+        }
+
+        fn try_contiguous_payload(&self) -> Option<&[u8]> {
+            *self
+                .counters
+                .contiguous_payload_calls
+                .lock()
+                .expect("contiguous_payload_calls lock poisoned") += 1;
+            None
+        }
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    impl UZeroCopyRxLease for InstrumentedRxLease {}
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    impl Drop for InstrumentedRxLease {
+        fn drop(&mut self) {
+            *self
+                .counters
+                .drop_count
+                .lock()
+                .expect("drop_count lock poisoned") += 1;
+        }
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[derive(Default)]
+    struct InstrumentedEgressCounters {
+        loan_payload_lengths: Mutex<Vec<usize>>,
+        loan_alignments: Mutex<Vec<usize>>,
+        loan_metadata: Mutex<Vec<UFrameMetadata>>,
+        payload_mut_calls: Mutex<usize>,
+        send_commits: Mutex<usize>,
+        sent_metadata: Mutex<Vec<UFrameMetadata>>,
+        sent_payloads: Mutex<Vec<Vec<u8>>>,
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    struct InstrumentedTxBuffer {
+        metadata: UFrameMetadata,
+        payload: Vec<u8>,
+        counters: Arc<InstrumentedEgressCounters>,
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    impl UTxBuffer for InstrumentedTxBuffer {
+        fn metadata(&self) -> &UFrameMetadata {
+            &self.metadata
+        }
+
+        fn payload(&self) -> &[u8] {
+            &self.payload
+        }
+
+        fn payload_mut(&mut self) -> &mut [u8] {
+            *self
+                .counters
+                .payload_mut_calls
+                .lock()
+                .expect("payload_mut_calls lock poisoned") += 1;
+            self.payload.as_mut_slice()
+        }
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[derive(Default)]
+    struct InstrumentedZeroCopyTransport {
+        listeners: Mutex<Vec<RegisteredInstrumentedZeroCopyListener>>,
+        counters: Arc<InstrumentedEgressCounters>,
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[derive(Clone)]
+    struct RegisteredInstrumentedZeroCopyListener {
+        source_filter: UUri,
+        sink_filter: Option<UUri>,
+        listener: Arc<dyn UZeroCopyListener<InstrumentedRxLease>>,
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    impl RegisteredInstrumentedZeroCopyListener {
+        fn matches_frame(&self, frame: &InstrumentedRxLease) -> bool {
+            if !self
+                .source_filter
+                .matches(frame.metadata().attributes().source())
+            {
+                return false;
+            }
+            if let Some(sink_filter) = &self.sink_filter {
+                frame
+                    .metadata()
+                    .attributes()
+                    .sink()
+                    .is_some_and(|sink| sink_filter.matches(sink))
+            } else {
+                frame.metadata().attributes().sink().is_none()
+            }
+        }
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    impl InstrumentedZeroCopyTransport {
+        fn with_counters(counters: Arc<InstrumentedEgressCounters>) -> Self {
+            Self {
+                counters,
+                ..Default::default()
+            }
+        }
+
+        async fn inject(&self, frame: InstrumentedRxLease) {
+            let listeners = self
+                .listeners
+                .lock()
+                .expect("listeners lock poisoned")
+                .clone();
+            for registration in listeners {
+                if registration.matches_frame(&frame) {
+                    registration
+                        .listener
+                        .on_receive_zero_copy(frame.clone())
+                        .await;
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[async_trait]
+    impl UZeroCopyTransportImpl for InstrumentedZeroCopyTransport {
+        type Tx = InstrumentedTxBuffer;
+        type Rx = InstrumentedRxLease;
+
+        async fn loan_validated_tx(&self, spec: ValidatedTxLoanSpec) -> Result<Self::Tx, UStatus> {
+            self.counters
+                .loan_payload_lengths
+                .lock()
+                .expect("loan_payload_lengths lock poisoned")
+                .push(spec.payload_len());
+            self.counters
+                .loan_alignments
+                .lock()
+                .expect("loan_alignments lock poisoned")
+                .push(spec.payload_alignment());
+            self.counters
+                .loan_metadata
+                .lock()
+                .expect("loan_metadata lock poisoned")
+                .push(spec.metadata().clone());
+            Ok(InstrumentedTxBuffer {
+                metadata: spec.metadata().clone(),
+                payload: vec![0_u8; spec.payload_len()],
+                counters: self.counters.clone(),
+            })
+        }
+
+        async fn send_validated_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
+            *self
+                .counters
+                .send_commits
+                .lock()
+                .expect("send_commits lock poisoned") += 1;
+            self.counters
+                .sent_metadata
+                .lock()
+                .expect("sent_metadata lock poisoned")
+                .push(buffer.metadata);
+            self.counters
+                .sent_payloads
+                .lock()
+                .expect("sent_payloads lock poisoned")
+                .push(buffer.payload);
+            Ok(())
+        }
+
+        async fn register_validated_zero_copy_listener(
+            &self,
+            source_filter: &UUri,
+            sink_filter: Option<&UUri>,
+            listener: Arc<dyn UZeroCopyListener<Self::Rx>>,
+        ) -> Result<(), UStatus> {
+            self.listeners
+                .lock()
+                .expect("listeners lock poisoned")
+                .push(RegisteredInstrumentedZeroCopyListener {
+                    source_filter: source_filter.clone(),
+                    sink_filter: sink_filter.cloned(),
+                    listener,
+                });
+            Ok(())
+        }
+
+        async fn unregister_validated_zero_copy_listener(
+            &self,
+            _source_filter: &UUri,
+            _sink_filter: Option<&UUri>,
+            listener: Arc<dyn UZeroCopyListener<Self::Rx>>,
+        ) -> Result<(), UStatus> {
+            let mut listeners = self.listeners.lock().expect("listeners lock poisoned");
+            if let Some(index) = listeners
+                .iter()
+                .position(|existing| Arc::ptr_eq(&existing.listener, &listener))
+            {
+                listeners.remove(index);
+            }
+            Ok(())
+        }
+    }
+
     fn subscription_source() -> Arc<dyn USubscription> {
         Arc::new(StaticSubscriptions::default())
     }
@@ -1882,6 +2277,19 @@ mod tests {
         )
         .build_with_raw_payload("streamed")
         .expect("valid notification frame")
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    fn split_payload_segments(payload: &[u8]) -> Vec<Vec<u8>> {
+        if payload.is_empty() {
+            return Vec::new();
+        }
+        let split_at = payload.len().min(4);
+        let mut segments = vec![payload[..split_at].to_vec()];
+        if split_at < payload.len() {
+            segments.push(payload[split_at..].to_vec());
+        }
+        segments
     }
 
     fn point_to_point_source(authority: &str) -> UUri {
@@ -2535,9 +2943,9 @@ mod tests {
             .await
             .expect("zero-copy adapter to zero-copy adapter route should register");
 
-        let kinds: HashSet<_> = streamer
-            .route_diagnostics()
-            .into_iter()
+        let diagnostics = streamer.route_diagnostics();
+        let kinds: HashSet<_> = diagnostics
+            .iter()
             .map(|diagnostic| diagnostic.route_kind)
             .collect();
 
@@ -2545,6 +2953,19 @@ mod tests {
         assert!(kinds.contains(&RouteKind::OwnedToZeroCopyAdapter));
         assert!(kinds.contains(&RouteKind::ZeroCopyAdapterToOwned));
         assert!(kinds.contains(&RouteKind::ZeroCopyAdapterToZeroCopyAdapter));
+        for diagnostic in diagnostics {
+            assert_eq!(diagnostic.queue_policy, RouteQueuePolicy::Backpressure);
+            let expected = match diagnostic.route_kind {
+                RouteKind::OwnedToOwned => RouteCopySemantics::OwnedNoStreamerCopyClaim,
+                RouteKind::OwnedToZeroCopyAdapter
+                | RouteKind::ZeroCopyAdapterToOwned
+                | RouteKind::ZeroCopyAdapterToZeroCopyAdapter => {
+                    RouteCopySemantics::CopyingAdapterBoundary
+                }
+                RouteKind::CopyMinimizedZeroCopyToZeroCopy => unreachable!(),
+            };
+            assert_eq!(diagnostic.copy_semantics, expected);
+        }
     }
 
     #[cfg(feature = "experimental-loaned-frame")]
@@ -2585,6 +3006,11 @@ mod tests {
             diagnostics[0].route_kind,
             RouteKind::CopyMinimizedZeroCopyToZeroCopy
         );
+        assert_eq!(
+            diagnostics[0].copy_semantics,
+            RouteCopySemantics::CopyMinimizedLeaseToLoanOneCopy
+        );
+        assert_eq!(diagnostics[0].queue_policy, RouteQueuePolicy::Backpressure);
         assert_eq!(diagnostics[0].ingress_mode, crate::TransportMode::ZeroCopy);
         assert_eq!(diagnostics[0].egress_mode, crate::TransportMode::ZeroCopy);
 
@@ -2607,6 +3033,135 @@ mod tests {
             .await;
         yield_to_forwarder().await;
         assert_eq!(egress.sent().len(), 1);
+    }
+
+    #[cfg(feature = "experimental-loaned-frame")]
+    #[tokio::test]
+    async fn copy_minimized_route_uses_ordered_slices_without_owned_materialization() {
+        let rx_counters = Arc::new(InstrumentedRxCounters::default());
+        let egress_counters = Arc::new(InstrumentedEgressCounters::default());
+        let ingress = Arc::new(InstrumentedZeroCopyTransport::default());
+        let egress = Arc::new(InstrumentedZeroCopyTransport::with_counters(
+            egress_counters.clone(),
+        ));
+        let in_ep = ZeroCopyFrameEndpoint::new("instrumented-in", "authority-a", ingress.clone());
+        let out_ep = ZeroCopyFrameEndpoint::new("instrumented-out", "authority-b", egress);
+        let mut streamer = UStreamer::new("test", 8, subscription_source())
+            .await
+            .expect("streamer should build");
+
+        streamer
+            .add_copy_minimized_route_ref_with_options(
+                &in_ep,
+                &out_ep,
+                CopyMinimizedRouteOptions {
+                    alignment: 4,
+                    queue_policy: RouteQueuePolicy::Backpressure,
+                },
+            )
+            .await
+            .expect("copy-minimized route should register");
+
+        let frame = point_to_point_frame("authority-a", "authority-b");
+        let expected_metadata = frame.metadata().clone();
+        let expected_payload = frame.payload_bytes().to_vec();
+        let expected_segments = split_payload_segments(frame.payload_bytes());
+        ingress
+            .inject(InstrumentedRxLease::new(frame, rx_counters.clone()))
+            .await;
+        yield_to_forwarder().await;
+
+        assert_eq!(
+            *rx_counters
+                .payload_slices_calls
+                .lock()
+                .expect("payload_slices_calls lock poisoned"),
+            1
+        );
+        assert_eq!(
+            *rx_counters
+                .payload_reader_calls
+                .lock()
+                .expect("payload_reader_calls lock poisoned"),
+            0
+        );
+        assert_eq!(
+            *rx_counters
+                .contiguous_payload_calls
+                .lock()
+                .expect("contiguous_payload_calls lock poisoned"),
+            0
+        );
+        assert_eq!(
+            rx_counters
+                .yielded_slices
+                .lock()
+                .expect("yielded_slices lock poisoned")
+                .clone(),
+            expected_segments
+        );
+        assert!(
+            *rx_counters
+                .drop_count
+                .lock()
+                .expect("drop_count lock poisoned")
+                > 0
+        );
+
+        assert_eq!(
+            egress_counters
+                .loan_payload_lengths
+                .lock()
+                .expect("loan_payload_lengths lock poisoned")
+                .clone(),
+            vec![expected_payload.len()]
+        );
+        assert_eq!(
+            egress_counters
+                .loan_alignments
+                .lock()
+                .expect("loan_alignments lock poisoned")
+                .clone(),
+            vec![4]
+        );
+        assert_eq!(
+            *egress_counters
+                .payload_mut_calls
+                .lock()
+                .expect("payload_mut_calls lock poisoned"),
+            1
+        );
+        assert_eq!(
+            *egress_counters
+                .send_commits
+                .lock()
+                .expect("send_commits lock poisoned"),
+            1
+        );
+        assert_eq!(
+            egress_counters
+                .sent_metadata
+                .lock()
+                .expect("sent_metadata lock poisoned")
+                .clone(),
+            vec![expected_metadata.clone()]
+        );
+        assert_eq!(
+            egress_counters
+                .loan_metadata
+                .lock()
+                .expect("loan_metadata lock poisoned")
+                .clone(),
+            vec![expected_metadata]
+        );
+        assert_eq!(
+            egress_counters
+                .sent_payloads
+                .lock()
+                .expect("sent_payloads lock poisoned")
+                .clone(),
+            vec![expected_payload]
+        );
     }
 
     #[cfg(feature = "experimental-loaned-frame")]

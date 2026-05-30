@@ -219,6 +219,9 @@ fn lola_transport(authority: &str) -> Arc<UTransportLola> {
         sample_size: 65_536,
         sample_alignment: 8,
         max_samples: 4,
+        pull_mismatch_queue_capacity: LolaTransportConfig::DEFAULT_PULL_MISMATCH_QUEUE_CAPACITY,
+        pull_mismatch_queue_full_policy:
+            LolaTransportConfig::DEFAULT_PULL_MISMATCH_QUEUE_FULL_POLICY,
         mw_com_config_path: Some(mw_com_config_path.to_string()),
     })
     .expect("LoLa transport should build")

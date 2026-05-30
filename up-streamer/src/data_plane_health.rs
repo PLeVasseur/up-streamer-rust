@@ -45,6 +45,17 @@ pub enum RouteKind {
     CopyMinimizedZeroCopyToZeroCopy,
 }
 
+/// Public description of the copy semantics for a streamer route.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum RouteCopySemantics {
+    /// The streamer routes owned frames and makes no zero-copy claim for this route.
+    OwnedNoStreamerCopyClaim,
+    /// The route crosses an owned-frame adapter that copies at a zero-copy endpoint boundary.
+    CopyingAdapterBoundary,
+    /// The route copies an ingress receive lease payload directly into an egress transmit loan.
+    CopyMinimizedLeaseToLoanOneCopy,
+}
+
 /// Public route diagnostic snapshot.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RouteDiagnostic {
@@ -56,6 +67,10 @@ pub struct RouteDiagnostic {
     pub egress_mode: TransportMode,
     /// Route forwarding classification.
     pub route_kind: RouteKind,
+    /// Explicit copy semantics for this route.
+    pub copy_semantics: RouteCopySemantics,
+    /// Ingress queue behavior configured for this route.
+    pub queue_policy: RouteQueuePolicy,
 }
 
 /// Behavior when an ingress listener receives a frame while the route queue is full.
