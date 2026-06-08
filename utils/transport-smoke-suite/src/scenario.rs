@@ -278,6 +278,7 @@ struct ZeroCopyEnvironmentArtifact {
     mqtt_broker_required: bool,
     docker_compose_required: bool,
     lola_bundled_required: bool,
+    lola_bridge_lib_dir: Option<String>,
     bazel: Option<String>,
 }
 
@@ -1474,6 +1475,7 @@ async fn run_zero_copy_scenario(
     let claims_source_path: Option<PathBuf> = None;
     let mut streamer_process: Option<ManagedProcess> = None;
     let mut mqtt_broker_started = false;
+    let mut lola_bridge_lib_dir: Option<PathBuf> = None;
 
     let preflight_result = execute_phase("Preflight", &mut phase_timings, || async {
         ensure_remaining_timeout(scenario_deadline, "Preflight")?;
@@ -1514,6 +1516,16 @@ async fn run_zero_copy_scenario(
             assert_command_success(outcome, template.build_command)?;
         }
 
+        if template.requires_lola_bundled {
+            match env::detect_lola_bridge_lib_dir(&repo_root) {
+                Ok(lib_dir) => lola_bridge_lib_dir = Some(lib_dir),
+                Err(error) => {
+                    blocked_reason = Some(error.to_string());
+                    return Err(error);
+                }
+            }
+        }
+
         Ok(())
     })
     .await;
@@ -1536,7 +1548,14 @@ async fn run_zero_copy_scenario(
             mqtt_broker_started = true;
 
             streamer_process = Some(
-                spawn_zero_copy_streamer(&repo_root, &artifact_dir, template, &cli_args).await?,
+                spawn_zero_copy_streamer(
+                    &repo_root,
+                    &artifact_dir,
+                    template,
+                    &cli_args,
+                    lola_bridge_lib_dir.as_ref(),
+                )
+                .await?,
             );
 
             Ok(())
@@ -1693,6 +1712,7 @@ async fn run_zero_copy_scenario(
         classification,
         failure_reason.clone(),
         &streamer_process,
+        lola_bridge_lib_dir.as_ref(),
     )?;
 
     let no_process: Option<ManagedProcess> = None;
@@ -1875,7 +1895,25 @@ async fn spawn_zero_copy_streamer(
     artifact_dir: &Path,
     template: &ZeroCopyScenarioTemplate,
     cli_args: &ScenarioCliArgs,
+    lola_bridge_lib_dir: Option<&PathBuf>,
 ) -> Result<ManagedProcess> {
+    let mut env_pairs = ZERO_COPY_STREAMER_ENV
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect::<Vec<_>>();
+    if template.requires_lola_bundled {
+        let lib_dir = lola_bridge_lib_dir.ok_or_else(|| {
+            anyhow!("LoLa bundled row requires libup_lola_bridge.so but no library directory was resolved")
+        })?;
+        let existing_ld_library_path = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        let merged_ld_library_path = if existing_ld_library_path.is_empty() {
+            lib_dir.display().to_string()
+        } else {
+            format!("{}:{existing_ld_library_path}", lib_dir.display())
+        };
+        env_pairs.push(("LD_LIBRARY_PATH".to_string(), merged_ld_library_path));
+    }
+
     let process_spec = ProcessSpec {
         name: "streamer".to_string(),
         workdir: repo_root.join("configurable-streamer"),
@@ -1884,10 +1922,7 @@ async fn spawn_zero_copy_streamer(
             .join("debug")
             .join("configurable-streamer"),
         args: vec!["--config".to_string(), template.config_file.to_string()],
-        env: ZERO_COPY_STREAMER_ENV
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_string()))
-            .collect(),
+        env: env_pairs,
         log_file_name: "streamer.log".to_string(),
     };
 
@@ -1950,6 +1985,7 @@ fn write_zero_copy_matrix_row_artifact(
     classification: ScenarioClassification,
     failure_reason: Option<String>,
     streamer_process: &Option<ManagedProcess>,
+    lola_bridge_lib_dir: Option<&PathBuf>,
 ) -> Result<PathBuf> {
     let artifact_path = artifact_dir.join("zero-copy-matrix-row.json");
     let row = ZeroCopyMatrixRowArtifact {
@@ -2008,6 +2044,7 @@ fn write_zero_copy_matrix_row_artifact(
             mqtt_broker_required: true,
             docker_compose_required: true,
             lola_bundled_required: template.requires_lola_bundled,
+            lola_bridge_lib_dir: lola_bridge_lib_dir.map(|path| path.display().to_string()),
             bazel: template
                 .requires_lola_bundled
                 .then(|| std::env::var("BAZEL").unwrap_or_else(|_| DEFAULT_BAZEL_PATH.to_string())),
