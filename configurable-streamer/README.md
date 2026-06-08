@@ -1,7 +1,7 @@
 # configurable-streamer
 
 This is a standalone implementation of a uStreamer.
-It is implemented to dynamically link between any number of uEntities that use a mix of either Zenoh or MQTT5.
+It is implemented to dynamically link between any number of uEntities that use Zenoh, MQTT5, or the optional zero-copy transports.
 
 ## Supported Setups
 
@@ -52,6 +52,33 @@ The 'static_subscriptions.json' is only needed when you set up a publish-subscri
 Make sure that the UURI of each pub-sub entity is present at least as a key in this json file!
 
 The 'vsomeip-config/point_to_point.json' is a configuration file only needed for SOME/IP implementations. The list of "services" must include the UEntity IDs of all entities running on the host-protocol (in the reference implementations that means all components running with the Zenoh transport)! The term service in this context comes from SOME/IP and should not be confused with UService entity.
+
+## Zero-Copy Example Configurations
+
+The configurable streamer can expose copy-minimized routes when it is built with `experimental-copy-minimized-routing` and the matching zero-copy transport features. The example files use the current grouped transport schema under `transports`:
+
+- `CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5` routes between Zenoh shared memory and iceoryx2.
+- `CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5` routes between Zenoh shared memory and LoLa using `MW_COM_CONFIG_LOLA.json`.
+- `CONFIG_ZEROCOPY_EXAMPLE.json5` includes Zenoh shared memory, iceoryx2, and LoLa with pairwise copy-minimized forwarding.
+- `MW_COM_CONFIG_LOLA.json` is the LoLa MW COM service/event fixture used by the LoLa examples.
+
+Each copy-minimized endpoint sets `routing_mode: "copy_minimized"`. MQTT endpoints cannot use copy-minimized routing; these examples keep the required MQTT transport section with an empty endpoint list.
+
+Run the examples from the `configurable-streamer` directory so the relative config file paths resolve:
+
+```bash
+cargo run -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy -- --config="CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5"
+```
+
+```bash
+cargo run -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,lola-transport -- --config="CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5"
+```
+
+```bash
+cargo run -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy,lola-transport -- --config="CONFIG_ZEROCOPY_EXAMPLE.json5"
+```
+
+The LoLa feature uses the default bundled native bridge build. If your environment does not provide `bazel`, set `BAZEL` to a Bazel or Bazelisk binary before building. The current binary still initializes MQTT at startup, so keep the MQTT broker prerequisite from the basic examples even when the zero-copy fixture has no MQTT endpoints.
 
 ## Running the Streamer in an example service mesh
 
