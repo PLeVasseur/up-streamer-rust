@@ -905,6 +905,8 @@ dependencies = [
  "tracing-subscriber",
  "up-rust",
  "up-streamer",
+ "up-transport-iceoryx2-rust",
+ "up-transport-lola-rust",
  "up-transport-mqtt5",
  "up-transport-zenoh",
  "usubscription-static-file",
@@ -5781,6 +5783,17 @@ dependencies = [
  "hostname",
  "iceoryx2",
  "iceoryx2-bb-container",
+ "protobuf",
+ "tokio",
+ "up-rust",
+]
+
+[[package]]
+name = "up-transport-lola-rust"
+version = "0.1.0"
+source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=a9ecde55c1ae697c385d6bb63941e859c3161fd1#a9ecde55c1ae697c385d6bb63941e859c3161fd1"
+dependencies = [
+ "async-trait",
  "protobuf",
  "tokio",
  "up-rust",

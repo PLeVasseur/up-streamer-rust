@@ -19,6 +19,19 @@ edition.workspace = true
 keywords.workspace = true
 license.workspace = true
 
+[features]
+default = []
+experimental-copy-minimized-routing = ["up-streamer/experimental-copy-minimized-routing"]
+zenoh-zero-copy = ["up-transport-zenoh/zero-copy"]
+iceoryx2-zero-copy = [
+    "dep:up-transport-iceoryx2-rust",
+    "up-transport-iceoryx2-rust/zero-copy",
+]
+lola-transport = [
+    "dep:up-transport-lola-rust",
+    "up-transport-lola-rust/zero-copy",
+]
+
 [dependencies]
 async-trait = { workspace = true }
 clap = { workspace = true }
@@ -30,6 +43,8 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
 up-streamer = { path = "../up-streamer" }
+up-transport-iceoryx2-rust = { workspace = true, optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "a9ecde55c1ae697c385d6bb63941e859c3161fd1", optional = true }
 up-transport-zenoh = { workspace = true }
 up-transport-mqtt5 = { workspace = true }
 zenoh = { workspace = true }

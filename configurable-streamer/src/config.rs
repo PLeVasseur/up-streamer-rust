@@ -57,6 +57,10 @@ pub enum SubscriptionProviderMode {
 pub struct Transports {
     pub(crate) zenoh: ZenohTransport,
     pub(crate) mqtt: MqttTransport,
+    #[serde(default)]
+    pub(crate) iceoryx2: Option<Iceoryx2Transport>,
+    #[serde(default)]
+    pub(crate) lola: Option<LolaTransport>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -77,10 +81,49 @@ pub struct MqttTransport {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
+pub struct Iceoryx2Transport {
+    pub(crate) endpoints: Vec<EndpointConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct LolaTransport {
+    pub(crate) endpoints: Vec<EndpointConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingMode {
+    #[default]
+    Owned,
+    CopyMinimized,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct EndpointConfig {
     pub(crate) authority: String,
     pub(crate) endpoint: String,
+    #[serde(default)]
     pub(crate) forwarding: Vec<String>,
+    #[serde(default)]
+    pub(crate) routing_mode: RoutingMode,
+    #[serde(default)]
+    pub(crate) copy_minimized_payload_alignment: Option<usize>,
+    #[serde(default)]
+    pub(crate) lola_instance_specifier: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_service_type: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_event_name: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_sample_size: Option<usize>,
+    #[serde(default)]
+    pub(crate) lola_sample_alignment: Option<usize>,
+    #[serde(default)]
+    pub(crate) lola_max_samples: Option<usize>,
+    #[serde(default)]
+    pub(crate) lola_mw_com_config_file: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
