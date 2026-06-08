@@ -184,6 +184,9 @@ pub use endpoint::{OwnedFrameEndpoint, TransportMode};
 mod subscription_sync_health;
 pub use subscription_sync_health::SubscriptionSyncHealth;
 
+mod route_diagnostics;
+pub use route_diagnostics::{DataPlaneRoute, RouteCopySemantics, RouteDiagnostic, RouteKind};
+
 #[doc(hidden)]
 pub mod observability;
 mod routing;

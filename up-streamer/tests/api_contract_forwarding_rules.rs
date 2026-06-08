@@ -14,7 +14,7 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
-use up_streamer::{Endpoint, UStreamer};
+use up_streamer::{Endpoint, RouteCopySemantics, RouteKind, UStreamer};
 use usubscription_static_file::USubscriptionStaticFile;
 
 struct NoopTransport;
@@ -82,6 +82,22 @@ async fn add_delete_route_contract_duplicate_and_missing_rules() {
             .await,
         Ok(())
     );
+
+    let diagnostics = streamer.route_diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].route.ingress_name, "local");
+    assert_eq!(diagnostics[0].route.ingress_authority, "local-authority");
+    assert_eq!(diagnostics[0].route.egress_name, "remote");
+    assert_eq!(diagnostics[0].route.egress_authority, "remote-authority");
+    assert_eq!(
+        diagnostics[0].route_kind,
+        RouteKind::UTransportCompatibility
+    );
+    assert_eq!(
+        diagnostics[0].copy_semantics,
+        RouteCopySemantics::OwnedOrMessageCopying
+    );
+
     assert_eq!(
         streamer
             .add_route(local_endpoint.clone(), remote_endpoint.clone())
@@ -98,6 +114,8 @@ async fn add_delete_route_contract_duplicate_and_missing_rules() {
             .await,
         Ok(())
     );
+    assert!(streamer.route_diagnostics().is_empty());
+
     assert_eq!(
         streamer.delete_route(local_endpoint, remote_endpoint).await,
         Err(UStatus::fail_with_code(UCode::NotFound, "not found"))

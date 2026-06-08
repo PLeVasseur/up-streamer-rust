@@ -12,7 +12,7 @@
  ********************************************************************************/
 
 use crate::control_plane::route_lifecycle::{AddRouteError, RemoveRouteError, RouteLifecycle};
-use crate::control_plane::route_table::RouteTable;
+use crate::control_plane::route_table::{RouteKey, RouteTable};
 use crate::data_plane::egress_pool::EgressRoutePool;
 use crate::data_plane::ingress_registry::IngressRouteRegistry;
 use crate::endpoint::Endpoint;
@@ -25,7 +25,7 @@ use crate::routing::authority_filter::authority_to_wildcard_filter;
 use crate::routing::publish_resolution::PublishRouteResolver;
 use crate::routing::subscription_directory::SubscriptionDirectory;
 use crate::subscription_sync_health::SubscriptionSyncHealth;
-#[cfg(feature = "owned-frame-transport")]
+use crate::RouteDiagnostic;
 use std::collections::HashMap;
 use std::sync::Arc;
 #[cfg(feature = "owned-frame-transport")]
@@ -72,6 +72,7 @@ struct OwnedRouteBinding {
     listener: Arc<OwnedIngressForwarder>,
     registered_filters: Vec<OwnedListenerFilter>,
     dispatch_task: tokio::task::JoinHandle<()>,
+    diagnostic: RouteDiagnostic,
 }
 
 #[cfg(feature = "owned-frame-transport")]
@@ -98,6 +99,7 @@ pub struct UStreamer {
     #[cfg(feature = "owned-frame-transport")]
     message_queue_size: usize,
     route_table: RouteTable,
+    route_diagnostics: HashMap<RouteKey, RouteDiagnostic>,
     egress_route_pool: EgressRoutePool,
     ingress_route_registry: IngressRouteRegistry,
     subscription_directory: SubscriptionDirectory,
@@ -133,6 +135,7 @@ impl UStreamer {
             #[cfg(feature = "owned-frame-transport")]
             message_queue_size,
             route_table: RouteTable::new(),
+            route_diagnostics: HashMap::new(),
             egress_route_pool: EgressRoutePool::new(route_queue_size),
             ingress_route_registry: IngressRouteRegistry::new(),
             subscription_directory: SubscriptionDirectory::empty(),
@@ -197,6 +200,22 @@ impl UStreamer {
 
     pub fn subscription_sync_health(&self) -> SubscriptionSyncHealth {
         self.subscription_sync_health.clone()
+    }
+
+    /// Returns diagnostics for currently installed routes.
+    pub fn route_diagnostics(&self) -> Vec<RouteDiagnostic> {
+        let mut diagnostics: Vec<RouteDiagnostic> =
+            self.route_diagnostics.values().cloned().collect();
+
+        #[cfg(feature = "owned-frame-transport")]
+        diagnostics.extend(
+            self.owned_routes
+                .values()
+                .map(|binding| binding.diagnostic.clone()),
+        );
+
+        diagnostics.sort_by(|left, right| left.route.sort_key().cmp(&right.route.sort_key()));
+        diagnostics
     }
 
     #[inline(always)]
@@ -268,12 +287,15 @@ impl UStreamer {
             &self.ingress_route_registry,
             &self.subscription_directory,
         );
+        let route_key = RouteKey::from_endpoints(in_ep, out_ep);
+        let diagnostic = RouteDiagnostic::utransport_compatibility(in_ep, out_ep);
 
         match lifecycle
             .add_route(&mut self.egress_route_pool, in_ep, out_ep, &route_label)
             .await
         {
             Ok(()) => {
+                self.route_diagnostics.insert(route_key, diagnostic);
                 debug!(
                     event = events::ROUTE_ADD_OK,
                     component = COMPONENT,
@@ -355,12 +377,14 @@ impl UStreamer {
             &self.ingress_route_registry,
             &self.subscription_directory,
         );
+        let route_key = RouteKey::from_endpoints(in_ep, out_ep);
 
         match lifecycle
             .remove_route(&mut self.egress_route_pool, in_ep, out_ep, &route_label)
             .await
         {
             Ok(()) => {
+                self.route_diagnostics.remove(&route_key);
                 debug!(
                     event = events::ROUTE_DELETE_OK,
                     component = COMPONENT,
@@ -520,6 +544,7 @@ impl UStreamer {
         let (tx, rx) = mpsc::channel::<UOwnedFrame>(self.message_queue_size);
         let listener = Arc::new(OwnedIngressForwarder { tx: tx.clone() });
         let mut registered_filters = Vec::with_capacity(filters.len());
+        let diagnostic = RouteDiagnostic::owned_frame_compatibility(ingress, egress);
 
         for (source_filter, sink_filter) in filters {
             if let Err(error) = ingress
@@ -544,6 +569,7 @@ impl UStreamer {
                 listener,
                 registered_filters,
                 dispatch_task,
+                diagnostic,
             },
         );
 

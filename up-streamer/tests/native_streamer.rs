@@ -12,7 +12,7 @@ use up_rust::{
     try_project_umessage_to_frame_metadata, UCode, UMessageBuilder, UOwnedFrame, UOwnedListener,
     UOwnedTransportImpl, UPayloadFormat, UStatus, UUri, ValidatedOwnedFrame,
 };
-use up_streamer::{OwnedFrameEndpoint, UStreamer};
+use up_streamer::{OwnedFrameEndpoint, RouteCopySemantics, RouteKind, UStreamer};
 
 #[derive(Default)]
 struct EmptySubscription;
@@ -168,6 +168,21 @@ async fn owned_route_forwards_standard_payload_as_owned_frame() {
         .await
         .expect("owned route add");
 
+    let diagnostics = streamer.route_diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].route.ingress_name, "ingress");
+    assert_eq!(diagnostics[0].route.ingress_authority, "authority-a");
+    assert_eq!(diagnostics[0].route.egress_name, "egress");
+    assert_eq!(diagnostics[0].route.egress_authority, "authority-b");
+    assert_eq!(
+        diagnostics[0].route_kind,
+        RouteKind::OwnedFrameCompatibility
+    );
+    assert_eq!(
+        diagnostics[0].copy_semantics,
+        RouteCopySemantics::OwnedOrMessageCopying
+    );
+
     let frame = owned_payload_frame();
     ingress
         .first_listener()
@@ -200,4 +215,5 @@ async fn delete_owned_route_unregisters_owned_listener() {
         .expect("owned route delete");
 
     assert_eq!(ingress.unregister_count.load(Ordering::Relaxed), 1);
+    assert!(streamer.route_diagnostics().is_empty());
 }
