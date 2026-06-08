@@ -50,7 +50,7 @@ fn register_transport_endpoints(
             .is_some()
         {
             return Err(UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
+                UCode::InvalidArgument,
                 format!(
                     "Duplicate endpoint name found: {}",
                     endpoint_config.endpoint
@@ -71,7 +71,7 @@ async fn wire_forwarding_rules(
         for forwarding_target in &endpoint_config.forwarding {
             let left_endpoint = endpoints.get(&endpoint_config.endpoint).ok_or_else(|| {
                 UStatus::fail_with_code(
-                    UCode::INVALID_ARGUMENT,
+                    UCode::InvalidArgument,
                     format!(
                         "Unknown endpoint in forwarding rules: {}",
                         endpoint_config.endpoint
@@ -80,7 +80,7 @@ async fn wire_forwarding_rules(
             })?;
             let right_endpoint = endpoints.get(forwarding_target).ok_or_else(|| {
                 UStatus::fail_with_code(
-                    UCode::INVALID_ARGUMENT,
+                    UCode::InvalidArgument,
                     format!("Unknown forwarding target endpoint: {forwarding_target}"),
                 )
             })?;
@@ -97,7 +97,7 @@ async fn wire_forwarding_rules(
 async fn wait_for_shutdown_signal() -> Result<(), UStatus> {
     tokio::signal::ctrl_c().await.map_err(|error| {
         UStatus::fail_with_code(
-            UCode::INTERNAL,
+            UCode::Internal,
             format!("Unable to wait for shutdown signal: {error:?}"),
         )
     })
@@ -112,24 +112,24 @@ async fn main() -> Result<(), UStatus> {
     // Get the config file.
     let args = StreamerArgs::parse();
     let mut file = File::open(args.config)
-        .map_err(|e| UStatus::fail_with_code(UCode::NOT_FOUND, format!("File not found: {e:?}")))?;
+        .map_err(|e| UStatus::fail_with_code(UCode::NotFound, format!("File not found: {e:?}")))?;
     let mut contents = String::new();
     file.read_to_string(&mut contents).map_err(|e| {
         UStatus::fail_with_code(
-            UCode::INTERNAL,
+            UCode::Internal,
             format!("Unable to read config file: {e:?}"),
         )
     })?;
 
     let mut config: Config = json5::from_str(&contents).map_err(|e| {
         UStatus::fail_with_code(
-            UCode::INTERNAL,
+            UCode::Internal,
             format!("Unable to parse config file: {e:?}"),
         )
     })?;
     config.transports.mqtt.load_mqtt_details().map_err(|e| {
         UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
+            UCode::InvalidArgument,
             format!("Unable to load MQTT transport details: {e:?}"),
         )
     })?;
@@ -140,7 +140,7 @@ async fn main() -> Result<(), UStatus> {
         )),
         SubscriptionProviderMode::LiveUsubscription => {
             return Err(UStatus::fail_with_code(
-                    UCode::UNIMPLEMENTED,
+                    UCode::Unimplemented,
                     "live_usubscription mode is reserved in this phase; live runtime integration is deferred (see reports/usubscription-decoupled-pubsub-migration/05-live-integration-deferred.md)",
                 ));
         }
@@ -160,7 +160,7 @@ async fn main() -> Result<(), UStatus> {
     let zenoh_config =
         ZenohConfig::from_file(config.transports.zenoh.config_file).map_err(|e| {
             UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
+                UCode::InvalidArgument,
                 format!("Unable to load Zenoh config file: {e:?}"),
             )
         })?;
@@ -168,7 +168,7 @@ async fn main() -> Result<(), UStatus> {
         UPTransportZenoh::builder(config.streamer_uuri.authority.clone())
             .map_err(|e| {
                 UStatus::fail_with_code(
-                    UCode::INTERNAL,
+                    UCode::Internal,
                     format!("Unable to create Zenoh transport builder: {e:?}"),
                 )
             })?
@@ -177,7 +177,7 @@ async fn main() -> Result<(), UStatus> {
             .await
             .map_err(|e| {
                 UStatus::fail_with_code(
-                    UCode::INTERNAL,
+                    UCode::Internal,
                     format!("Unable to initialize Zenoh UTransport: {e:?}"),
                 )
             })?,
@@ -186,7 +186,7 @@ async fn main() -> Result<(), UStatus> {
     // build the mqtt5 transport
     let mqtt_details = config.transports.mqtt.mqtt_details.clone().ok_or_else(|| {
         UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
+            UCode::InvalidArgument,
             "MQTT transport details are missing after load_mqtt_details",
         )
     })?;

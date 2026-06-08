@@ -42,13 +42,13 @@ fn resolve_someip_config_file_path(config_file: &Path) -> Result<PathBuf, UStatu
 
     let executable_path = env::current_exe().map_err(|error| {
         UStatus::fail_with_code(
-            UCode::INTERNAL,
+            UCode::Internal,
             format!("Unable to determine current executable path: {error:?}"),
         )
     })?;
     let executable_dir = executable_path.parent().ok_or_else(|| {
         UStatus::fail_with_code(
-            UCode::INTERNAL,
+            UCode::Internal,
             format!("Current executable has no parent directory: {executable_path:?}"),
         )
     })?;
@@ -59,7 +59,7 @@ fn resolve_someip_config_file_path(config_file: &Path) -> Result<PathBuf, UStatu
 async fn wait_for_shutdown_signal() -> Result<(), UStatus> {
     tokio::signal::ctrl_c().await.map_err(|error| {
         UStatus::fail_with_code(
-            UCode::INTERNAL,
+            UCode::Internal,
             format!("Unable to wait for shutdown signal: {error:?}"),
         )
     })
@@ -72,18 +72,18 @@ async fn main() -> Result<(), UStatus> {
     let args = StreamerArgs::parse();
 
     let mut file = File::open(args.config)
-        .map_err(|e| UStatus::fail_with_code(UCode::NOT_FOUND, format!("File not found: {e:?}")))?;
+        .map_err(|e| UStatus::fail_with_code(UCode::NotFound, format!("File not found: {e:?}")))?;
     let mut contents = String::new();
     file.read_to_string(&mut contents).map_err(|e| {
         UStatus::fail_with_code(
-            UCode::INTERNAL,
+            UCode::Internal,
             format!("Unable to read config file: {e:?}"),
         )
     })?;
 
     let config: Config = json5::from_str(&contents).map_err(|e| {
         UStatus::fail_with_code(
-            UCode::INTERNAL,
+            UCode::Internal,
             format!("Unable to parse config file: {e:?}"),
         )
     })?;
@@ -94,7 +94,7 @@ async fn main() -> Result<(), UStatus> {
         )),
         SubscriptionProviderMode::LiveUsubscription => {
             return Err(UStatus::fail_with_code(
-                    UCode::UNIMPLEMENTED,
+                    UCode::Unimplemented,
                     "live_usubscription mode is reserved in this phase; live runtime integration is deferred (see reports/usubscription-decoupled-pubsub-migration/05-live-integration-deferred.md)",
                 ));
         }
@@ -116,7 +116,7 @@ async fn main() -> Result<(), UStatus> {
     )
     .map_err(|error| {
         UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
+            UCode::InvalidArgument,
             format!("Unable to form streamer_uuri: {error:?}"),
         )
     })?;
@@ -126,7 +126,7 @@ async fn main() -> Result<(), UStatus> {
     let zenoh_config =
         ZenohConfig::from_file(config.zenoh_transport_config.config_file).map_err(|error| {
             UStatus::fail_with_code(
-                UCode::INVALID_ARGUMENT,
+                UCode::InvalidArgument,
                 format!("Unable to load Zenoh config file: {error:?}"),
             )
         })?;
@@ -135,7 +135,7 @@ async fn main() -> Result<(), UStatus> {
         UPTransportZenoh::builder(config.streamer_uuri.authority.clone())
             .map_err(|error| {
                 UStatus::fail_with_code(
-                    UCode::INTERNAL,
+                    UCode::Internal,
                     format!("Unable to create Zenoh transport builder: {error:?}"),
                 )
             })?
@@ -144,7 +144,7 @@ async fn main() -> Result<(), UStatus> {
             .await
             .map_err(|error| {
                 UStatus::fail_with_code(
-                    UCode::INTERNAL,
+                    UCode::Internal,
                     format!("Unable to initialize Zenoh UTransport: {error:?}"),
                 )
             })?,
@@ -162,7 +162,7 @@ async fn main() -> Result<(), UStatus> {
     trace!("someip_config_file_abs_path: {someip_config_file_abs_path:?}");
     if !someip_config_file_abs_path.exists() {
         return Err(UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
+            UCode::InvalidArgument,
             format!(
                 "The specified someip config_file doesn't exist: {someip_config_file_abs_path:?}"
             ),
@@ -179,7 +179,7 @@ async fn main() -> Result<(), UStatus> {
     )
     .map_err(|error| {
         UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
+            UCode::InvalidArgument,
             format!("Unable to make host_uuri: {error:?}"),
         )
     })?;
@@ -194,7 +194,7 @@ async fn main() -> Result<(), UStatus> {
         )
         .map_err(|error| {
             UStatus::fail_with_code(
-                UCode::INTERNAL,
+                UCode::Internal,
                 format!("Unable to initialize vsomeip UTransport: {error:?}"),
             )
         })?,

@@ -47,7 +47,7 @@ pub(crate) fn parse_u8_flag(flag: &str, raw: &str) -> Result<u8, String> {
 }
 
 pub(crate) fn invalid_argument_status(message: impl Into<String>) -> UStatus {
-    UStatus::fail_with_code(UCode::INVALID_ARGUMENT, message.into())
+    UStatus::fail_with_code(UCode::InvalidArgument, message.into())
 }
 
 pub(crate) fn parse_u32_status(flag: &str, raw: &str) -> Result<u32, UStatus> {

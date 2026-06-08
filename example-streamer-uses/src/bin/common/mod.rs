@@ -18,7 +18,7 @@ impl UListener for ServiceResponseListener {
     async fn on_receive(&self, msg: UMessage) {
         info!("ServiceResponseListener: Received a message: {msg:?}");
 
-        let Some(payload_bytes) = msg.payload else {
+        let Some(payload_bytes) = msg.payload() else {
             panic!("No payload bytes");
         };
 
@@ -46,7 +46,7 @@ impl UListener for ServiceRequestResponder {
     async fn on_receive(&self, msg: UMessage) {
         info!("ServiceResponseListener: Received a message: {msg:?}");
 
-        let Some(payload_bytes) = msg.payload.as_ref() else {
+        let Some(payload_bytes) = msg.payload() else {
             panic!("No bytes available");
         };
         let hello_request = match HelloRequest::parse_from_bytes(payload_bytes) {
@@ -65,10 +65,7 @@ impl UListener for ServiceRequestResponder {
             ..Default::default()
         };
 
-        let Some(attributes) = msg.attributes() else {
-            error!("Unable to build response: request message has no attributes");
-            return;
-        };
+        let attributes = msg.attributes();
 
         let response_msg = UMessageBuilder::response_for_request(attributes)
             .build_with_protobuf_payload(&hello_response)
@@ -86,7 +83,7 @@ impl UListener for PublishReceiver {
     async fn on_receive(&self, msg: UMessage) {
         info!("PublishReceiver: Received a message: {msg:?}");
 
-        let Some(payload_bytes) = msg.payload else {
+        let Some(payload_bytes) = msg.payload() else {
             panic!("No bytes available");
         };
         match Timer::parse_from_bytes(&payload_bytes) {
