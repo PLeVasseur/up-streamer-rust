@@ -21,7 +21,8 @@ use transport_smoke_suite::claims::{claims_override_kind, ClaimsPathKind};
 use transport_smoke_suite::env;
 use transport_smoke_suite::process::{run_shell_command, shell_escape};
 use transport_smoke_suite::report::{
-    self, FailedScenarioSummary, MatrixScenarioSummary, MatrixSummary, ScenarioReport,
+    self, FailedScenarioSummary, MatrixScenarioSummary, MatrixSummary, ScenarioClassification,
+    ScenarioReport,
 };
 use transport_smoke_suite::scenario;
 
@@ -155,6 +156,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
             Err(error) => MatrixScenarioSummary {
                 scenario_id: scenario_id.to_string(),
                 pass: false,
+                classification: ScenarioClassification::ValidatedFail,
                 exit_code: 1,
                 artifact_dir: None,
                 failure_reason: Some(error.to_string()),
@@ -173,6 +175,14 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
 
     let pass_count = summaries.iter().filter(|summary| summary.pass).count();
     let fail_count = summaries.len() - pass_count;
+    let validated_fail_count = summaries
+        .iter()
+        .filter(|summary| summary.classification == ScenarioClassification::ValidatedFail)
+        .count();
+    let blocked_count = summaries
+        .iter()
+        .filter(|summary| summary.classification == ScenarioClassification::Blocked)
+        .count();
 
     let failed_scenarios = summaries
         .iter()
@@ -190,9 +200,11 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
         "all selected scenarios passed".to_string()
     } else {
         format!(
-            "{} of {} scenarios failed; matrix exits non-zero",
+            "{} of {} scenarios failed (validated_fail={}, blocked={}); matrix exits non-zero",
             fail_count,
-            summaries.len()
+            summaries.len(),
+            validated_fail_count,
+            blocked_count
         )
     };
 
@@ -201,6 +213,8 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
         schema_version: "1.0".to_string(),
         selected_scenarios,
         pass_count,
+        validated_fail_count,
+        blocked_count,
         fail_count,
         total_duration_ms: matrix_start_instant.elapsed().as_millis(),
         scenarios: summaries,
@@ -222,7 +236,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
 
 fn resolve_selected_scenarios(only: &[String]) -> anyhow::Result<Vec<String>> {
     if only.is_empty() {
-        return Ok(scenario::scenario_ids()
+        return Ok(scenario::matrix_scenario_ids()
             .iter()
             .map(|scenario_id| scenario_id.to_string())
             .collect());
@@ -230,11 +244,11 @@ fn resolve_selected_scenarios(only: &[String]) -> anyhow::Result<Vec<String>> {
 
     let mut selected = Vec::new();
     for scenario_id in only {
-        if scenario::scenario_template(scenario_id).is_none() {
+        if !scenario::is_known_scenario(scenario_id) {
             anyhow::bail!(
                 "unknown scenario id '{}'; valid ids: {}",
                 scenario_id,
-                scenario::scenario_ids().join(", ")
+                scenario::matrix_scenario_ids().join(", ")
             );
         }
         selected.push(scenario_id.to_string());
@@ -369,6 +383,7 @@ fn build_summary_from_report(report: ScenarioReport, duration_ms: u128) -> Matri
     MatrixScenarioSummary {
         scenario_id: report.scenario_id,
         pass: report.pass,
+        classification: report.classification,
         exit_code: report.exit_code,
         artifact_dir: Some(report.artifact_dir),
         failure_reason: report.failure_reason,

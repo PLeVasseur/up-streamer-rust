@@ -11,15 +11,20 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
-use crate::claims::{evaluate_claims, load_claims_for_scenario, split_claim_outcomes, Thresholds};
+use crate::claims::{
+    evaluate_claims, load_claims_for_scenario, split_claim_outcomes, ClaimCategory, ClaimKind,
+    ClaimSpec, Thresholds,
+};
 use crate::env;
 use crate::logs;
 use crate::process::{run_shell_command, shell_escape, ManagedProcess, ProcessSpec};
-use crate::report::{self, PhaseTiming, ProcessMetadata, ScenarioReport};
+use crate::report::{self, PhaseTiming, ProcessMetadata, ScenarioClassification, ScenarioReport};
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use clap::Args;
+use serde::Serialize;
 use std::cmp::min;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -34,10 +39,34 @@ pub const SCENARIO_IDS: [&str; 8] = [
     "smoke-zenoh-someip-ps-someip-publisher-zenoh-subscriber",
 ];
 
+pub const MATRIX_SCENARIO_IDS: [&str; 15] = [
+    "smoke-zenoh-mqtt-rr-zenoh-client-mqtt-service",
+    "smoke-zenoh-mqtt-rr-mqtt-client-zenoh-service",
+    "smoke-zenoh-mqtt-ps-zenoh-publisher-mqtt-subscriber",
+    "smoke-zenoh-mqtt-ps-mqtt-publisher-zenoh-subscriber",
+    "smoke-zenoh-someip-rr-zenoh-client-someip-service",
+    "smoke-zenoh-someip-rr-someip-client-zenoh-service",
+    "smoke-zenoh-someip-ps-zenoh-publisher-someip-subscriber",
+    "smoke-zenoh-someip-ps-someip-publisher-zenoh-subscriber",
+    "smoke-zc-zenoh-shm-to-iceoryx2",
+    "smoke-zc-iceoryx2-to-zenoh-shm",
+    "smoke-zc-zenoh-shm-to-lola-bundled",
+    "smoke-zc-lola-bundled-to-zenoh-shm",
+    "smoke-zc-iceoryx2-to-lola-bundled",
+    "smoke-zc-lola-bundled-to-iceoryx2",
+    "smoke-zc-all-transports-bundled",
+];
+
 const NO_ARGS: &[&str] = &[];
+const DEFAULT_BAZEL_PATH: &str = "/tmp/opencode/bazelisk/node_modules/.bin/bazelisk";
+const ZERO_COPY_HARD_TIMEOUT_SECS: u64 = 600;
 const MQTT_STREAMER_ENV: &[(&str, &str)] = &[(
     "RUST_LOG",
     "up_streamer=debug,up_transport_mqtt5=debug,configurable_streamer=debug",
+)];
+const ZERO_COPY_STREAMER_ENV: &[(&str, &str)] = &[(
+    "RUST_LOG",
+    "configurable_streamer=debug,up_streamer=debug,up_transport_zenoh=debug,up_transport_iceoryx2_rust=debug,up_transport_lola_rust=debug",
 )];
 const SOMEIP_STREAMER_ENV: &[(&str, &str)] = &[(
     "RUST_LOG",
@@ -113,6 +142,7 @@ const PASSIVE_SOMEIP_SUBSCRIBER_ARGS_A: &[&str] = &[
 pub enum TransportFamily {
     Mqtt,
     Someip,
+    ZeroCopy,
 }
 
 impl TransportFamily {
@@ -120,6 +150,7 @@ impl TransportFamily {
         match self {
             Self::Mqtt => "mqtt",
             Self::Someip => "someip",
+            Self::ZeroCopy => "zero_copy",
         }
     }
 }
@@ -150,6 +181,111 @@ pub struct ScenarioTemplate {
     pub passive: ProcessTemplate,
     pub active: ProcessTemplate,
     pub hard_timeout_secs_default: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ZeroCopyRouteTemplate {
+    ingress: &'static str,
+    ingress_authority: &'static str,
+    egress: &'static str,
+    egress_authority: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ZeroCopyScenarioTemplate {
+    id: &'static str,
+    row_description: &'static str,
+    config_file: &'static str,
+    cargo_features: &'static str,
+    build_command: &'static str,
+    required_paths: &'static [&'static str],
+    stale_process_signatures: &'static [&'static str],
+    selected_route: Option<ZeroCopyRouteTemplate>,
+    configured_routes: &'static [ZeroCopyRouteTemplate],
+    requires_lola_bundled: bool,
+    hard_timeout_secs_default: u64,
+}
+
+#[derive(Serialize)]
+struct ZeroCopyMatrixRowArtifact {
+    schema_version: &'static str,
+    scenario_id: String,
+    row_description: String,
+    classification: ScenarioClassification,
+    failure_reason: Option<String>,
+    config_file: String,
+    cargo_features: Vec<String>,
+    selected_route: Option<ZeroCopyRouteArtifact>,
+    configured_routes: Vec<ZeroCopyRouteArtifact>,
+    payload_bytes: PayloadProbeArtifact,
+    metadata: MetadataProbeArtifact,
+    route_diagnostics: Vec<RouteDiagnosticArtifact>,
+    listener_cleanup: ListenerCleanupArtifact,
+    raw_logs: Vec<RawLogArtifact>,
+    environment: ZeroCopyEnvironmentArtifact,
+    dependency_sources: Vec<DependencySourceArtifact>,
+}
+
+#[derive(Serialize)]
+struct ZeroCopyRouteArtifact {
+    ingress: String,
+    ingress_authority: String,
+    egress: String,
+    egress_authority: String,
+}
+
+#[derive(Serialize)]
+struct PayloadProbeArtifact {
+    observed_payload_bytes: u64,
+    probe: &'static str,
+    note: &'static str,
+}
+
+#[derive(Serialize)]
+struct MetadataProbeArtifact {
+    observed_frame_metadata: bool,
+    probe: &'static str,
+    note: &'static str,
+}
+
+#[derive(Serialize)]
+struct RouteDiagnosticArtifact {
+    route_kind: &'static str,
+    ingress: String,
+    ingress_authority: String,
+    egress: String,
+    egress_authority: String,
+    diagnostic_source: &'static str,
+}
+
+#[derive(Serialize)]
+struct ListenerCleanupArtifact {
+    teardown_phase_recorded: bool,
+    process_exit_status: Option<i32>,
+    cleanup_signal: &'static str,
+    note: &'static str,
+}
+
+#[derive(Serialize)]
+struct RawLogArtifact {
+    name: String,
+    path: String,
+}
+
+#[derive(Serialize)]
+struct ZeroCopyEnvironmentArtifact {
+    rust_log: String,
+    mqtt_broker_required: bool,
+    docker_compose_required: bool,
+    lola_bundled_required: bool,
+    bazel: Option<String>,
+}
+
+#[derive(Serialize)]
+struct DependencySourceArtifact {
+    package: String,
+    source: Option<String>,
+    version: Option<String>,
 }
 
 const BUILD_MQTT_RR_ZENOH_CLIENT: &[&str] = &[
@@ -205,6 +341,190 @@ const REQUIRED_SOMEIP_PATHS: &[&str] = &[
     "example-streamer-uses/vsomeip-configs/someip_service.json",
     "example-streamer-uses/vsomeip-configs/someip_subscriber.json",
 ];
+
+const BUILD_ZC_ZENOH_ICEORYX2: &str = "cargo build -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy";
+const BUILD_ZC_ZENOH_LOLA: &str = "BAZEL=${BAZEL:-/tmp/opencode/bazelisk/node_modules/.bin/bazelisk} cargo build -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,lola-transport";
+const BUILD_ZC_ALL_TRANSPORTS: &str = "BAZEL=${BAZEL:-/tmp/opencode/bazelisk/node_modules/.bin/bazelisk} cargo build -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy,lola-transport";
+
+const REQUIRED_ZC_ZENOH_ICEORYX2_PATHS: &[&str] = &[
+    "configurable-streamer/CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5",
+    "configurable-streamer/ZENOH_CONFIG.json5",
+    "configurable-streamer/MQTT_CONFIG.json5",
+    "configurable-streamer/subscription_data.json",
+    "utils/mosquitto/docker-compose.yaml",
+];
+const REQUIRED_ZC_ZENOH_LOLA_PATHS: &[&str] = &[
+    "configurable-streamer/CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5",
+    "configurable-streamer/ZENOH_CONFIG.json5",
+    "configurable-streamer/MQTT_CONFIG.json5",
+    "configurable-streamer/subscription_data.json",
+    "configurable-streamer/MW_COM_CONFIG_LOLA.json",
+    "utils/mosquitto/docker-compose.yaml",
+];
+const REQUIRED_ZC_ALL_TRANSPORTS_PATHS: &[&str] = &[
+    "configurable-streamer/CONFIG_ZEROCOPY_EXAMPLE.json5",
+    "configurable-streamer/ZENOH_CONFIG.json5",
+    "configurable-streamer/MQTT_CONFIG.json5",
+    "configurable-streamer/subscription_data.json",
+    "configurable-streamer/MW_COM_CONFIG_LOLA.json",
+    "utils/mosquitto/docker-compose.yaml",
+];
+
+const ROUTE_ZENOH_TO_ICEORYX2: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
+    ingress: "zenoh-zc",
+    ingress_authority: "authority-a",
+    egress: "iceoryx2-zc",
+    egress_authority: "authority-b",
+};
+const ROUTE_ICEORYX2_TO_ZENOH: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
+    ingress: "iceoryx2-zc",
+    ingress_authority: "authority-b",
+    egress: "zenoh-zc",
+    egress_authority: "authority-a",
+};
+const ROUTE_ZENOH_TO_LOLA: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
+    ingress: "zenoh-zc",
+    ingress_authority: "authority-a",
+    egress: "lola-zc",
+    egress_authority: "authority-b",
+};
+const ROUTE_LOLA_TO_ZENOH: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
+    ingress: "lola-zc",
+    ingress_authority: "authority-b",
+    egress: "zenoh-zc",
+    egress_authority: "authority-a",
+};
+const ROUTE_ALL_ZENOH_TO_LOLA: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
+    ingress: "zenoh-zc",
+    ingress_authority: "authority-a",
+    egress: "lola-zc",
+    egress_authority: "authority-c",
+};
+const ROUTE_ALL_LOLA_TO_ZENOH: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
+    ingress: "lola-zc",
+    ingress_authority: "authority-c",
+    egress: "zenoh-zc",
+    egress_authority: "authority-a",
+};
+const ROUTE_ICEORYX2_TO_LOLA: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
+    ingress: "iceoryx2-zc",
+    ingress_authority: "authority-b",
+    egress: "lola-zc",
+    egress_authority: "authority-c",
+};
+const ROUTE_LOLA_TO_ICEORYX2: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
+    ingress: "lola-zc",
+    ingress_authority: "authority-c",
+    egress: "iceoryx2-zc",
+    egress_authority: "authority-b",
+};
+
+const ZC_ROUTES_ZENOH_ICEORYX2: &[ZeroCopyRouteTemplate] =
+    &[ROUTE_ZENOH_TO_ICEORYX2, ROUTE_ICEORYX2_TO_ZENOH];
+const ZC_ROUTES_ZENOH_LOLA: &[ZeroCopyRouteTemplate] = &[ROUTE_ZENOH_TO_LOLA, ROUTE_LOLA_TO_ZENOH];
+const ZC_ROUTES_ALL_TRANSPORTS: &[ZeroCopyRouteTemplate] = &[
+    ROUTE_ZENOH_TO_ICEORYX2,
+    ROUTE_ALL_ZENOH_TO_LOLA,
+    ROUTE_ICEORYX2_TO_ZENOH,
+    ROUTE_ICEORYX2_TO_LOLA,
+    ROUTE_ALL_LOLA_TO_ZENOH,
+    ROUTE_LOLA_TO_ICEORYX2,
+];
+
+const ZC_SCENARIO_ZENOH_TO_ICEORYX2: ZeroCopyScenarioTemplate = ZeroCopyScenarioTemplate {
+    id: "smoke-zc-zenoh-shm-to-iceoryx2",
+    row_description: "Zenoh SHM to iceoryx2 copy-minimized startup row",
+    config_file: "CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5",
+    cargo_features: "experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy",
+    build_command: BUILD_ZC_ZENOH_ICEORYX2,
+    required_paths: REQUIRED_ZC_ZENOH_ICEORYX2_PATHS,
+    stale_process_signatures: &["configurable-streamer"],
+    selected_route: Some(ROUTE_ZENOH_TO_ICEORYX2),
+    configured_routes: ZC_ROUTES_ZENOH_ICEORYX2,
+    requires_lola_bundled: false,
+    hard_timeout_secs_default: ZERO_COPY_HARD_TIMEOUT_SECS,
+};
+const ZC_SCENARIO_ICEORYX2_TO_ZENOH: ZeroCopyScenarioTemplate = ZeroCopyScenarioTemplate {
+    id: "smoke-zc-iceoryx2-to-zenoh-shm",
+    row_description: "iceoryx2 to Zenoh SHM copy-minimized startup row",
+    config_file: "CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5",
+    cargo_features: "experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy",
+    build_command: BUILD_ZC_ZENOH_ICEORYX2,
+    required_paths: REQUIRED_ZC_ZENOH_ICEORYX2_PATHS,
+    stale_process_signatures: &["configurable-streamer"],
+    selected_route: Some(ROUTE_ICEORYX2_TO_ZENOH),
+    configured_routes: ZC_ROUTES_ZENOH_ICEORYX2,
+    requires_lola_bundled: false,
+    hard_timeout_secs_default: ZERO_COPY_HARD_TIMEOUT_SECS,
+};
+const ZC_SCENARIO_ZENOH_TO_LOLA: ZeroCopyScenarioTemplate = ZeroCopyScenarioTemplate {
+    id: "smoke-zc-zenoh-shm-to-lola-bundled",
+    row_description: "Zenoh SHM to LoLa bundled copy-minimized startup row",
+    config_file: "CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5",
+    cargo_features: "experimental-copy-minimized-routing,zenoh-zero-copy,lola-transport",
+    build_command: BUILD_ZC_ZENOH_LOLA,
+    required_paths: REQUIRED_ZC_ZENOH_LOLA_PATHS,
+    stale_process_signatures: &["configurable-streamer"],
+    selected_route: Some(ROUTE_ZENOH_TO_LOLA),
+    configured_routes: ZC_ROUTES_ZENOH_LOLA,
+    requires_lola_bundled: true,
+    hard_timeout_secs_default: ZERO_COPY_HARD_TIMEOUT_SECS,
+};
+const ZC_SCENARIO_LOLA_TO_ZENOH: ZeroCopyScenarioTemplate = ZeroCopyScenarioTemplate {
+    id: "smoke-zc-lola-bundled-to-zenoh-shm",
+    row_description: "LoLa bundled to Zenoh SHM copy-minimized startup row",
+    config_file: "CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5",
+    cargo_features: "experimental-copy-minimized-routing,zenoh-zero-copy,lola-transport",
+    build_command: BUILD_ZC_ZENOH_LOLA,
+    required_paths: REQUIRED_ZC_ZENOH_LOLA_PATHS,
+    stale_process_signatures: &["configurable-streamer"],
+    selected_route: Some(ROUTE_LOLA_TO_ZENOH),
+    configured_routes: ZC_ROUTES_ZENOH_LOLA,
+    requires_lola_bundled: true,
+    hard_timeout_secs_default: ZERO_COPY_HARD_TIMEOUT_SECS,
+};
+const ZC_SCENARIO_ICEORYX2_TO_LOLA: ZeroCopyScenarioTemplate = ZeroCopyScenarioTemplate {
+    id: "smoke-zc-iceoryx2-to-lola-bundled",
+    row_description: "iceoryx2 to LoLa bundled copy-minimized startup row",
+    config_file: "CONFIG_ZEROCOPY_EXAMPLE.json5",
+    cargo_features:
+        "experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy,lola-transport",
+    build_command: BUILD_ZC_ALL_TRANSPORTS,
+    required_paths: REQUIRED_ZC_ALL_TRANSPORTS_PATHS,
+    stale_process_signatures: &["configurable-streamer"],
+    selected_route: Some(ROUTE_ICEORYX2_TO_LOLA),
+    configured_routes: ZC_ROUTES_ALL_TRANSPORTS,
+    requires_lola_bundled: true,
+    hard_timeout_secs_default: ZERO_COPY_HARD_TIMEOUT_SECS,
+};
+const ZC_SCENARIO_LOLA_TO_ICEORYX2: ZeroCopyScenarioTemplate = ZeroCopyScenarioTemplate {
+    id: "smoke-zc-lola-bundled-to-iceoryx2",
+    row_description: "LoLa bundled to iceoryx2 copy-minimized startup row",
+    config_file: "CONFIG_ZEROCOPY_EXAMPLE.json5",
+    cargo_features:
+        "experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy,lola-transport",
+    build_command: BUILD_ZC_ALL_TRANSPORTS,
+    required_paths: REQUIRED_ZC_ALL_TRANSPORTS_PATHS,
+    stale_process_signatures: &["configurable-streamer"],
+    selected_route: Some(ROUTE_LOLA_TO_ICEORYX2),
+    configured_routes: ZC_ROUTES_ALL_TRANSPORTS,
+    requires_lola_bundled: true,
+    hard_timeout_secs_default: ZERO_COPY_HARD_TIMEOUT_SECS,
+};
+const ZC_SCENARIO_ALL_TRANSPORTS: ZeroCopyScenarioTemplate = ZeroCopyScenarioTemplate {
+    id: "smoke-zc-all-transports-bundled",
+    row_description: "Zenoh SHM, iceoryx2, and LoLa bundled aggregate copy-minimized startup row",
+    config_file: "CONFIG_ZEROCOPY_EXAMPLE.json5",
+    cargo_features:
+        "experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy,lola-transport",
+    build_command: BUILD_ZC_ALL_TRANSPORTS,
+    required_paths: REQUIRED_ZC_ALL_TRANSPORTS_PATHS,
+    stale_process_signatures: &["configurable-streamer"],
+    selected_route: None,
+    configured_routes: ZC_ROUTES_ALL_TRANSPORTS,
+    requires_lola_bundled: true,
+    hard_timeout_secs_default: ZERO_COPY_HARD_TIMEOUT_SECS,
+};
 
 const SCENARIO_MQTT_RR_ZENOH_CLIENT_MQTT_SERVICE: ScenarioTemplate = ScenarioTemplate {
     id: "smoke-zenoh-mqtt-rr-zenoh-client-mqtt-service",
@@ -619,6 +939,10 @@ pub fn scenario_ids() -> &'static [&'static str] {
     &SCENARIO_IDS
 }
 
+pub fn matrix_scenario_ids() -> &'static [&'static str] {
+    &MATRIX_SCENARIO_IDS
+}
+
 pub fn scenario_template(scenario_id: &str) -> Option<&'static ScenarioTemplate> {
     match scenario_id {
         "smoke-zenoh-mqtt-rr-zenoh-client-mqtt-service" => {
@@ -649,10 +973,31 @@ pub fn scenario_template(scenario_id: &str) -> Option<&'static ScenarioTemplate>
     }
 }
 
+fn zero_copy_scenario_template(scenario_id: &str) -> Option<&'static ZeroCopyScenarioTemplate> {
+    match scenario_id {
+        "smoke-zc-zenoh-shm-to-iceoryx2" => Some(&ZC_SCENARIO_ZENOH_TO_ICEORYX2),
+        "smoke-zc-iceoryx2-to-zenoh-shm" => Some(&ZC_SCENARIO_ICEORYX2_TO_ZENOH),
+        "smoke-zc-zenoh-shm-to-lola-bundled" => Some(&ZC_SCENARIO_ZENOH_TO_LOLA),
+        "smoke-zc-lola-bundled-to-zenoh-shm" => Some(&ZC_SCENARIO_LOLA_TO_ZENOH),
+        "smoke-zc-iceoryx2-to-lola-bundled" => Some(&ZC_SCENARIO_ICEORYX2_TO_LOLA),
+        "smoke-zc-lola-bundled-to-iceoryx2" => Some(&ZC_SCENARIO_LOLA_TO_ICEORYX2),
+        "smoke-zc-all-transports-bundled" => Some(&ZC_SCENARIO_ALL_TRANSPORTS),
+        _ => None,
+    }
+}
+
+pub fn is_known_scenario(scenario_id: &str) -> bool {
+    scenario_template(scenario_id).is_some() || zero_copy_scenario_template(scenario_id).is_some()
+}
+
 pub async fn run_scenario(
     scenario_id: &str,
     cli_args: ScenarioCliArgs,
 ) -> Result<ScenarioRunResult> {
+    if let Some(template) = zero_copy_scenario_template(scenario_id) {
+        return run_zero_copy_scenario(template, cli_args).await;
+    }
+
     let template = scenario_template(scenario_id)
         .ok_or_else(|| anyhow!("unknown scenario id '{}'", scenario_id))?;
 
@@ -1053,6 +1398,7 @@ pub async fn run_scenario(
         scenario_id: template.id.to_string(),
         transport_family: template.transport_family.as_str().to_string(),
         pass,
+        classification: ScenarioClassification::from_pass(pass),
         exit_code,
         phase_timings,
         processes: process_metadata,
@@ -1064,6 +1410,7 @@ pub async fn run_scenario(
         claims_source_path: claims_source_path
             .as_ref()
             .map(|path| path.display().to_string()),
+        supporting_artifacts: Vec::new(),
         start_ts: report::timestamp_to_string(scenario_start_wall),
         end_ts: report::timestamp_to_string(scenario_end_wall),
         duration_ms: scenario_duration_ms,
@@ -1095,6 +1442,676 @@ pub async fn run_scenario(
         scenario_report_txt,
         failure_reason,
     })
+}
+
+async fn run_zero_copy_scenario(
+    template: &'static ZeroCopyScenarioTemplate,
+    cli_args: ScenarioCliArgs,
+) -> Result<ScenarioRunResult> {
+    let repo_root = env::repo_root()?;
+    let expected_branch = env::resolve_expected_branch(cli_args.expected_branch.clone());
+    let artifacts_root = env::resolve_artifacts_root(&repo_root, cli_args.artifacts_root.clone());
+    let artifact_dir = artifacts_root
+        .join(template.id)
+        .join(env::scenario_timestamp());
+    std::fs::create_dir_all(&artifact_dir)
+        .with_context(|| format!("unable to create artifact dir {}", artifact_dir.display()))?;
+
+    let scenario_start_wall = Utc::now();
+    let scenario_start_instant = Instant::now();
+    let hard_timeout_secs = cli_args
+        .scenario_timeout_secs
+        .unwrap_or(template.hard_timeout_secs_default);
+    let scenario_deadline = scenario_start_instant + Duration::from_secs(hard_timeout_secs);
+
+    let mut phase_timings = Vec::new();
+    let mut failure_reason = None;
+    let mut classification = ScenarioClassification::Pass;
+    let mut blocked_reason = None;
+    let mut claim_outcomes = Vec::new();
+    let mut forbidden_claim_outcomes = Vec::new();
+    let mut loaded_claims = Vec::new();
+    let claims_source_path: Option<PathBuf> = None;
+    let mut streamer_process: Option<ManagedProcess> = None;
+    let mut mqtt_broker_started = false;
+
+    let preflight_result = execute_phase("Preflight", &mut phase_timings, || async {
+        ensure_remaining_timeout(scenario_deadline, "Preflight")?;
+
+        env::enforce_expected_branch(&repo_root, expected_branch.as_deref()).await?;
+        env::ensure_paths_exist(&repo_root, template.required_paths)?;
+
+        loaded_claims = zero_copy_startup_claims();
+
+        if let Err(error) = ensure_no_stale_processes(template.stale_process_signatures).await {
+            blocked_reason = Some(error.to_string());
+            return Err(error);
+        }
+
+        assert_zero_copy_tooling(
+            run_shell_command(&repo_root, &repo_root, "docker --version", true).await,
+            "docker --version",
+            &mut blocked_reason,
+        )?;
+        assert_zero_copy_tooling(
+            run_shell_command(&repo_root, &repo_root, "docker compose version", true).await,
+            "docker compose version",
+            &mut blocked_reason,
+        )?;
+
+        if template.requires_lola_bundled {
+            ensure_lola_bazel_available(&repo_root, &mut blocked_reason).await?;
+        }
+
+        if !cli_args.skip_build {
+            let outcome = run_shell_command(
+                &repo_root,
+                &repo_root,
+                template.build_command,
+                cli_args.no_bootstrap,
+            )
+            .await?;
+            assert_command_success(outcome, template.build_command)?;
+        }
+
+        Ok(())
+    })
+    .await;
+
+    if let Err(error) = preflight_result {
+        classification = classify_zero_copy_failure(blocked_reason.as_ref());
+        failure_reason = Some(error.to_string());
+    }
+
+    if failure_reason.is_none() {
+        let start_infra_result = execute_phase("StartInfra", &mut phase_timings, || async {
+            ensure_remaining_timeout(scenario_deadline, "StartInfra")?;
+
+            if let Err(error) =
+                start_mqtt_broker(&repo_root, cli_args.no_bootstrap, scenario_deadline).await
+            {
+                blocked_reason = Some(error.to_string());
+                return Err(error);
+            }
+            mqtt_broker_started = true;
+
+            streamer_process = Some(
+                spawn_zero_copy_streamer(&repo_root, &artifact_dir, template, &cli_args).await?,
+            );
+
+            Ok(())
+        })
+        .await;
+
+        if let Err(error) = start_infra_result {
+            classification = classify_zero_copy_failure(blocked_reason.as_ref());
+            failure_reason = Some(error.to_string());
+        }
+    }
+
+    if failure_reason.is_none() {
+        let wait_streamer_ready_result =
+            execute_phase("WaitStreamerReady", &mut phase_timings, || async {
+                ensure_remaining_timeout(scenario_deadline, "WaitStreamerReady")?;
+
+                let streamer = streamer_process
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("streamer process missing before readiness wait"))?;
+                let timeout = min(
+                    Duration::from_secs(env::STREAMER_READY_TIMEOUT_SECS),
+                    ensure_remaining_timeout(scenario_deadline, "WaitStreamerReady")?,
+                );
+
+                logs::wait_for_exact_marker(
+                    &streamer.log_path,
+                    env::READY_STREAMER_INITIALIZED,
+                    timeout,
+                    Duration::from_millis(env::LOG_POLL_INTERVAL_MS),
+                )
+                .await?;
+
+                Ok(())
+            })
+            .await;
+
+        if let Err(error) = wait_streamer_ready_result {
+            if is_zero_copy_native_blocker(template, &error) {
+                blocked_reason = Some(error.to_string());
+                classification = ScenarioClassification::Blocked;
+            } else {
+                classification = ScenarioClassification::ValidatedFail;
+            }
+            failure_reason = Some(error.to_string());
+        }
+    }
+
+    if failure_reason.is_none() {
+        let validate_claims_result =
+            execute_phase("ValidateClaims", &mut phase_timings, || async {
+                ensure_remaining_timeout(scenario_deadline, "ValidateClaims")?;
+
+                if loaded_claims.is_empty() {
+                    return Err(anyhow!(
+                        "no claims were loaded before validation for scenario '{}'",
+                        template.id
+                    ));
+                }
+
+                let outcomes = evaluate_claims(&artifact_dir, &loaded_claims);
+                let (must_outcomes, forbidden_outcomes, first_failed_claim_reason) =
+                    split_claim_outcomes(outcomes);
+
+                claim_outcomes = must_outcomes;
+                forbidden_claim_outcomes = forbidden_outcomes;
+
+                let streamer = streamer_process
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("streamer process missing during claim validation"))?;
+                let streamer_marker_count =
+                    logs::count_exact_marker(&streamer.log_path, env::READY_STREAMER_INITIALIZED)?;
+                if streamer_marker_count != 1 {
+                    return Err(anyhow!(
+                        "streamer readiness marker '{}' observed {} times (expected exactly 1)",
+                        env::READY_STREAMER_INITIALIZED,
+                        streamer_marker_count
+                    ));
+                }
+
+                if let Some(first_failed_claim_reason) = first_failed_claim_reason {
+                    return Err(anyhow!(first_failed_claim_reason));
+                }
+
+                Ok(())
+            })
+            .await;
+
+        if let Err(error) = validate_claims_result {
+            classification = ScenarioClassification::ValidatedFail;
+            failure_reason = Some(error.to_string());
+        }
+    }
+
+    let teardown_result = execute_phase("Teardown", &mut phase_timings, || async {
+        if let Some(streamer) = streamer_process.as_mut() {
+            streamer
+                .terminate_gracefully(
+                    Duration::from_secs(env::SIGINT_GRACE_SECS),
+                    Duration::from_secs(env::SIGTERM_GRACE_SECS),
+                )
+                .await?;
+        }
+
+        if mqtt_broker_started {
+            if let Err(error) = stop_mqtt_broker(&repo_root, cli_args.no_bootstrap).await {
+                blocked_reason = Some(error.to_string());
+                return Err(error);
+            }
+        }
+
+        ensure_process_exited(streamer_process.as_mut(), "streamer")?;
+
+        Ok(())
+    })
+    .await;
+
+    if failure_reason.is_none() {
+        if let Err(error) = teardown_result {
+            classification = classify_zero_copy_failure(blocked_reason.as_ref());
+            failure_reason = Some(error.to_string());
+        }
+    }
+
+    let finalize_report_result =
+        execute_phase("FinalizeReport", &mut phase_timings, || async { Ok(()) }).await;
+    if failure_reason.is_none() {
+        if let Err(error) = finalize_report_result {
+            classification = ScenarioClassification::ValidatedFail;
+            failure_reason = Some(error.to_string());
+        }
+    }
+
+    let scenario_end_wall = Utc::now();
+    let scenario_duration_ms = scenario_start_instant.elapsed().as_millis();
+    let pass = failure_reason.is_none()
+        && claim_outcomes.iter().all(|outcome| outcome.pass)
+        && forbidden_claim_outcomes.iter().all(|outcome| outcome.pass);
+    if pass {
+        classification = ScenarioClassification::Pass;
+    } else if classification == ScenarioClassification::Pass {
+        classification = ScenarioClassification::ValidatedFail;
+    }
+    let exit_code = match classification {
+        ScenarioClassification::Pass => 0,
+        ScenarioClassification::ValidatedFail => 1,
+        ScenarioClassification::Blocked => 2,
+    };
+
+    let zero_copy_artifact = write_zero_copy_matrix_row_artifact(
+        &repo_root,
+        &artifact_dir,
+        template,
+        classification,
+        failure_reason.clone(),
+        &streamer_process,
+    )?;
+
+    let no_process: Option<ManagedProcess> = None;
+    let process_metadata = gather_process_metadata(&streamer_process, &no_process, &no_process);
+    let repro_command = render_zero_copy_repro_command(template.id, &cli_args, &artifact_dir);
+
+    let scenario_report = ScenarioReport {
+        schema_version: report::SCENARIO_REPORT_SCHEMA_VERSION.to_string(),
+        scenario_id: template.id.to_string(),
+        transport_family: TransportFamily::ZeroCopy.as_str().to_string(),
+        pass,
+        classification,
+        exit_code,
+        phase_timings,
+        processes: process_metadata,
+        claim_outcomes,
+        forbidden_claim_outcomes,
+        failure_reason: failure_reason.clone(),
+        repro_command,
+        artifact_dir: artifact_dir.display().to_string(),
+        claims_source_path: claims_source_path
+            .as_ref()
+            .map(|path| path.display().to_string()),
+        supporting_artifacts: vec![zero_copy_artifact.display().to_string()],
+        start_ts: report::timestamp_to_string(scenario_start_wall),
+        end_ts: report::timestamp_to_string(scenario_end_wall),
+        duration_ms: scenario_duration_ms,
+    };
+
+    let (scenario_report_json, scenario_report_txt) =
+        report::write_scenario_report(&scenario_report, &artifact_dir)?;
+
+    println!("SCENARIO_ID={}", template.id);
+    println!(
+        "SCENARIO_STATUS={}",
+        if scenario_report.pass { "PASS" } else { "FAIL" }
+    );
+    println!("SCENARIO_CLASSIFICATION={}", classification.as_str());
+    println!("SCENARIO_ARTIFACT_DIR={}", artifact_dir.display());
+    println!("SCENARIO_REPORT_JSON={}", scenario_report_json.display());
+    println!("ZERO_COPY_MATRIX_ROW_JSON={}", zero_copy_artifact.display());
+    println!(
+        "SCENARIO_CLAIMS_SOURCE_PATH={}",
+        scenario_report
+            .claims_source_path
+            .as_deref()
+            .unwrap_or("<not-resolved>")
+    );
+
+    Ok(ScenarioRunResult {
+        pass: scenario_report.pass,
+        exit_code,
+        artifact_dir,
+        scenario_report_json,
+        scenario_report_txt,
+        failure_reason,
+    })
+}
+
+fn classify_zero_copy_failure(blocked_reason: Option<&String>) -> ScenarioClassification {
+    if blocked_reason.is_some() {
+        ScenarioClassification::Blocked
+    } else {
+        ScenarioClassification::ValidatedFail
+    }
+}
+
+fn is_zero_copy_native_blocker(template: &ZeroCopyScenarioTemplate, error: &anyhow::Error) -> bool {
+    if !template.requires_lola_bundled {
+        return false;
+    }
+
+    let message = error.to_string();
+    message.contains("libup_lola_bridge.so")
+        || message.contains("error while loading shared libraries")
+        || message.contains("cannot open shared object file")
+}
+
+fn zero_copy_startup_claims() -> Vec<ClaimSpec> {
+    vec![
+        ClaimSpec {
+            claim_id: "streamer_ready".to_string(),
+            category: ClaimCategory::Readiness,
+            kind: ClaimKind::MustMatch,
+            file: "streamer.log".to_string(),
+            pattern: "READY streamer_initialized".to_string(),
+            min_count: 1,
+        },
+        ClaimSpec {
+            claim_id: "streamer_initialized_log".to_string(),
+            category: ClaimCategory::Readiness,
+            kind: ClaimKind::MustMatch,
+            file: "streamer.log".to_string(),
+            pattern: "Streamer initialized; waiting for shutdown signal".to_string(),
+            min_count: 1,
+        },
+        ClaimSpec {
+            claim_id: "streamer_no_panic".to_string(),
+            category: ClaimCategory::ForbiddenSignature,
+            kind: ClaimKind::MustNotMatch,
+            file: "streamer.log".to_string(),
+            pattern: "panicked at".to_string(),
+            min_count: 0,
+        },
+        ClaimSpec {
+            claim_id: "streamer_no_copy_minimized_failure".to_string(),
+            category: ClaimCategory::ForbiddenSignature,
+            kind: ClaimKind::MustNotMatch,
+            file: "streamer.log".to_string(),
+            pattern: "copy-minimized route .* failed|copy_minimized_.*_failed".to_string(),
+            min_count: 0,
+        },
+    ]
+}
+
+fn assert_zero_copy_tooling(
+    outcome: Result<crate::process::CommandOutcome>,
+    label: &str,
+    blocked_reason: &mut Option<String>,
+) -> Result<()> {
+    let outcome = match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let reason = error.to_string();
+            *blocked_reason = Some(reason);
+            return Err(error);
+        }
+    };
+
+    if outcome.status_code == Some(0) {
+        return Ok(());
+    }
+
+    let error = anyhow!(
+        "{} unavailable for zero-copy smoke row (status={:?})\ncommand: {}\nstdout:\n{}\nstderr:\n{}",
+        label,
+        outcome.status_code,
+        outcome.command,
+        outcome.stdout,
+        outcome.stderr
+    );
+    *blocked_reason = Some(error.to_string());
+    Err(error)
+}
+
+async fn ensure_lola_bazel_available(
+    repo_root: &Path,
+    blocked_reason: &mut Option<String>,
+) -> Result<String> {
+    let bazel = std::env::var("BAZEL").unwrap_or_else(|_| DEFAULT_BAZEL_PATH.to_string());
+    let bazel_path = Path::new(&bazel);
+    if bazel_path.is_absolute() || bazel.contains('/') {
+        if bazel_path.exists() {
+            return Ok(bazel);
+        }
+        let error = anyhow!(
+            "LoLa bundled zero-copy row is blocked because BAZEL points to missing executable: {}",
+            bazel
+        );
+        *blocked_reason = Some(error.to_string());
+        return Err(error);
+    }
+
+    let command = format!("command -v {}", shell_escape(&bazel));
+    let outcome = run_shell_command(repo_root, repo_root, &command, true).await?;
+    if outcome.status_code == Some(0) {
+        return Ok(bazel);
+    }
+
+    let error = anyhow!(
+        "LoLa bundled zero-copy row is blocked because BAZEL command '{}' is not on PATH",
+        bazel
+    );
+    *blocked_reason = Some(error.to_string());
+    Err(error)
+}
+
+async fn spawn_zero_copy_streamer(
+    repo_root: &Path,
+    artifact_dir: &Path,
+    template: &ZeroCopyScenarioTemplate,
+    cli_args: &ScenarioCliArgs,
+) -> Result<ManagedProcess> {
+    let process_spec = ProcessSpec {
+        name: "streamer".to_string(),
+        workdir: repo_root.join("configurable-streamer"),
+        executable: repo_root
+            .join("target")
+            .join("debug")
+            .join("configurable-streamer"),
+        args: vec!["--config".to_string(), template.config_file.to_string()],
+        env: ZERO_COPY_STREAMER_ENV
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_string()))
+            .collect(),
+        log_file_name: "streamer.log".to_string(),
+    };
+
+    ManagedProcess::spawn(process_spec, repo_root, artifact_dir, cli_args.no_bootstrap).await
+}
+
+fn render_zero_copy_repro_command(
+    scenario_id: &str,
+    cli_args: &ScenarioCliArgs,
+    artifact_dir: &Path,
+) -> String {
+    let mut args = vec![
+        "cargo run -p transport-smoke-suite --bin".to_string(),
+        scenario_id.to_string(),
+        "--".to_string(),
+        format!(
+            "--artifacts-root {}",
+            shell_escape(
+                artifact_dir
+                    .parent()
+                    .unwrap_or(artifact_dir)
+                    .display()
+                    .to_string()
+                    .as_str()
+            )
+        ),
+        format!("--send-count {}", cli_args.send_count),
+        format!("--send-interval-ms {}", cli_args.send_interval_ms),
+    ];
+
+    if cli_args.skip_build {
+        args.push("--skip-build".to_string());
+    }
+    if cli_args.no_bootstrap {
+        args.push("--no-bootstrap".to_string());
+    }
+    if let Some(claims_path) = &cli_args.claims_path {
+        args.push(format!(
+            "--claims-path {}",
+            shell_escape(claims_path.display().to_string().as_str())
+        ));
+    }
+    if let Some(expected_branch) = &cli_args.expected_branch {
+        args.push(format!(
+            "--expected-branch {}",
+            shell_escape(expected_branch)
+        ));
+    }
+    if let Some(scenario_timeout_secs) = cli_args.scenario_timeout_secs {
+        args.push(format!("--scenario-timeout-secs {}", scenario_timeout_secs));
+    }
+
+    args.join(" ")
+}
+
+fn write_zero_copy_matrix_row_artifact(
+    repo_root: &Path,
+    artifact_dir: &Path,
+    template: &ZeroCopyScenarioTemplate,
+    classification: ScenarioClassification,
+    failure_reason: Option<String>,
+    streamer_process: &Option<ManagedProcess>,
+) -> Result<PathBuf> {
+    let artifact_path = artifact_dir.join("zero-copy-matrix-row.json");
+    let row = ZeroCopyMatrixRowArtifact {
+        schema_version: "1.0",
+        scenario_id: template.id.to_string(),
+        row_description: template.row_description.to_string(),
+        classification,
+        failure_reason,
+        config_file: format!("configurable-streamer/{}", template.config_file),
+        cargo_features: split_features(template.cargo_features),
+        selected_route: template.selected_route.map(route_to_artifact),
+        configured_routes: template
+            .configured_routes
+            .iter()
+            .copied()
+            .map(route_to_artifact)
+            .collect(),
+        payload_bytes: PayloadProbeArtifact {
+            observed_payload_bytes: 0,
+            probe: "startup_only",
+            note: "09D3 validates native zero-copy example startup and route wiring; no payload sender is introduced in this scoped harness branch",
+        },
+        metadata: MetadataProbeArtifact {
+            observed_frame_metadata: false,
+            probe: "startup_only",
+            note: "frame metadata is not observed because the row does not inject payload traffic",
+        },
+        route_diagnostics: template
+            .configured_routes
+            .iter()
+            .copied()
+            .map(route_to_diagnostic_artifact)
+            .collect(),
+        listener_cleanup: ListenerCleanupArtifact {
+            teardown_phase_recorded: true,
+            process_exit_status: streamer_process
+                .as_ref()
+                .and_then(|process| process.exit_status_code),
+            cleanup_signal: "SIGINT_then_SIGTERM_if_needed",
+            note: "scenario teardown terminates the configurable-streamer process group and verifies process exit",
+        },
+        raw_logs: streamer_process
+            .as_ref()
+            .map(|process| {
+                vec![RawLogArtifact {
+                    name: process.name.clone(),
+                    path: process.log_path.display().to_string(),
+                }]
+            })
+            .unwrap_or_default(),
+        environment: ZeroCopyEnvironmentArtifact {
+            rust_log: ZERO_COPY_STREAMER_ENV
+                .iter()
+                .find_map(|(key, value)| (*key == "RUST_LOG").then_some((*value).to_string()))
+                .unwrap_or_default(),
+            mqtt_broker_required: true,
+            docker_compose_required: true,
+            lola_bundled_required: template.requires_lola_bundled,
+            bazel: template
+                .requires_lola_bundled
+                .then(|| std::env::var("BAZEL").unwrap_or_else(|_| DEFAULT_BAZEL_PATH.to_string())),
+        },
+        dependency_sources: dependency_sources(repo_root)?,
+    };
+
+    let payload = serde_json::to_string_pretty(&row).context("serialize zero-copy row artifact")?;
+    fs::write(&artifact_path, payload).with_context(|| {
+        format!(
+            "unable to write zero-copy matrix row artifact {}",
+            artifact_path.display()
+        )
+    })?;
+    Ok(artifact_path)
+}
+
+fn split_features(features: &str) -> Vec<String> {
+    features
+        .split(',')
+        .map(str::trim)
+        .filter(|feature| !feature.is_empty())
+        .map(ToString::to_string)
+        .collect()
+}
+
+fn route_to_artifact(route: ZeroCopyRouteTemplate) -> ZeroCopyRouteArtifact {
+    ZeroCopyRouteArtifact {
+        ingress: route.ingress.to_string(),
+        ingress_authority: route.ingress_authority.to_string(),
+        egress: route.egress.to_string(),
+        egress_authority: route.egress_authority.to_string(),
+    }
+}
+
+fn route_to_diagnostic_artifact(route: ZeroCopyRouteTemplate) -> RouteDiagnosticArtifact {
+    RouteDiagnosticArtifact {
+        route_kind: "copy_minimized",
+        ingress: route.ingress.to_string(),
+        ingress_authority: route.ingress_authority.to_string(),
+        egress: route.egress.to_string(),
+        egress_authority: route.egress_authority.to_string(),
+        diagnostic_source: "09D2 config forwarding plus successful configurable-streamer readiness",
+    }
+}
+
+fn dependency_sources(repo_root: &Path) -> Result<Vec<DependencySourceArtifact>> {
+    let lock_path = repo_root.join("Cargo.lock");
+    let lock_contents = fs::read_to_string(&lock_path)
+        .with_context(|| format!("unable to read {}", lock_path.display()))?;
+    let packages = [
+        "up-rust",
+        "up-transport-zenoh",
+        "up-transport-iceoryx2-rust",
+        "up-transport-lola-rust",
+        "up-transport-mqtt5",
+        "up-streamer",
+        "configurable-streamer",
+    ];
+    Ok(packages
+        .iter()
+        .map(|package| dependency_source_from_lock(&lock_contents, package))
+        .collect())
+}
+
+fn dependency_source_from_lock(lock_contents: &str, package: &str) -> DependencySourceArtifact {
+    let package_marker = format!("name = \"{package}\"");
+    let mut lines = lock_contents.lines();
+    while let Some(line) = lines.next() {
+        if line.trim() != package_marker {
+            continue;
+        }
+
+        let mut version = None;
+        let mut source = None;
+        for line in lines.by_ref() {
+            let line = line.trim();
+            if line == "[[package]]" {
+                break;
+            }
+            if let Some(value) = line.strip_prefix("version = ") {
+                version = Some(unquote_lock_value(value));
+            }
+            if let Some(value) = line.strip_prefix("source = ") {
+                source = Some(unquote_lock_value(value));
+            }
+        }
+
+        return DependencySourceArtifact {
+            package: package.to_string(),
+            source,
+            version,
+        };
+    }
+
+    DependencySourceArtifact {
+        package: package.to_string(),
+        source: None,
+        version: None,
+    }
+}
+
+fn unquote_lock_value(value: &str) -> String {
+    value.trim_matches('"').to_string()
 }
 
 fn render_repro_command(
@@ -1367,10 +2384,13 @@ where
 }
 
 pub fn scenario_ids_for_transport(transport_family: TransportFamily) -> Vec<&'static str> {
-    SCENARIO_IDS
+    MATRIX_SCENARIO_IDS
         .iter()
         .copied()
         .filter(|scenario_id| {
+            if transport_family == TransportFamily::ZeroCopy {
+                return zero_copy_scenario_template(scenario_id).is_some();
+            }
             scenario_template(scenario_id)
                 .map(|template| template.transport_family == transport_family)
                 .unwrap_or(false)
