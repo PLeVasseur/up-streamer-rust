@@ -16,10 +16,10 @@
 use crate::observability::events;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use tracing::{debug, error};
-use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo};
+use tracing::debug;
+use up_rust::core::usubscription::SubscriptionInfo;
+use up_rust::UStatus;
 use up_rust::UUri;
-use up_rust::{UCode, UStatus};
 
 use crate::routing::uri_identity_key::UriIdentityKey;
 
@@ -28,18 +28,14 @@ const COMPONENT: &str = "subscription_cache";
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct SubscriptionIdentityKey {
     topic: UriIdentityKey,
-    subscriber: Option<UriIdentityKey>,
+    subscriber: UriIdentityKey,
 }
 
 impl From<&SubscriptionInformation> for SubscriptionIdentityKey {
     fn from(subscription_information: &SubscriptionInformation) -> Self {
         Self {
             topic: UriIdentityKey::from(&subscription_information.topic),
-            subscriber: subscription_information
-                .subscriber
-                .uri
-                .as_ref()
-                .map(UriIdentityKey::from),
+            subscriber: UriIdentityKey::from(&subscription_information.subscriber),
         }
     }
 }
@@ -49,7 +45,7 @@ pub(crate) type SubscriptionLookup = HashMap<SubscriptionIdentityKey, Subscripti
 #[derive(Clone)]
 pub(crate) struct SubscriptionInformation {
     pub topic: UUri,
-    pub subscriber: SubscriberInfo,
+    pub subscriber: UUri,
 }
 
 impl Eq for SubscriptionInformation {}
@@ -93,8 +89,8 @@ impl SubscriptionCache {
         merged_cache_map
     }
 
-    pub(crate) fn new(subscription_cache_map: FetchSubscriptionsResponse) -> Result<Self, UStatus> {
-        let input_rows = subscription_cache_map.subscriptions.len();
+    pub(crate) fn new(subscription_cache_map: Vec<SubscriptionInfo>) -> Result<Self, UStatus> {
+        let input_rows = subscription_cache_map.len();
         debug!(
             event = events::SUBSCRIPTION_SNAPSHOT_REBUILD_START,
             component = COMPONENT,
@@ -103,60 +99,15 @@ impl SubscriptionCache {
         );
 
         let mut subscription_cache_hash_map = HashMap::new();
-        for subscription in subscription_cache_map.subscriptions {
-            let topic = match subscription.topic.into_option() {
-                Some(topic) => topic,
-                None => {
-                    let err = UStatus::fail_with_code(
-                        UCode::INVALID_ARGUMENT,
-                        "Unable to retrieve topic".to_string(),
-                    );
-                    error!(
-                        event = events::SUBSCRIPTION_SNAPSHOT_REBUILD_FAILED,
-                        component = COMPONENT,
-                        reason = "missing_topic",
-                        err = %err,
-                        "subscription snapshot rebuild failed"
-                    );
-                    return Err(err);
-                }
-            };
-            let subscriber = match subscription.subscriber.into_option() {
-                Some(subscriber) => subscriber,
-                None => {
-                    let err = UStatus::fail_with_code(
-                        UCode::INVALID_ARGUMENT,
-                        "Unable to retrieve topic".to_string(),
-                    );
-                    error!(
-                        event = events::SUBSCRIPTION_SNAPSHOT_REBUILD_FAILED,
-                        component = COMPONENT,
-                        reason = "missing_subscriber",
-                        err = %err,
-                        "subscription snapshot rebuild failed"
-                    );
-                    return Err(err);
-                }
-            };
+        for subscription in subscription_cache_map {
+            let topic = subscription.topic().clone();
+            let subscriber = subscription.subscriber().clone();
 
             let subscription_information = SubscriptionInformation { topic, subscriber };
-            let subscriber_authority_name = match subscription_information.subscriber.uri.as_ref() {
-                Some(uri) => uri.authority_name(),
-                None => {
-                    let err = UStatus::fail_with_code(
-                        UCode::INVALID_ARGUMENT,
-                        "Unable to retrieve authority name",
-                    );
-                    error!(
-                        event = events::SUBSCRIPTION_SNAPSHOT_REBUILD_FAILED,
-                        component = COMPONENT,
-                        reason = "missing_subscriber_authority",
-                        err = %err,
-                        "subscription snapshot rebuild failed"
-                    );
-                    return Err(err);
-                }
-            };
+            let subscriber_authority_name = subscription_information
+                .subscriber
+                .authority_name()
+                .to_string();
             let subscription_identity = SubscriptionIdentityKey::from(&subscription_information);
             let authority_subscriptions = subscription_cache_hash_map
                 .entry(subscriber_authority_name)
@@ -239,19 +190,17 @@ impl SubscriptionCache {
 mod tests {
     use super::SubscriptionCache;
     use std::str::FromStr;
-    use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo, Subscription};
+    use up_rust::core::usubscription::{SubscriptionInfo, SubscriptionStatus};
     use up_rust::UUri;
 
-    fn subscription(topic: &str, subscriber: &str) -> Subscription {
-        Subscription {
-            topic: Some(UUri::from_str(topic).expect("valid topic URI")).into(),
-            subscriber: Some(SubscriberInfo {
-                uri: Some(UUri::from_str(subscriber).expect("valid subscriber URI")).into(),
-                ..Default::default()
-            })
-            .into(),
-            ..Default::default()
-        }
+    fn subscription(topic: &str, subscriber: &str) -> SubscriptionInfo {
+        SubscriptionInfo::new(
+            UUri::from_str(topic).expect("valid topic URI"),
+            UUri::from_str(subscriber).expect("valid subscriber URI"),
+            SubscriptionStatus::Subscribed,
+            None,
+            None,
+        )
     }
 
     fn topics_for_authority(cache: &SubscriptionCache, authority: &str) -> Vec<UUri> {
@@ -267,13 +216,10 @@ mod tests {
 
     #[test]
     fn same_subscriber_different_topics_coexist() {
-        let cache = SubscriptionCache::new(FetchSubscriptionsResponse {
-            subscriptions: vec![
-                subscription("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234"),
-                subscription("//authority-a/5BA1/1/8001", "//authority-b/5678/1/1234"),
-            ],
-            ..Default::default()
-        })
+        let cache = SubscriptionCache::new(vec![
+            subscription("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234"),
+            subscription("//authority-a/5BA1/1/8001", "//authority-b/5678/1/1234"),
+        ])
         .expect("cache should build");
 
         let topics = topics_for_authority(&cache, "authority-b");
@@ -291,22 +237,16 @@ mod tests {
 
     #[test]
     fn rebuild_reflects_removed_rows() {
-        let initial_cache = SubscriptionCache::new(FetchSubscriptionsResponse {
-            subscriptions: vec![
-                subscription("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234"),
-                subscription("//authority-a/5BA1/1/8001", "//authority-b/5678/1/1234"),
-            ],
-            ..Default::default()
-        })
+        let initial_cache = SubscriptionCache::new(vec![
+            subscription("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234"),
+            subscription("//authority-a/5BA1/1/8001", "//authority-b/5678/1/1234"),
+        ])
         .expect("initial cache should build");
 
-        let rebuilt_cache = SubscriptionCache::new(FetchSubscriptionsResponse {
-            subscriptions: vec![subscription(
-                "//authority-a/5BA1/1/8001",
-                "//authority-b/5678/1/1234",
-            )],
-            ..Default::default()
-        })
+        let rebuilt_cache = SubscriptionCache::new(vec![subscription(
+            "//authority-a/5BA1/1/8001",
+            "//authority-b/5678/1/1234",
+        )])
         .expect("rebuilt cache should build");
 
         assert_eq!(topics_for_authority(&initial_cache, "authority-b").len(), 2);
@@ -321,13 +261,10 @@ mod tests {
 
     #[test]
     fn wildcard_lookup_merges_exact_and_wildcard_rows() {
-        let cache = SubscriptionCache::new(FetchSubscriptionsResponse {
-            subscriptions: vec![
-                subscription("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234"),
-                subscription("//authority-a/5BA0/1/8002", "//*/5678/1/1234"),
-            ],
-            ..Default::default()
-        })
+        let cache = SubscriptionCache::new(vec![
+            subscription("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234"),
+            subscription("//authority-a/5BA0/1/8002", "//*/5678/1/1234"),
+        ])
         .expect("cache should build");
 
         let merged_for_b = cache

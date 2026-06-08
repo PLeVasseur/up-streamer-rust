@@ -19,11 +19,16 @@ edition.workspace = true
 keywords.workspace = true
 license.workspace = true
 
+[features]
+default = []
+owned-frame-transport = ["up-rust/owned-frame-transport"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 tokio = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 tracing = { workspace = true }
 up-rust = { workspace = true, features = ["usubscription"] }
 protobuf = { version = "3.3", features = ["with-bytes"] }

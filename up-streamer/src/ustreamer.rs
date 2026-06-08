@@ -16,26 +16,95 @@ use crate::control_plane::route_table::RouteTable;
 use crate::data_plane::egress_pool::EgressRoutePool;
 use crate::data_plane::ingress_registry::IngressRouteRegistry;
 use crate::endpoint::Endpoint;
+#[cfg(feature = "owned-frame-transport")]
+use crate::endpoint::OwnedFrameEndpoint;
 use crate::observability::events;
+#[cfg(feature = "owned-frame-transport")]
+use crate::routing::authority_filter::authority_to_wildcard_filter;
+#[cfg(feature = "owned-frame-transport")]
+use crate::routing::publish_resolution::PublishRouteResolver;
 use crate::routing::subscription_directory::SubscriptionDirectory;
 use crate::subscription_sync_health::SubscriptionSyncHealth;
+#[cfg(feature = "owned-frame-transport")]
+use std::collections::HashMap;
 use std::sync::Arc;
+#[cfg(feature = "owned-frame-transport")]
+use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
-use up_rust::core::usubscription::{
-    FetchSubscriptionsRequest, FetchSubscriptionsResponse, USubscription,
+use up_rust::core::usubscription::{SubscriptionInfo, USubscription};
+#[cfg(feature = "owned-frame-transport")]
+use up_rust::{
+    try_project_frame_to_umessage, try_project_umessage_to_frame_metadata, UOwnedFrame,
+    UOwnedListener,
 };
-use up_rust::{UCode, UStatus};
+use up_rust::{UCode, UStatus, UUri};
 
 const COMPONENT: &str = "ustreamer";
 
+#[cfg(feature = "owned-frame-transport")]
+type OwnedListenerFilter = (UUri, Option<UUri>);
+
+#[cfg(feature = "owned-frame-transport")]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct OwnedRouteKey {
+    ingress_name: String,
+    ingress_authority: String,
+    egress_name: String,
+    egress_authority: String,
+}
+
+#[cfg(feature = "owned-frame-transport")]
+impl OwnedRouteKey {
+    fn new(ingress: &OwnedFrameEndpoint, egress: &OwnedFrameEndpoint) -> Self {
+        Self {
+            ingress_name: ingress.name.clone(),
+            ingress_authority: ingress.authority.clone(),
+            egress_name: egress.name.clone(),
+            egress_authority: egress.authority.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "owned-frame-transport")]
+struct OwnedRouteBinding {
+    ingress: OwnedFrameEndpoint,
+    tx: mpsc::Sender<UOwnedFrame>,
+    listener: Arc<OwnedIngressForwarder>,
+    registered_filters: Vec<OwnedListenerFilter>,
+    dispatch_task: tokio::task::JoinHandle<()>,
+}
+
+#[cfg(feature = "owned-frame-transport")]
+struct OwnedIngressForwarder {
+    tx: mpsc::Sender<UOwnedFrame>,
+}
+
+#[cfg(feature = "owned-frame-transport")]
+#[async_trait::async_trait]
+impl UOwnedListener for OwnedIngressForwarder {
+    async fn on_receive_owned(&self, frame: UOwnedFrame) {
+        if self.tx.send(frame).await.is_err() {
+            warn!(
+                event = "owned_ingress_queue_closed",
+                component = COMPONENT,
+                "owned-frame route ingress queue is closed"
+            );
+        }
+    }
+}
+
 pub struct UStreamer {
     name: String,
+    #[cfg(feature = "owned-frame-transport")]
+    message_queue_size: usize,
     route_table: RouteTable,
     egress_route_pool: EgressRoutePool,
     ingress_route_registry: IngressRouteRegistry,
     subscription_directory: SubscriptionDirectory,
     usubscription: Arc<dyn USubscription>,
     subscription_sync_health: SubscriptionSyncHealth,
+    #[cfg(feature = "owned-frame-transport")]
+    owned_routes: HashMap<OwnedRouteKey, OwnedRouteBinding>,
 }
 
 impl UStreamer {
@@ -46,6 +115,12 @@ impl UStreamer {
         usubscription: Arc<dyn USubscription>,
     ) -> Result<Self, UStatus> {
         let name = name.to_string();
+        #[cfg(feature = "owned-frame-transport")]
+        let message_queue_size = usize::from(message_queue_size.max(1));
+        #[cfg(not(feature = "owned-frame-transport"))]
+        let route_queue_size = message_queue_size as usize;
+        #[cfg(feature = "owned-frame-transport")]
+        let route_queue_size = message_queue_size;
         debug!(
             event = "ustreamer_create",
             component = COMPONENT,
@@ -55,12 +130,16 @@ impl UStreamer {
 
         let mut streamer = Self {
             name,
+            #[cfg(feature = "owned-frame-transport")]
+            message_queue_size,
             route_table: RouteTable::new(),
-            egress_route_pool: EgressRoutePool::new(message_queue_size as usize),
+            egress_route_pool: EgressRoutePool::new(route_queue_size),
             ingress_route_registry: IngressRouteRegistry::new(),
             subscription_directory: SubscriptionDirectory::empty(),
             usubscription,
             subscription_sync_health: SubscriptionSyncHealth::default(),
+            #[cfg(feature = "owned-frame-transport")]
+            owned_routes: HashMap::new(),
         };
 
         if let Err(err) = streamer.refresh_subscriptions().await {
@@ -90,7 +169,7 @@ impl UStreamer {
 
     async fn apply_subscription_snapshot(
         &mut self,
-        snapshot: FetchSubscriptionsResponse,
+        snapshot: Vec<SubscriptionInfo>,
     ) -> Result<(), UStatus> {
         self.subscription_directory.apply_snapshot(snapshot).await
     }
@@ -98,7 +177,7 @@ impl UStreamer {
     pub async fn refresh_subscriptions(&mut self) -> Result<SubscriptionSyncHealth, UStatus> {
         let snapshot = match self
             .usubscription
-            .fetch_subscriptions(FetchSubscriptionsRequest::default())
+            .fetch_subscriptions_by_topic(&UUri::any())
             .await
         {
             Ok(snapshot) => snapshot,
@@ -128,6 +207,14 @@ impl UStreamer {
         )
     }
 
+    #[cfg(feature = "owned-frame-transport")]
+    fn owned_route_label(r#in: &OwnedFrameEndpoint, out: &OwnedFrameEndpoint) -> String {
+        format!(
+            "[in.name: {}, in.authority: {:?} ; out.name: {}, out.authority: {:?}]",
+            r#in.name, r#in.authority, out.name, out.authority
+        )
+    }
+
     #[inline(always)]
     fn fail_due_to_same_authority(
         &self,
@@ -138,7 +225,7 @@ impl UStreamer {
         action: &str,
     ) -> Result<(), UStatus> {
         let err = Err(UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
+            UCode::InvalidArgument,
             format!(
                 "{} are the same. Unable to {}.",
                 Self::route_label(r#in, out),
@@ -217,7 +304,7 @@ impl UStreamer {
                     "route add failed because route already exists"
                 );
                 Err(UStatus::fail_with_code(
-                    UCode::ALREADY_EXISTS,
+                    UCode::AlreadyExists,
                     "already exists",
                 ))
             }
@@ -234,7 +321,7 @@ impl UStreamer {
                     "route add failed during ingress registration"
                 );
                 Err(UStatus::fail_with_code(
-                    UCode::INVALID_ARGUMENT,
+                    UCode::InvalidArgument,
                     err.to_string(),
                 ))
             }
@@ -303,7 +390,7 @@ impl UStreamer {
                     reason = "not_found",
                     "route delete failed because route was not found"
                 );
-                Err(UStatus::fail_with_code(UCode::NOT_FOUND, "not found"))
+                Err(UStatus::fail_with_code(UCode::NotFound, "not found"))
             }
         }
     }
@@ -311,6 +398,222 @@ impl UStreamer {
     /// Deletes a previously registered unidirectional route.
     pub async fn delete_route(&mut self, r#in: Endpoint, out: Endpoint) -> Result<(), UStatus> {
         self.delete_route_ref(&r#in, &out).await
+    }
+
+    #[cfg(feature = "owned-frame-transport")]
+    async fn owned_route_filters(
+        &self,
+        in_authority: &str,
+        out_authority: &str,
+    ) -> Vec<OwnedListenerFilter> {
+        let mut filters = vec![(
+            authority_to_wildcard_filter(in_authority),
+            Some(authority_to_wildcard_filter(out_authority)),
+        )];
+        let (_, subscribers) = self
+            .subscription_directory
+            .lookup_route_subscribers_with_version(out_authority)
+            .await;
+        filters.extend(
+            PublishRouteResolver::derive_source_filters(in_authority, out_authority, &subscribers)
+                .into_values()
+                .map(|source| (source, None)),
+        );
+        filters
+    }
+
+    #[cfg(feature = "owned-frame-transport")]
+    async fn rollback_owned_registrations(
+        ingress: &OwnedFrameEndpoint,
+        listener: Arc<OwnedIngressForwarder>,
+        registered_filters: &[OwnedListenerFilter],
+    ) {
+        for (source_filter, sink_filter) in registered_filters {
+            if let Err(error) = ingress
+                .transport
+                .unregister_owned_listener(source_filter, sink_filter.as_ref(), listener.clone())
+                .await
+            {
+                warn!(
+                    event = "owned_route_listener_rollback_failed",
+                    component = COMPONENT,
+                    ingress = ingress.name.as_str(),
+                    ingress_authority = ingress.authority.as_str(),
+                    err = %error,
+                    "failed to roll back owned route listener registration"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "owned-frame-transport")]
+    async fn owned_dispatch_loop(
+        route_label: String,
+        egress: OwnedFrameEndpoint,
+        mut rx: mpsc::Receiver<UOwnedFrame>,
+    ) {
+        while let Some(frame) = rx.recv().await {
+            let frame = match try_project_frame_to_umessage(
+                frame.metadata().clone(),
+                frame.payload().cloned(),
+            )
+            .and_then(|message| {
+                let metadata = try_project_umessage_to_frame_metadata(&message)?;
+                UOwnedFrame::new(
+                    metadata,
+                    message.payload().map(bytes::Bytes::copy_from_slice),
+                )
+            }) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    warn!(
+                        event = "owned_route_frame_projection_failed",
+                        component = COMPONENT,
+                        route_label = route_label.as_str(),
+                        err = %error,
+                        "dropping owned frame that cannot round-trip through UMessage compatibility"
+                    );
+                    continue;
+                }
+            };
+
+            if let Err(error) = egress.transport.send_owned(frame).await {
+                warn!(
+                    event = "owned_route_egress_send_failed",
+                    component = COMPONENT,
+                    route_label = route_label.as_str(),
+                    egress = egress.name.as_str(),
+                    egress_authority = egress.authority.as_str(),
+                    err = %error,
+                    "owned route egress send failed"
+                );
+            }
+        }
+    }
+
+    /// Adds a feature-gated owned/copying route between owned-frame endpoints.
+    #[cfg(feature = "owned-frame-transport")]
+    pub async fn add_owned_route_ref(
+        &mut self,
+        ingress: &OwnedFrameEndpoint,
+        egress: &OwnedFrameEndpoint,
+    ) -> Result<(), UStatus> {
+        if ingress.authority == egress.authority {
+            return Err(UStatus::fail_with_code(
+                UCode::InvalidArgument,
+                "ingress and egress authorities must differ",
+            ));
+        }
+
+        let route_key = OwnedRouteKey::new(ingress, egress);
+        if self.owned_routes.contains_key(&route_key) {
+            return Err(UStatus::fail_with_code(
+                UCode::AlreadyExists,
+                "owned route already exists",
+            ));
+        }
+
+        let route_label = Self::owned_route_label(ingress, egress);
+        let filters = self
+            .owned_route_filters(&ingress.authority, &egress.authority)
+            .await;
+        let (tx, rx) = mpsc::channel::<UOwnedFrame>(self.message_queue_size);
+        let listener = Arc::new(OwnedIngressForwarder { tx: tx.clone() });
+        let mut registered_filters = Vec::with_capacity(filters.len());
+
+        for (source_filter, sink_filter) in filters {
+            if let Err(error) = ingress
+                .transport
+                .register_owned_listener(&source_filter, sink_filter.as_ref(), listener.clone())
+                .await
+            {
+                Self::rollback_owned_registrations(ingress, listener.clone(), &registered_filters)
+                    .await;
+                return Err(error);
+            }
+            registered_filters.push((source_filter, sink_filter));
+        }
+
+        let dispatch_task =
+            tokio::spawn(Self::owned_dispatch_loop(route_label, egress.clone(), rx));
+        self.owned_routes.insert(
+            route_key,
+            OwnedRouteBinding {
+                ingress: ingress.clone(),
+                tx,
+                listener,
+                registered_filters,
+                dispatch_task,
+            },
+        );
+
+        Ok(())
+    }
+
+    /// Adds a feature-gated owned/copying route between owned-frame endpoints.
+    #[cfg(feature = "owned-frame-transport")]
+    pub async fn add_owned_route(
+        &mut self,
+        ingress: OwnedFrameEndpoint,
+        egress: OwnedFrameEndpoint,
+    ) -> Result<(), UStatus> {
+        self.add_owned_route_ref(&ingress, &egress).await
+    }
+
+    /// Deletes a feature-gated owned/copying route between owned-frame endpoints.
+    #[cfg(feature = "owned-frame-transport")]
+    pub async fn delete_owned_route_ref(
+        &mut self,
+        ingress: &OwnedFrameEndpoint,
+        egress: &OwnedFrameEndpoint,
+    ) -> Result<(), UStatus> {
+        if ingress.authority == egress.authority {
+            return Err(UStatus::fail_with_code(
+                UCode::InvalidArgument,
+                "ingress and egress authorities must differ",
+            ));
+        }
+
+        let route_key = OwnedRouteKey::new(ingress, egress);
+        let binding = self
+            .owned_routes
+            .remove(&route_key)
+            .ok_or_else(|| UStatus::fail_with_code(UCode::NotFound, "owned route not found"))?;
+
+        for (source_filter, sink_filter) in &binding.registered_filters {
+            if let Err(error) = binding
+                .ingress
+                .transport
+                .unregister_owned_listener(
+                    source_filter,
+                    sink_filter.as_ref(),
+                    binding.listener.clone(),
+                )
+                .await
+            {
+                warn!(
+                    event = "owned_route_listener_unregister_failed",
+                    component = COMPONENT,
+                    ingress = binding.ingress.name.as_str(),
+                    ingress_authority = binding.ingress.authority.as_str(),
+                    err = %error,
+                    "owned route listener unregister failed"
+                );
+            }
+        }
+        drop(binding.tx);
+        binding.dispatch_task.abort();
+        Ok(())
+    }
+
+    /// Deletes a feature-gated owned/copying route between owned-frame endpoints.
+    #[cfg(feature = "owned-frame-transport")]
+    pub async fn delete_owned_route(
+        &mut self,
+        ingress: OwnedFrameEndpoint,
+        egress: OwnedFrameEndpoint,
+    ) -> Result<(), UStatus> {
+        self.delete_owned_route_ref(&ingress, &egress).await
     }
 }
 
@@ -322,19 +625,16 @@ mod tests {
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
     use up_rust::core::usubscription::{
-        FetchSubscribersRequest, FetchSubscribersResponse, FetchSubscriptionsRequest,
-        FetchSubscriptionsResponse, NotificationsRequest, ResetRequest, ResetResponse,
-        SubscriberInfo, Subscription, SubscriptionRequest, SubscriptionResponse, USubscription,
-        UnsubscribeRequest,
+        ResetReason, SubscriptionInfo, SubscriptionStatus, USubscription,
     };
     use up_rust::{UCode, UStatus, UUri};
 
     struct SequencedUSubscription {
-        responses: Mutex<VecDeque<Result<FetchSubscriptionsResponse, UStatus>>>,
+        responses: Mutex<VecDeque<Result<Vec<SubscriptionInfo>, UStatus>>>,
     }
 
     impl SequencedUSubscription {
-        fn new(responses: Vec<Result<FetchSubscriptionsResponse, UStatus>>) -> Self {
+        fn new(responses: Vec<Result<Vec<SubscriptionInfo>, UStatus>>) -> Self {
             Self {
                 responses: Mutex::new(VecDeque::from(responses)),
             }
@@ -342,7 +642,7 @@ mod tests {
 
         fn unsupported(operation: &str) -> UStatus {
             UStatus::fail_with_code(
-                UCode::UNIMPLEMENTED,
+                UCode::Unimplemented,
                 format!("{operation} is not used in this test stub"),
             )
         }
@@ -352,95 +652,77 @@ mod tests {
     impl USubscription for SequencedUSubscription {
         async fn subscribe(
             &self,
-            _subscription_request: SubscriptionRequest,
-        ) -> Result<SubscriptionResponse, UStatus> {
+            _topic: &UUri,
+            _expiration: Option<u64>,
+            _min_sample_period: Option<u32>,
+        ) -> Result<SubscriptionStatus, UStatus> {
             Err(Self::unsupported("subscribe"))
         }
 
-        async fn fetch_subscriptions(
+        async fn unsubscribe(&self, _topic: &UUri) -> Result<(), UStatus> {
+            Err(Self::unsupported("unsubscribe"))
+        }
+
+        async fn fetch_subscriptions_by_topic(
             &self,
-            _fetch_subscriptions_request: FetchSubscriptionsRequest,
-        ) -> Result<FetchSubscriptionsResponse, UStatus> {
+            _topic: &UUri,
+        ) -> Result<Vec<SubscriptionInfo>, UStatus> {
             self.responses
                 .lock()
                 .expect("provider queue lock should succeed")
                 .pop_front()
                 .unwrap_or_else(|| {
                     Err(UStatus::fail_with_code(
-                        UCode::UNAVAILABLE,
+                        UCode::Unavailable,
                         "no queued snapshot response",
                     ))
                 })
         }
 
-        async fn unsubscribe(
+        async fn fetch_subscriptions_by_subscriber(
             &self,
-            _unsubscribe_request: UnsubscribeRequest,
-        ) -> Result<(), UStatus> {
-            Err(Self::unsupported("unsubscribe"))
+            _subscriber: &UUri,
+        ) -> Result<Vec<SubscriptionInfo>, UStatus> {
+            Err(Self::unsupported("fetch_subscriptions_by_subscriber"))
         }
 
-        async fn register_for_notifications(
-            &self,
-            _notifications_register_request: NotificationsRequest,
-        ) -> Result<(), UStatus> {
+        async fn register_for_notifications(&self, _topic: &UUri) -> Result<(), UStatus> {
             Ok(())
         }
 
-        async fn unregister_for_notifications(
-            &self,
-            _notifications_unregister_request: NotificationsRequest,
-        ) -> Result<(), UStatus> {
+        async fn unregister_for_notifications(&self, _topic: &UUri) -> Result<(), UStatus> {
             Ok(())
         }
 
-        async fn fetch_subscribers(
-            &self,
-            _fetch_subscribers_request: FetchSubscribersRequest,
-        ) -> Result<FetchSubscribersResponse, UStatus> {
+        async fn fetch_subscribers(&self, _topic: &UUri) -> Result<Vec<UUri>, UStatus> {
             Err(Self::unsupported("fetch_subscribers"))
         }
 
-        async fn reset(&self, _reset_request: ResetRequest) -> Result<ResetResponse, UStatus> {
-            Ok(ResetResponse::default())
+        async fn reset(
+            &self,
+            _reason: ResetReason,
+            _message: Option<String>,
+            _before: Option<u64>,
+        ) -> Result<(), UStatus> {
+            Ok(())
         }
     }
 
-    fn subscription(topic: &str, subscriber: &str) -> Subscription {
-        Subscription {
-            topic: Some(topic.parse::<UUri>().expect("valid topic URI")).into(),
-            subscriber: Some(SubscriberInfo {
-                uri: Some(subscriber.parse::<UUri>().expect("valid subscriber URI")).into(),
-                ..Default::default()
-            })
-            .into(),
-            ..Default::default()
-        }
+    fn subscription(topic: &str, subscriber: &str) -> SubscriptionInfo {
+        SubscriptionInfo::new(
+            topic.parse::<UUri>().expect("valid topic URI"),
+            subscriber.parse::<UUri>().expect("valid subscriber URI"),
+            SubscriptionStatus::Subscribed,
+            None,
+            None,
+        )
     }
 
-    fn valid_snapshot() -> FetchSubscriptionsResponse {
-        FetchSubscriptionsResponse {
-            subscriptions: vec![subscription(
-                "//authority-a/5BA0/1/8001",
-                "//authority-b/5678/1/1234",
-            )],
-            ..Default::default()
-        }
-    }
-
-    fn invalid_snapshot_missing_topic() -> FetchSubscriptionsResponse {
-        FetchSubscriptionsResponse {
-            subscriptions: vec![Subscription {
-                topic: None.into(),
-                subscriber: Some(SubscriberInfo {
-                    uri: Some("//authority-b/5678/1/1234".parse::<UUri>().unwrap()).into(),
-                    ..Default::default()
-                })
-                .into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        }
+    fn valid_snapshot() -> Vec<SubscriptionInfo> {
+        vec![subscription(
+            "//authority-a/5BA0/1/8001",
+            "//authority-b/5678/1/1234",
+        )]
     }
 
     #[test]
@@ -456,7 +738,7 @@ mod tests {
     async fn startup_fetch_failure_is_non_fatal_and_sets_first_failed_attempt() {
         let usubscription: Arc<dyn USubscription> =
             Arc::new(SequencedUSubscription::new(vec![Err(
-                UStatus::fail_with_code(UCode::UNAVAILABLE, "simulated bootstrap failure"),
+                UStatus::fail_with_code(UCode::Unavailable, "simulated bootstrap failure"),
             )]));
 
         let streamer = UStreamer::new("startup-failure", 16, usubscription)
@@ -474,7 +756,7 @@ mod tests {
     async fn refresh_success_returns_health_and_rolls_previous_attempt_state() {
         let usubscription: Arc<dyn USubscription> = Arc::new(SequencedUSubscription::new(vec![
             Err(UStatus::fail_with_code(
-                UCode::UNAVAILABLE,
+                UCode::Unavailable,
                 "first bootstrap failure",
             )),
             Ok(valid_snapshot()),
@@ -502,7 +784,7 @@ mod tests {
         let usubscription: Arc<dyn USubscription> = Arc::new(SequencedUSubscription::new(vec![
             Ok(valid_snapshot()),
             Err(UStatus::fail_with_code(
-                UCode::UNAVAILABLE,
+                UCode::Unavailable,
                 "refresh failure",
             )),
         ]));
@@ -521,22 +803,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failed_refresh_apply_marks_attempt_failed_after_prior_success() {
+    async fn repeated_failed_refresh_tracks_previous_failed_attempt_after_prior_success() {
         let usubscription: Arc<dyn USubscription> = Arc::new(SequencedUSubscription::new(vec![
             Ok(valid_snapshot()),
-            Ok(invalid_snapshot_missing_topic()),
+            Err(UStatus::fail_with_code(
+                UCode::Unavailable,
+                "first refresh failure",
+            )),
+            Err(UStatus::fail_with_code(
+                UCode::Unavailable,
+                "second refresh failure",
+            )),
         ]));
 
-        let mut streamer = UStreamer::new("refresh-apply-failure", 16, usubscription)
+        let mut streamer = UStreamer::new("refresh-repeated-failure", 16, usubscription)
             .await
             .expect("startup should succeed");
 
-        let refresh_result = streamer.refresh_subscriptions().await;
-        assert!(refresh_result.is_err());
+        assert!(streamer.refresh_subscriptions().await.is_err());
+        assert!(streamer.refresh_subscriptions().await.is_err());
 
         let health = streamer.subscription_sync_health();
         assert_eq!(health.last_attempt_succeeded, Some(false));
-        assert_eq!(health.previous_attempt_succeeded, Some(true));
+        assert_eq!(health.previous_attempt_succeeded, Some(false));
         assert!(health.last_success_at.is_some());
     }
 }

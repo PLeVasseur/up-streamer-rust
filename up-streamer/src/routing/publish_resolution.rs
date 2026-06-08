@@ -50,9 +50,13 @@ impl PublishSourceFilterCacheKey {
 pub(crate) struct PublishRouteResolver;
 
 impl PublishRouteResolver {
+    fn topic_uentity_id(topic: &UUri) -> u32 {
+        (u32::from(topic.uentity_instance_id()) << 16) | u32::from(topic.uentity_type_id())
+    }
+
     fn topic_projection_key(topic: &UUri) -> (u32, u8, u16) {
         (
-            topic.ue_id,
+            Self::topic_uentity_id(topic),
             topic.uentity_major_version(),
             topic.resource_id(),
         )
@@ -60,7 +64,7 @@ impl PublishRouteResolver {
 
     /// Returns `true` when a subscription topic can originate from the ingress authority.
     fn topic_matches_ingress_authority(ingress_authority: &str, topic: &UUri) -> bool {
-        topic.has_wildcard_authority() || topic.authority_name().as_str() == ingress_authority
+        topic.has_wildcard_authority() || topic.authority_name() == ingress_authority
     }
 
     /// Builds a single publish source filter for a subscriber topic when applicable.
@@ -84,7 +88,7 @@ impl PublishRouteResolver {
 
         match UUri::try_from_parts(
             ingress_authority,
-            topic.ue_id,
+            Self::topic_uentity_id(topic),
             topic.uentity_major_version(),
             topic.resource_id(),
         ) {
@@ -143,16 +147,12 @@ mod tests {
     };
     use std::collections::HashMap;
     use std::str::FromStr;
-    use up_rust::core::usubscription::SubscriberInfo;
     use up_rust::UUri;
 
     fn subscription_info(topic: &str, subscriber: &str) -> SubscriptionInformation {
         SubscriptionInformation {
             topic: UUri::from_str(topic).expect("valid topic UUri"),
-            subscriber: SubscriberInfo {
-                uri: Some(UUri::from_str(subscriber).expect("valid subscriber UUri")).into(),
-                ..Default::default()
-            },
+            subscriber: UUri::from_str(subscriber).expect("valid subscriber UUri"),
         }
     }
 
@@ -191,7 +191,8 @@ mod tests {
         .expect("wildcard topic should resolve");
 
         assert_eq!(source.authority_name(), "authority-c");
-        assert_eq!(source.ue_id, topic.ue_id);
+        assert_eq!(source.uentity_instance_id(), topic.uentity_instance_id());
+        assert_eq!(source.uentity_type_id(), topic.uentity_type_id());
         assert_eq!(
             source.uentity_major_version(),
             topic.uentity_major_version()

@@ -31,7 +31,7 @@ impl UTransport for NoopTransport {
         _sink_filter: Option<&UUri>,
     ) -> Result<UMessage, UStatus> {
         Err(UStatus::fail_with_code(
-            UCode::UNIMPLEMENTED,
+            UCode::Unimplemented,
             "not used in tests",
         ))
     }
@@ -87,7 +87,7 @@ async fn add_delete_route_contract_duplicate_and_missing_rules() {
             .add_route(local_endpoint.clone(), remote_endpoint.clone())
             .await,
         Err(UStatus::fail_with_code(
-            UCode::ALREADY_EXISTS,
+            UCode::AlreadyExists,
             "already exists"
         ))
     );
@@ -100,7 +100,7 @@ async fn add_delete_route_contract_duplicate_and_missing_rules() {
     );
     assert_eq!(
         streamer.delete_route(local_endpoint, remote_endpoint).await,
-        Err(UStatus::fail_with_code(UCode::NOT_FOUND, "not found"))
+        Err(UStatus::fail_with_code(UCode::NotFound, "not found"))
     );
 }
 
@@ -117,17 +117,11 @@ async fn add_delete_route_contract_rejects_same_authority() {
         .add_route(endpoint_a.clone(), endpoint_b.clone())
         .await
         .expect_err("same-authority add should fail");
-    assert_eq!(
-        add_error.code.enum_value_or_default(),
-        UCode::INVALID_ARGUMENT
-    );
+    assert_eq!(add_error.get_code(), UCode::InvalidArgument);
 
     let delete_error = streamer
         .delete_route(endpoint_a, endpoint_b)
         .await
         .expect_err("same-authority delete should fail");
-    assert_eq!(
-        delete_error.code.enum_value_or_default(),
-        UCode::INVALID_ARGUMENT
-    );
+    assert_eq!(delete_error.get_code(), UCode::InvalidArgument);
 }

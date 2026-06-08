@@ -178,6 +178,8 @@ mod control_plane;
 mod data_plane;
 mod endpoint;
 pub use endpoint::Endpoint;
+#[cfg(feature = "owned-frame-transport")]
+pub use endpoint::{OwnedFrameEndpoint, TransportMode};
 
 mod subscription_sync_health;
 pub use subscription_sync_health::SubscriptionSyncHealth;

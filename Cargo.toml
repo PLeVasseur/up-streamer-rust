@@ -35,6 +35,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 async-trait = { version = "0.1" }
+bytes = { version = "1.11" }
 clap = { version = "4.5" }
 futures = { version = "0.3.30" }
 lazy_static = { version = "1.5.0" }
@@ -52,8 +53,8 @@ tokio = { version = "1.44", default-features = false, features = [
     "macros",
 ] }
 protobuf = { version = "3.7.2", features = ["with-bytes"] }
-up-rust = { version = "0.9", default-features = false }
-up-transport-zenoh = { version = "0.9.0" }
+up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "3467db44c427b0a7bd793ce65eeadaef205ca88d", default-features = false }
+up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "e5d7082e37ed5069f08b48fa92ebcd130bedad20" }
 up-transport-vsomeip = { git = "https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust", rev = "278ab26415559d6cb61f40facd21de822032cc83", default-features = false }
 up-transport-mqtt5 = { version = "0.4.0" }
 zenoh = { version = "1.2.1", features = [
