@@ -13,22 +13,37 @@
 
 use crate::control_plane::route_lifecycle::{AddRouteError, RemoveRouteError, RouteLifecycle};
 use crate::control_plane::route_table::{RouteKey, RouteTable};
+#[cfg(feature = "experimental-copy-minimized-routing")]
+use crate::copy_minimized::{copy_frame_payload_to_tx, loan_spec_for_copy_minimized};
 use crate::data_plane::egress_pool::EgressRoutePool;
 use crate::data_plane::ingress_registry::IngressRouteRegistry;
 use crate::endpoint::Endpoint;
 #[cfg(feature = "owned-frame-transport")]
 use crate::endpoint::OwnedFrameEndpoint;
+#[cfg(feature = "experimental-copy-minimized-routing")]
+use crate::endpoint::ZeroCopyFrameEndpoint;
 use crate::observability::events;
-#[cfg(feature = "owned-frame-transport")]
+#[cfg(any(
+    feature = "owned-frame-transport",
+    feature = "experimental-copy-minimized-routing"
+))]
 use crate::routing::authority_filter::authority_to_wildcard_filter;
-#[cfg(feature = "owned-frame-transport")]
+#[cfg(any(
+    feature = "owned-frame-transport",
+    feature = "experimental-copy-minimized-routing"
+))]
 use crate::routing::publish_resolution::PublishRouteResolver;
 use crate::routing::subscription_directory::SubscriptionDirectory;
 use crate::subscription_sync_health::SubscriptionSyncHealth;
+#[cfg(feature = "experimental-copy-minimized-routing")]
+use crate::CopyMinimizedRouteOptions;
 use crate::RouteDiagnostic;
 use std::collections::HashMap;
 use std::sync::Arc;
-#[cfg(feature = "owned-frame-transport")]
+#[cfg(any(
+    feature = "owned-frame-transport",
+    feature = "experimental-copy-minimized-routing"
+))]
 use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 use up_rust::core::usubscription::{SubscriptionInfo, USubscription};
@@ -38,11 +53,16 @@ use up_rust::{
     UOwnedListener,
 };
 use up_rust::{UCode, UStatus, UUri};
+#[cfg(feature = "experimental-copy-minimized-routing")]
+use up_rust::{UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport};
 
 const COMPONENT: &str = "ustreamer";
 
 #[cfg(feature = "owned-frame-transport")]
 type OwnedListenerFilter = (UUri, Option<UUri>);
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+type ZeroCopyListenerFilter = (UUri, Option<UUri>);
 
 #[cfg(feature = "owned-frame-transport")]
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -56,6 +76,31 @@ struct OwnedRouteKey {
 #[cfg(feature = "owned-frame-transport")]
 impl OwnedRouteKey {
     fn new(ingress: &OwnedFrameEndpoint, egress: &OwnedFrameEndpoint) -> Self {
+        Self {
+            ingress_name: ingress.name.clone(),
+            ingress_authority: ingress.authority.clone(),
+            egress_name: egress.name.clone(),
+            egress_authority: egress.authority.clone(),
+        }
+    }
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct ZeroCopyRouteKey {
+    ingress_name: String,
+    ingress_authority: String,
+    egress_name: String,
+    egress_authority: String,
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+impl ZeroCopyRouteKey {
+    fn new<I, E>(ingress: &ZeroCopyFrameEndpoint<I>, egress: &ZeroCopyFrameEndpoint<E>) -> Self
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
         Self {
             ingress_name: ingress.name.clone(),
             ingress_authority: ingress.authority.clone(),
@@ -80,6 +125,30 @@ struct OwnedIngressForwarder {
     tx: mpsc::Sender<UOwnedFrame>,
 }
 
+#[cfg(feature = "experimental-copy-minimized-routing")]
+struct CopyMinimizedRouteBinding<I, E>
+where
+    I: UZeroCopyTransport + Send + Sync + 'static,
+    I::Rx: UZeroCopyRxLease + Send + 'static,
+    E: UZeroCopyTransport + Send + Sync + 'static,
+{
+    ingress: ZeroCopyFrameEndpoint<I>,
+    _tx: mpsc::Sender<I::Rx>,
+    listener: Arc<ZeroCopyIngressForwarder<I::Rx>>,
+    registered_filters: Vec<ZeroCopyListenerFilter>,
+    dispatch_task: tokio::task::JoinHandle<()>,
+    diagnostic: RouteDiagnostic,
+    _egress: ZeroCopyFrameEndpoint<E>,
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+struct ZeroCopyIngressForwarder<Rx>
+where
+    Rx: UZeroCopyRxLease + Send + 'static,
+{
+    tx: mpsc::Sender<Rx>,
+}
+
 #[cfg(feature = "owned-frame-transport")]
 #[async_trait::async_trait]
 impl UOwnedListener for OwnedIngressForwarder {
@@ -94,9 +163,37 @@ impl UOwnedListener for OwnedIngressForwarder {
     }
 }
 
+#[cfg(feature = "experimental-copy-minimized-routing")]
+#[async_trait::async_trait]
+impl<Rx> UZeroCopyListener<Rx> for ZeroCopyIngressForwarder<Rx>
+where
+    Rx: UZeroCopyRxLease + Send + 'static,
+{
+    async fn on_receive_zero_copy(&self, frame: Rx) {
+        if self.tx.send(frame).await.is_err() {
+            warn!(
+                event = "copy_minimized_ingress_queue_closed",
+                component = COMPONENT,
+                "copy-minimized route ingress queue is closed"
+            );
+        }
+    }
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+#[async_trait::async_trait]
+trait CopyMinimizedRouteOps: Send {
+    fn diagnostic(&self) -> RouteDiagnostic;
+    async fn unregister_for_delete(&mut self) -> Result<(), UStatus>;
+    fn abort_dispatch(&self);
+}
+
 pub struct UStreamer {
     name: String,
-    #[cfg(feature = "owned-frame-transport")]
+    #[cfg(any(
+        feature = "owned-frame-transport",
+        feature = "experimental-copy-minimized-routing"
+    ))]
     message_queue_size: usize,
     route_table: RouteTable,
     route_diagnostics: HashMap<RouteKey, RouteDiagnostic>,
@@ -107,6 +204,8 @@ pub struct UStreamer {
     subscription_sync_health: SubscriptionSyncHealth,
     #[cfg(feature = "owned-frame-transport")]
     owned_routes: HashMap<OwnedRouteKey, OwnedRouteBinding>,
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    copy_minimized_routes: HashMap<ZeroCopyRouteKey, Box<dyn CopyMinimizedRouteOps>>,
 }
 
 impl UStreamer {
@@ -117,11 +216,20 @@ impl UStreamer {
         usubscription: Arc<dyn USubscription>,
     ) -> Result<Self, UStatus> {
         let name = name.to_string();
-        #[cfg(feature = "owned-frame-transport")]
+        #[cfg(any(
+            feature = "owned-frame-transport",
+            feature = "experimental-copy-minimized-routing"
+        ))]
         let message_queue_size = usize::from(message_queue_size.max(1));
-        #[cfg(not(feature = "owned-frame-transport"))]
+        #[cfg(not(any(
+            feature = "owned-frame-transport",
+            feature = "experimental-copy-minimized-routing"
+        )))]
         let route_queue_size = message_queue_size as usize;
-        #[cfg(feature = "owned-frame-transport")]
+        #[cfg(any(
+            feature = "owned-frame-transport",
+            feature = "experimental-copy-minimized-routing"
+        ))]
         let route_queue_size = message_queue_size;
         debug!(
             event = "ustreamer_create",
@@ -132,7 +240,10 @@ impl UStreamer {
 
         let mut streamer = Self {
             name,
-            #[cfg(feature = "owned-frame-transport")]
+            #[cfg(any(
+                feature = "owned-frame-transport",
+                feature = "experimental-copy-minimized-routing"
+            ))]
             message_queue_size,
             route_table: RouteTable::new(),
             route_diagnostics: HashMap::new(),
@@ -143,6 +254,8 @@ impl UStreamer {
             subscription_sync_health: SubscriptionSyncHealth::default(),
             #[cfg(feature = "owned-frame-transport")]
             owned_routes: HashMap::new(),
+            #[cfg(feature = "experimental-copy-minimized-routing")]
+            copy_minimized_routes: HashMap::new(),
         };
 
         if let Err(err) = streamer.refresh_subscriptions().await {
@@ -214,6 +327,13 @@ impl UStreamer {
                 .map(|binding| binding.diagnostic.clone()),
         );
 
+        #[cfg(feature = "experimental-copy-minimized-routing")]
+        diagnostics.extend(
+            self.copy_minimized_routes
+                .values()
+                .map(|binding| binding.diagnostic()),
+        );
+
         diagnostics.sort_by(|left, right| left.route.sort_key().cmp(&right.route.sort_key()));
         diagnostics
     }
@@ -228,9 +348,22 @@ impl UStreamer {
 
     #[cfg(feature = "owned-frame-transport")]
     fn owned_route_label(r#in: &OwnedFrameEndpoint, out: &OwnedFrameEndpoint) -> String {
+        Self::native_route_label_for_parts(&r#in.name, &r#in.authority, &out.name, &out.authority)
+    }
+
+    #[cfg(any(
+        feature = "owned-frame-transport",
+        feature = "experimental-copy-minimized-routing"
+    ))]
+    fn native_route_label_for_parts(
+        ingress_name: &str,
+        ingress_authority: &str,
+        egress_name: &str,
+        egress_authority: &str,
+    ) -> String {
         format!(
             "[in.name: {}, in.authority: {:?} ; out.name: {}, out.authority: {:?}]",
-            r#in.name, r#in.authority, out.name, out.authority
+            ingress_name, ingress_authority, egress_name, egress_authority
         )
     }
 
@@ -446,6 +579,28 @@ impl UStreamer {
         filters
     }
 
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    async fn copy_minimized_route_filters(
+        &self,
+        in_authority: &str,
+        out_authority: &str,
+    ) -> Vec<ZeroCopyListenerFilter> {
+        let mut filters = vec![(
+            authority_to_wildcard_filter(in_authority),
+            Some(authority_to_wildcard_filter(out_authority)),
+        )];
+        let (_, subscribers) = self
+            .subscription_directory
+            .lookup_route_subscribers_with_version(out_authority)
+            .await;
+        filters.extend(
+            PublishRouteResolver::derive_source_filters(in_authority, out_authority, &subscribers)
+                .into_values()
+                .map(|source| (source, None)),
+        );
+        filters
+    }
+
     #[cfg(feature = "owned-frame-transport")]
     async fn rollback_owned_registrations(
         ingress: &OwnedFrameEndpoint,
@@ -465,6 +620,37 @@ impl UStreamer {
                     ingress_authority = ingress.authority.as_str(),
                     err = %error,
                     "failed to roll back owned route listener registration"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    async fn rollback_zero_copy_registrations<I>(
+        ingress: &ZeroCopyFrameEndpoint<I>,
+        listener: Arc<ZeroCopyIngressForwarder<I::Rx>>,
+        registered_filters: &[ZeroCopyListenerFilter],
+    ) where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        I::Rx: UZeroCopyRxLease + Send + 'static,
+    {
+        for (source_filter, sink_filter) in registered_filters {
+            if let Err(error) = ingress
+                .transport
+                .unregister_zero_copy_listener(
+                    source_filter,
+                    sink_filter.as_ref(),
+                    listener.clone(),
+                )
+                .await
+            {
+                warn!(
+                    event = "copy_minimized_listener_rollback_failed",
+                    component = COMPONENT,
+                    ingress = ingress.name.as_str(),
+                    ingress_authority = ingress.authority.as_str(),
+                    err = %error,
+                    "failed to roll back copy-minimized listener registration"
                 );
             }
         }
@@ -511,6 +697,76 @@ impl UStreamer {
                     err = %error,
                     "owned route egress send failed"
                 );
+            }
+        }
+    }
+
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    async fn copy_minimized_dispatch_loop<E, Rx>(
+        route_label: String,
+        egress_name: String,
+        egress_authority: String,
+        egress_transport: Arc<E>,
+        options: CopyMinimizedRouteOptions,
+        mut rx: mpsc::Receiver<Rx>,
+    ) where
+        E: UZeroCopyTransport + Send + Sync + 'static,
+        Rx: UZeroCopyRxLease + Send + 'static,
+    {
+        while let Some(frame) = rx.recv().await {
+            let spec = match loan_spec_for_copy_minimized(&frame, options) {
+                Ok(spec) => spec,
+                Err(error) => {
+                    warn!(
+                        event = "copy_minimized_loan_spec_failed",
+                        component = COMPONENT,
+                        route_label = route_label.as_str(),
+                        egress = egress_name.as_str(),
+                        egress_authority = egress_authority.as_str(),
+                        err = %error,
+                        "copy-minimized route rejected ingress frame"
+                    );
+                    continue;
+                }
+            };
+
+            let payload_len = spec.payload_len();
+            let payload_alignment = spec.payload_alignment();
+            let send_result = match egress_transport.loan_tx(spec).await {
+                Ok(mut tx) => match copy_frame_payload_to_tx(&frame, &mut tx) {
+                    Ok(copy_diagnostics) => egress_transport
+                        .send_zero_copy(tx)
+                        .await
+                        .map(|()| copy_diagnostics),
+                    Err(error) => Err(error),
+                },
+                Err(error) => Err(error),
+            };
+
+            match send_result {
+                Ok((copied_payload_len, payload_slice_count)) => debug!(
+                    event = "copy_minimized_egress_send_ok",
+                    component = COMPONENT,
+                    route_label = route_label.as_str(),
+                    egress = egress_name.as_str(),
+                    egress_authority = egress_authority.as_str(),
+                    payload_len,
+                    payload_alignment,
+                    copied_payload_len,
+                    payload_slice_count,
+                    "copy-minimized route sent frame"
+                ),
+                Err(error) => warn!(
+                    event = "copy_minimized_egress_send_failed",
+                    component = COMPONENT,
+                    route_label = route_label.as_str(),
+                    egress = egress_name.as_str(),
+                    egress_authority = egress_authority.as_str(),
+                    payload_len,
+                    payload_alignment,
+                    err = %error,
+                    "copy-minimized route egress send failed"
+                ),
             }
         }
     }
@@ -640,6 +896,274 @@ impl UStreamer {
         egress: OwnedFrameEndpoint,
     ) -> Result<(), UStatus> {
         self.delete_owned_route_ref(&ingress, &egress).await
+    }
+
+    /// Adds a feature-gated copy-minimized route between zero-copy endpoints.
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    pub async fn add_copy_minimized_route_ref<I, E>(
+        &mut self,
+        ingress: &ZeroCopyFrameEndpoint<I>,
+        egress: &ZeroCopyFrameEndpoint<E>,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        I::Rx: UZeroCopyRxLease + Send + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        self.add_copy_minimized_route_ref_with_options(
+            ingress,
+            egress,
+            CopyMinimizedRouteOptions::default(),
+        )
+        .await
+    }
+
+    /// Adds a feature-gated copy-minimized route with explicit options.
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    pub async fn add_copy_minimized_route_ref_with_options<I, E>(
+        &mut self,
+        ingress: &ZeroCopyFrameEndpoint<I>,
+        egress: &ZeroCopyFrameEndpoint<E>,
+        options: CopyMinimizedRouteOptions,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        I::Rx: UZeroCopyRxLease + Send + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        if ingress.authority == egress.authority {
+            return Err(UStatus::fail_with_code(
+                UCode::InvalidArgument,
+                "ingress and egress authorities must differ",
+            ));
+        }
+
+        let route_key = ZeroCopyRouteKey::new(ingress, egress);
+        if self.copy_minimized_routes.contains_key(&route_key) {
+            return Err(UStatus::fail_with_code(
+                UCode::AlreadyExists,
+                "copy-minimized route already exists",
+            ));
+        }
+
+        let filters = self
+            .copy_minimized_route_filters(&ingress.authority, &egress.authority)
+            .await;
+        let binding = CopyMinimizedRouteBinding::new(
+            ingress,
+            egress,
+            filters,
+            self.message_queue_size,
+            options,
+        )
+        .await?;
+        self.copy_minimized_routes
+            .insert(route_key, Box::new(binding));
+        Ok(())
+    }
+
+    /// Adds a feature-gated copy-minimized route, consuming endpoint values after registration.
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    pub async fn add_copy_minimized_route<I, E>(
+        &mut self,
+        ingress: ZeroCopyFrameEndpoint<I>,
+        egress: ZeroCopyFrameEndpoint<E>,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        I::Rx: UZeroCopyRxLease + Send + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        self.add_copy_minimized_route_ref(&ingress, &egress).await
+    }
+
+    /// Adds a feature-gated copy-minimized route with explicit options, consuming endpoint values.
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    pub async fn add_copy_minimized_route_with_options<I, E>(
+        &mut self,
+        ingress: ZeroCopyFrameEndpoint<I>,
+        egress: ZeroCopyFrameEndpoint<E>,
+        options: CopyMinimizedRouteOptions,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        I::Rx: UZeroCopyRxLease + Send + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        self.add_copy_minimized_route_ref_with_options(&ingress, &egress, options)
+            .await
+    }
+
+    /// Deletes a feature-gated copy-minimized route between zero-copy endpoints.
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    pub async fn delete_copy_minimized_route_ref<I, E>(
+        &mut self,
+        ingress: &ZeroCopyFrameEndpoint<I>,
+        egress: &ZeroCopyFrameEndpoint<E>,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        I::Rx: UZeroCopyRxLease + Send + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        if ingress.authority == egress.authority {
+            return Err(UStatus::fail_with_code(
+                UCode::InvalidArgument,
+                "ingress and egress authorities must differ",
+            ));
+        }
+
+        let route_key = ZeroCopyRouteKey::new(ingress, egress);
+        let mut binding = self
+            .copy_minimized_routes
+            .remove(&route_key)
+            .ok_or_else(|| {
+                UStatus::fail_with_code(UCode::NotFound, "copy-minimized route not found")
+            })?;
+
+        if let Err(error) = binding.unregister_for_delete().await {
+            self.copy_minimized_routes.insert(route_key, binding);
+            return Err(error);
+        }
+        binding.abort_dispatch();
+        Ok(())
+    }
+
+    /// Deletes a feature-gated copy-minimized route between zero-copy endpoints.
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    pub async fn delete_copy_minimized_route<I, E>(
+        &mut self,
+        ingress: ZeroCopyFrameEndpoint<I>,
+        egress: ZeroCopyFrameEndpoint<E>,
+    ) -> Result<(), UStatus>
+    where
+        I: UZeroCopyTransport + Send + Sync + 'static,
+        I::Rx: UZeroCopyRxLease + Send + 'static,
+        E: UZeroCopyTransport + Send + Sync + 'static,
+    {
+        self.delete_copy_minimized_route_ref(&ingress, &egress)
+            .await
+    }
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+impl<I, E> CopyMinimizedRouteBinding<I, E>
+where
+    I: UZeroCopyTransport + Send + Sync + 'static,
+    I::Rx: UZeroCopyRxLease + Send + 'static,
+    E: UZeroCopyTransport + Send + Sync + 'static,
+{
+    async fn new(
+        ingress: &ZeroCopyFrameEndpoint<I>,
+        egress: &ZeroCopyFrameEndpoint<E>,
+        filters: Vec<ZeroCopyListenerFilter>,
+        message_queue_size: usize,
+        options: CopyMinimizedRouteOptions,
+    ) -> Result<Self, UStatus> {
+        let route_label = UStreamer::native_route_label_for_parts(
+            &ingress.name,
+            &ingress.authority,
+            &egress.name,
+            &egress.authority,
+        );
+        let (tx, rx) = mpsc::channel::<I::Rx>(message_queue_size);
+        let listener = Arc::new(ZeroCopyIngressForwarder { tx: tx.clone() });
+        let mut registered_filters = Vec::with_capacity(filters.len());
+        let diagnostic = RouteDiagnostic::copy_minimized(
+            &ingress.name,
+            &ingress.authority,
+            &egress.name,
+            &egress.authority,
+        );
+
+        for (source_filter, sink_filter) in filters {
+            if let Err(error) = ingress
+                .transport
+                .register_zero_copy_listener(&source_filter, sink_filter.as_ref(), listener.clone())
+                .await
+            {
+                UStreamer::rollback_zero_copy_registrations(
+                    ingress,
+                    listener.clone(),
+                    &registered_filters,
+                )
+                .await;
+                return Err(error);
+            }
+            registered_filters.push((source_filter, sink_filter));
+        }
+
+        let dispatch_task = tokio::spawn(UStreamer::copy_minimized_dispatch_loop(
+            route_label,
+            egress.name.clone(),
+            egress.authority.clone(),
+            egress.transport.clone(),
+            options,
+            rx,
+        ));
+
+        Ok(Self {
+            ingress: (*ingress).clone(),
+            _tx: tx,
+            listener,
+            registered_filters,
+            dispatch_task,
+            diagnostic,
+            _egress: (*egress).clone(),
+        })
+    }
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+#[async_trait::async_trait]
+impl<I, E> CopyMinimizedRouteOps for CopyMinimizedRouteBinding<I, E>
+where
+    I: UZeroCopyTransport + Send + Sync + 'static,
+    I::Rx: UZeroCopyRxLease + Send + 'static,
+    E: UZeroCopyTransport + Send + Sync + 'static,
+{
+    fn diagnostic(&self) -> RouteDiagnostic {
+        self.diagnostic.clone()
+    }
+
+    async fn unregister_for_delete(&mut self) -> Result<(), UStatus> {
+        let mut remaining = Vec::new();
+        let mut first_error = None;
+        for (source_filter, sink_filter) in self.registered_filters.drain(..) {
+            if let Err(error) = self
+                .ingress
+                .transport
+                .unregister_zero_copy_listener(
+                    &source_filter,
+                    sink_filter.as_ref(),
+                    self.listener.clone(),
+                )
+                .await
+            {
+                warn!(
+                    event = "copy_minimized_listener_unregister_failed",
+                    component = COMPONENT,
+                    ingress = self.ingress.name.as_str(),
+                    ingress_authority = self.ingress.authority.as_str(),
+                    err = %error,
+                    "copy-minimized route listener unregister failed"
+                );
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+                remaining.push((source_filter, sink_filter));
+            }
+        }
+
+        if let Some(error) = first_error {
+            self.registered_filters = remaining;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    fn abort_dispatch(&self) {
+        self.dispatch_task.abort();
     }
 }
 

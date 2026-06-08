@@ -15,6 +15,8 @@ use std::sync::Arc;
 #[cfg(feature = "owned-frame-transport")]
 use up_rust::UOwnedTransport;
 use up_rust::UTransport;
+#[cfg(feature = "experimental-copy-minimized-routing")]
+use up_rust::UZeroCopyTransport;
 
 ///
 /// [`Endpoint`] is defined as a combination of `authority_name` and
@@ -109,6 +111,31 @@ pub struct OwnedFrameEndpoint {
     pub(crate) transport: Arc<dyn UOwnedTransport>,
 }
 
+/// Named endpoint backed by a zero-copy transport for copy-minimized routes.
+#[cfg(feature = "experimental-copy-minimized-routing")]
+pub struct ZeroCopyFrameEndpoint<T>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+{
+    pub(crate) name: String,
+    pub(crate) authority: String,
+    pub(crate) transport: Arc<T>,
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+impl<T> Clone for ZeroCopyFrameEndpoint<T>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            authority: self.authority.clone(),
+            transport: self.transport.clone(),
+        }
+    }
+}
+
 impl Endpoint {
     pub fn new(name: &str, authority: &str, transport: Arc<dyn UTransport>) -> Self {
         Self {
@@ -116,6 +143,31 @@ impl Endpoint {
             authority: authority.to_string(),
             transport,
         }
+    }
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+impl<T> ZeroCopyFrameEndpoint<T>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+{
+    /// Creates an endpoint for feature-gated copy-minimized routes.
+    pub fn new(name: &str, authority: &str, transport: Arc<T>) -> Self {
+        Self {
+            name: name.to_string(),
+            authority: authority.to_string(),
+            transport,
+        }
+    }
+
+    /// Human-readable endpoint name used in diagnostics and route keys.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// uProtocol authority represented by this endpoint.
+    pub fn authority(&self) -> &str {
+        &self.authority
     }
 }
 

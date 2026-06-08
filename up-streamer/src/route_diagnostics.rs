@@ -31,13 +31,27 @@ pub struct DataPlaneRoute {
 }
 
 impl DataPlaneRoute {
-    pub(crate) fn from_endpoints(ingress: &Endpoint, egress: &Endpoint) -> Self {
+    pub(crate) fn from_parts(
+        ingress_name: &str,
+        ingress_authority: &str,
+        egress_name: &str,
+        egress_authority: &str,
+    ) -> Self {
         Self {
-            ingress_name: ingress.name.clone(),
-            ingress_authority: ingress.authority.clone(),
-            egress_name: egress.name.clone(),
-            egress_authority: egress.authority.clone(),
+            ingress_name: ingress_name.to_string(),
+            ingress_authority: ingress_authority.to_string(),
+            egress_name: egress_name.to_string(),
+            egress_authority: egress_authority.to_string(),
         }
+    }
+
+    pub(crate) fn from_endpoints(ingress: &Endpoint, egress: &Endpoint) -> Self {
+        Self::from_parts(
+            &ingress.name,
+            &ingress.authority,
+            &egress.name,
+            &egress.authority,
+        )
     }
 
     #[cfg(feature = "owned-frame-transport")]
@@ -129,6 +143,26 @@ impl RouteDiagnostic {
         let route_kind = RouteKind::OwnedFrameCompatibility;
         Self {
             route: DataPlaneRoute::from_owned_endpoints(ingress, egress),
+            route_kind,
+            copy_semantics: route_kind.copy_semantics(),
+        }
+    }
+
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    pub(crate) fn copy_minimized(
+        ingress_name: &str,
+        ingress_authority: &str,
+        egress_name: &str,
+        egress_authority: &str,
+    ) -> Self {
+        let route_kind = RouteKind::CopyMinimized;
+        Self {
+            route: DataPlaneRoute::from_parts(
+                ingress_name,
+                ingress_authority,
+                egress_name,
+                egress_authority,
+            ),
             route_kind,
             copy_semantics: route_kind.copy_semantics(),
         }
