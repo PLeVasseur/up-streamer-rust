@@ -60,6 +60,12 @@ struct Cli {
     #[arg(long)]
     no_bootstrap: bool,
 
+    #[arg(long, value_enum, default_value = "docker-compose")]
+    mqtt_broker_mode: scenario::MqttBrokerMode,
+
+    #[arg(long, default_value = "localhost:1883")]
+    mqtt_broker_uri: String,
+
     #[arg(long, default_value_t = env::DEFAULT_ENDPOINT_CLAIM_MIN_COUNT)]
     endpoint_claim_min_count: usize,
 
@@ -302,6 +308,11 @@ async fn run_single_scenario(
     if cli.no_bootstrap {
         command.arg("--no-bootstrap");
     }
+    command
+        .arg("--mqtt-broker-mode")
+        .arg(cli.mqtt_broker_mode.as_str())
+        .arg("--mqtt-broker-uri")
+        .arg(&cli.mqtt_broker_uri);
     if let Some(scenario_timeout_secs) = cli.scenario_timeout_secs {
         command
             .arg("--scenario-timeout-secs")

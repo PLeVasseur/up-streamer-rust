@@ -582,12 +582,14 @@ async fn main() -> Result<(), UStatus> {
             format!("Unable to parse config file: {e:?}"),
         )
     })?;
-    config.transports.mqtt.load_mqtt_details().map_err(|e| {
-        UStatus::fail_with_code(
-            UCode::InvalidArgument,
-            format!("Unable to load MQTT transport details: {e:?}"),
-        )
-    })?;
+    if !config.transports.mqtt.endpoints.is_empty() {
+        config.transports.mqtt.load_mqtt_details().map_err(|e| {
+            UStatus::fail_with_code(
+                UCode::InvalidArgument,
+                format!("Unable to load MQTT transport details: {e:?}"),
+            )
+        })?;
+    }
 
     let usubscription: Arc<dyn USubscription> = match config.usubscription_config.mode {
         SubscriptionProviderMode::StaticFile => Arc::new(USubscriptionStaticFile::new(
@@ -638,39 +640,46 @@ async fn main() -> Result<(), UStatus> {
             })?,
     );
 
-    // build the mqtt5 transport
-    let mqtt_details = config.transports.mqtt.mqtt_details.clone().ok_or_else(|| {
-        UStatus::fail_with_code(
-            UCode::InvalidArgument,
-            "MQTT transport details are missing after load_mqtt_details",
-        )
-    })?;
-    let mqtt_client_options = MqttClientOptions {
-        broker_uri: format!("{}:{}", mqtt_details.hostname, mqtt_details.port),
-        ..Default::default()
-    };
-    let mqtt_transport_options = Mqtt5TransportOptions {
-        mqtt_client_options,
-        ..Default::default()
-    };
-    let mqtt5_transport = Mqtt5Transport::new(
-        mqtt_transport_options,
-        config.streamer_uuri.authority.clone(),
-    )
-    .await?;
-    mqtt5_transport.connect().await?;
-    let mqtt5_transport: Arc<dyn UTransport> = Arc::new(mqtt5_transport);
+    // build the mqtt5 transport only when the selected config uses MQTT endpoints
+    let mqtt5_transport: Option<Arc<dyn UTransport>> =
+        if config.transports.mqtt.endpoints.is_empty() {
+            None
+        } else {
+            let mqtt_details = config.transports.mqtt.mqtt_details.clone().ok_or_else(|| {
+                UStatus::fail_with_code(
+                    UCode::InvalidArgument,
+                    "MQTT transport details are missing after load_mqtt_details",
+                )
+            })?;
+            let mqtt_client_options = MqttClientOptions {
+                broker_uri: format!("{}:{}", mqtt_details.hostname, mqtt_details.port),
+                ..Default::default()
+            };
+            let mqtt_transport_options = Mqtt5TransportOptions {
+                mqtt_client_options,
+                ..Default::default()
+            };
+            let mqtt5_transport = Mqtt5Transport::new(
+                mqtt_transport_options,
+                config.streamer_uuri.authority.clone(),
+            )
+            .await?;
+            mqtt5_transport.connect().await?;
+            Some(Arc::new(mqtt5_transport))
+        };
 
     register_zenoh_endpoints(
         &mut endpoints,
         &config.transports.zenoh.endpoints,
         zenoh_transport,
     )?;
-    register_mqtt_endpoints(
-        &mut endpoints,
-        &config.transports.mqtt.endpoints,
-        mqtt5_transport,
-    )?;
+    if let Some(mqtt5_transport) = mqtt5_transport {
+        register_mqtt_endpoints(
+            &mut endpoints,
+            &config.transports.mqtt.endpoints,
+            mqtt5_transport,
+        )?;
+    }
     if let Some(iceoryx2_config) = &config.transports.iceoryx2 {
         #[cfg(all(
             feature = "experimental-copy-minimized-routing",

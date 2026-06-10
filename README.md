@@ -124,6 +124,8 @@ scripts/ensure-lola-bazelisk.sh --print
 
 The helper verifies the checksum in `tools/bazelisk-linux-amd64.sha256` and does not use `/tmp/opencode`.
 
+MQTT smoke rows use `--mqtt-broker-mode docker-compose` by default. Use `--mqtt-broker-mode external` when a broker is already reachable at `--mqtt-broker-uri localhost:1883`, or `--mqtt-broker-mode native` to start a local `mosquitto` process from `PATH`. Zero-copy rows whose selected configurable-streamer config has `mqtt.endpoints: []` do not start Docker Compose or require an MQTT broker.
+
 Scenario binaries:
 
 - `smoke-zenoh-mqtt-rr-zenoh-client-mqtt-service`

@@ -21,10 +21,11 @@ use crate::process::{run_shell_command, shell_escape, ManagedProcess, ProcessSpe
 use crate::report::{self, PhaseTiming, ProcessMetadata, ScenarioClassification, ScenarioReport};
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use clap::Args;
+use clap::{Args, ValueEnum};
 use serde::Serialize;
 use std::cmp::min;
 use std::fs;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -61,6 +62,7 @@ const NO_ARGS: &[&str] = &[];
 const STREAMER_LOLA_BAZELISK_HELPER: &str = "scripts/ensure-lola-bazelisk.sh";
 const STREAMER_LOLA_BAZELISK_CACHE_PATH: &str = ".cache/tools/bazelisk-v1.29.0-linux-amd64";
 const ZERO_COPY_HARD_TIMEOUT_SECS: u64 = 600;
+const DEFAULT_MQTT_BROKER_URI: &str = "localhost:1883";
 const MQTT_STREAMER_ENV: &[(&str, &str)] = &[(
     "RUST_LOG",
     "up_streamer=debug,up_transport_mqtt5=debug,configurable_streamer=debug",
@@ -176,12 +178,31 @@ pub struct ScenarioTemplate {
     pub build_commands: &'static [&'static str],
     pub required_paths: &'static [&'static str],
     pub stale_process_signatures: &'static [&'static str],
-    pub requires_docker: bool,
+    pub requires_mqtt_broker: bool,
     pub requires_vsomeip_runtime: bool,
     pub streamer: ProcessTemplate,
     pub passive: ProcessTemplate,
     pub active: ProcessTemplate,
     pub hard_timeout_secs_default: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub enum MqttBrokerMode {
+    #[default]
+    DockerCompose,
+    External,
+    Native,
+}
+
+impl MqttBrokerMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DockerCompose => "docker-compose",
+            Self::External => "external",
+            Self::Native => "native",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -351,25 +372,19 @@ const BUILD_ZC_ALL_TRANSPORTS: &str = "cargo build -p configurable-streamer --fe
 const REQUIRED_ZC_ZENOH_ICEORYX2_PATHS: &[&str] = &[
     "configurable-streamer/CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5",
     "configurable-streamer/ZENOH_CONFIG.json5",
-    "configurable-streamer/MQTT_CONFIG.json5",
     "configurable-streamer/subscription_data.json",
-    "utils/mosquitto/docker-compose.yaml",
 ];
 const REQUIRED_ZC_ZENOH_LOLA_PATHS: &[&str] = &[
     "configurable-streamer/CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5",
     "configurable-streamer/ZENOH_CONFIG.json5",
-    "configurable-streamer/MQTT_CONFIG.json5",
     "configurable-streamer/subscription_data.json",
     "configurable-streamer/MW_COM_CONFIG_LOLA.json",
-    "utils/mosquitto/docker-compose.yaml",
 ];
 const REQUIRED_ZC_ALL_TRANSPORTS_PATHS: &[&str] = &[
     "configurable-streamer/CONFIG_ZEROCOPY_EXAMPLE.json5",
     "configurable-streamer/ZENOH_CONFIG.json5",
-    "configurable-streamer/MQTT_CONFIG.json5",
     "configurable-streamer/subscription_data.json",
     "configurable-streamer/MW_COM_CONFIG_LOLA.json",
-    "utils/mosquitto/docker-compose.yaml",
 ];
 
 const ROUTE_ZENOH_TO_ICEORYX2: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
@@ -534,7 +549,7 @@ const SCENARIO_MQTT_RR_ZENOH_CLIENT_MQTT_SERVICE: ScenarioTemplate = ScenarioTem
     build_commands: BUILD_MQTT_RR_ZENOH_CLIENT,
     required_paths: REQUIRED_MQTT_PATHS,
     stale_process_signatures: &["configurable-streamer", "mqtt_service", "zenoh_client"],
-    requires_docker: true,
+    requires_mqtt_broker: true,
     requires_vsomeip_runtime: false,
     streamer: ProcessTemplate {
         name: "streamer",
@@ -578,7 +593,7 @@ const SCENARIO_MQTT_RR_MQTT_CLIENT_ZENOH_SERVICE: ScenarioTemplate = ScenarioTem
     build_commands: BUILD_MQTT_RR_MQTT_CLIENT,
     required_paths: REQUIRED_MQTT_PATHS,
     stale_process_signatures: &["configurable-streamer", "zenoh_service", "mqtt_client"],
-    requires_docker: true,
+    requires_mqtt_broker: true,
     requires_vsomeip_runtime: false,
     streamer: ProcessTemplate {
         name: "streamer",
@@ -626,7 +641,7 @@ const SCENARIO_MQTT_PS_ZENOH_PUBLISHER_MQTT_SUBSCRIBER: ScenarioTemplate = Scena
         "mqtt_subscriber",
         "zenoh_publisher",
     ],
-    requires_docker: true,
+    requires_mqtt_broker: true,
     requires_vsomeip_runtime: false,
     streamer: ProcessTemplate {
         name: "streamer",
@@ -674,7 +689,7 @@ const SCENARIO_MQTT_PS_MQTT_PUBLISHER_ZENOH_SUBSCRIBER: ScenarioTemplate = Scena
         "zenoh_subscriber",
         "mqtt_publisher",
     ],
-    requires_docker: true,
+    requires_mqtt_broker: true,
     requires_vsomeip_runtime: false,
     streamer: ProcessTemplate {
         name: "streamer",
@@ -718,7 +733,7 @@ const SCENARIO_SOMEIP_RR_ZENOH_CLIENT_SOMEIP_SERVICE: ScenarioTemplate = Scenari
     build_commands: BUILD_SOMEIP_RR_ZENOH_CLIENT,
     required_paths: REQUIRED_SOMEIP_PATHS,
     stale_process_signatures: &["zenoh_someip", "someip_service", "zenoh_client"],
-    requires_docker: false,
+    requires_mqtt_broker: false,
     requires_vsomeip_runtime: true,
     streamer: ProcessTemplate {
         name: "streamer",
@@ -762,7 +777,7 @@ const SCENARIO_SOMEIP_RR_SOMEIP_CLIENT_ZENOH_SERVICE: ScenarioTemplate = Scenari
     build_commands: BUILD_SOMEIP_RR_SOMEIP_CLIENT,
     required_paths: REQUIRED_SOMEIP_PATHS,
     stale_process_signatures: &["zenoh_someip", "zenoh_service", "someip_client"],
-    requires_docker: false,
+    requires_mqtt_broker: false,
     requires_vsomeip_runtime: true,
     streamer: ProcessTemplate {
         name: "streamer",
@@ -806,7 +821,7 @@ const SCENARIO_SOMEIP_PS_ZENOH_PUBLISHER_SOMEIP_SUBSCRIBER: ScenarioTemplate = S
     build_commands: BUILD_SOMEIP_PS_ZENOH_PUBLISHER,
     required_paths: REQUIRED_SOMEIP_PATHS,
     stale_process_signatures: &["zenoh_someip", "someip_subscriber", "zenoh_publisher"],
-    requires_docker: false,
+    requires_mqtt_broker: false,
     requires_vsomeip_runtime: true,
     streamer: ProcessTemplate {
         name: "streamer",
@@ -850,7 +865,7 @@ const SCENARIO_SOMEIP_PS_SOMEIP_PUBLISHER_ZENOH_SUBSCRIBER: ScenarioTemplate = S
     build_commands: BUILD_SOMEIP_PS_SOMEIP_PUBLISHER,
     required_paths: REQUIRED_SOMEIP_PATHS,
     stale_process_signatures: &["zenoh_someip", "zenoh_subscriber", "someip_publisher"],
-    requires_docker: false,
+    requires_mqtt_broker: false,
     requires_vsomeip_runtime: true,
     streamer: ProcessTemplate {
         name: "streamer",
@@ -913,6 +928,12 @@ pub struct ScenarioCliArgs {
 
     #[arg(long)]
     pub no_bootstrap: bool,
+
+    #[arg(long, value_enum, default_value = "docker-compose")]
+    pub mqtt_broker_mode: MqttBrokerMode,
+
+    #[arg(long, default_value = "localhost:1883")]
+    pub mqtt_broker_uri: String,
 
     #[arg(long, default_value_t = env::DEFAULT_ENDPOINT_CLAIM_MIN_COUNT)]
     pub endpoint_claim_min_count: usize,
@@ -1036,7 +1057,7 @@ pub async fn run_scenario(
     let mut streamer_process: Option<ManagedProcess> = None;
     let mut passive_process: Option<ManagedProcess> = None;
     let mut active_process: Option<ManagedProcess> = None;
-    let mut mqtt_broker_started = false;
+    let mut mqtt_broker_handle: Option<MqttBrokerHandle> = None;
     let mut vsomeip_runtime_lib: Option<PathBuf> = None;
 
     let preflight_result = execute_phase("Preflight", &mut phase_timings, || async {
@@ -1056,15 +1077,8 @@ pub async fn run_scenario(
 
         ensure_no_stale_processes(template.stale_process_signatures).await?;
 
-        if template.requires_docker {
-            assert_command_success(
-                run_shell_command(&repo_root, &repo_root, "docker --version", true).await?,
-                "docker --version",
-            )?;
-            assert_command_success(
-                run_shell_command(&repo_root, &repo_root, "docker compose version", true).await?,
-                "docker compose version",
-            )?;
+        if template.requires_mqtt_broker {
+            preflight_mqtt_broker(&repo_root, &cli_args).await?;
         }
 
         if template.requires_vsomeip_runtime {
@@ -1092,9 +1106,10 @@ pub async fn run_scenario(
         let start_infra_result = execute_phase("StartInfra", &mut phase_timings, || async {
             ensure_remaining_timeout(scenario_deadline, "StartInfra")?;
 
-            if template.requires_docker {
-                start_mqtt_broker(&repo_root, cli_args.no_bootstrap, scenario_deadline).await?;
-                mqtt_broker_started = true;
+            if template.requires_mqtt_broker {
+                mqtt_broker_handle =
+                    start_mqtt_broker(&repo_root, &artifact_dir, &cli_args, scenario_deadline)
+                        .await?;
             }
 
             streamer_process = Some(
@@ -1356,8 +1371,8 @@ pub async fn run_scenario(
                 .await?;
         }
 
-        if template.requires_docker && mqtt_broker_started {
-            stop_mqtt_broker(&repo_root, cli_args.no_bootstrap).await?;
+        if let Some(handle) = mqtt_broker_handle.as_mut() {
+            stop_mqtt_broker(&repo_root, cli_args.no_bootstrap, handle).await?;
         }
 
         ensure_process_exited(active_process.as_mut(), "active")?;
@@ -1475,7 +1490,6 @@ async fn run_zero_copy_scenario(
     let mut loaded_claims = Vec::new();
     let claims_source_path: Option<PathBuf> = None;
     let mut streamer_process: Option<ManagedProcess> = None;
-    let mut mqtt_broker_started = false;
     let mut lola_bazel: Option<String> = None;
     let mut lola_bridge_lib_dir: Option<PathBuf> = None;
 
@@ -1491,17 +1505,6 @@ async fn run_zero_copy_scenario(
             blocked_reason = Some(error.to_string());
             return Err(error);
         }
-
-        assert_zero_copy_tooling(
-            run_shell_command(&repo_root, &repo_root, "docker --version", true).await,
-            "docker --version",
-            &mut blocked_reason,
-        )?;
-        assert_zero_copy_tooling(
-            run_shell_command(&repo_root, &repo_root, "docker compose version", true).await,
-            "docker compose version",
-            &mut blocked_reason,
-        )?;
 
         if template.requires_lola_bundled {
             lola_bazel = Some(
@@ -1544,14 +1547,6 @@ async fn run_zero_copy_scenario(
     if failure_reason.is_none() {
         let start_infra_result = execute_phase("StartInfra", &mut phase_timings, || async {
             ensure_remaining_timeout(scenario_deadline, "StartInfra")?;
-
-            if let Err(error) =
-                start_mqtt_broker(&repo_root, cli_args.no_bootstrap, scenario_deadline).await
-            {
-                blocked_reason = Some(error.to_string());
-                return Err(error);
-            }
-            mqtt_broker_started = true;
 
             streamer_process = Some(
                 spawn_zero_copy_streamer(
@@ -1664,13 +1659,6 @@ async fn run_zero_copy_scenario(
                     Duration::from_secs(env::SIGTERM_GRACE_SECS),
                 )
                 .await?;
-        }
-
-        if mqtt_broker_started {
-            if let Err(error) = stop_mqtt_broker(&repo_root, cli_args.no_bootstrap).await {
-                blocked_reason = Some(error.to_string());
-                return Err(error);
-            }
         }
 
         ensure_process_exited(streamer_process.as_mut(), "streamer")?;
@@ -1833,36 +1821,6 @@ fn zero_copy_startup_claims() -> Vec<ClaimSpec> {
             min_count: 0,
         },
     ]
-}
-
-fn assert_zero_copy_tooling(
-    outcome: Result<crate::process::CommandOutcome>,
-    label: &str,
-    blocked_reason: &mut Option<String>,
-) -> Result<()> {
-    let outcome = match outcome {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            let reason = error.to_string();
-            *blocked_reason = Some(reason);
-            return Err(error);
-        }
-    };
-
-    if outcome.status_code == Some(0) {
-        return Ok(());
-    }
-
-    let error = anyhow!(
-        "{} unavailable for zero-copy smoke row (status={:?})\ncommand: {}\nstdout:\n{}\nstderr:\n{}",
-        label,
-        outcome.status_code,
-        outcome.command,
-        outcome.stdout,
-        outcome.stderr
-    );
-    *blocked_reason = Some(error.to_string());
-    Err(error)
 }
 
 async fn ensure_lola_bazel_available(
@@ -2065,6 +2023,18 @@ fn render_zero_copy_repro_command(
     if cli_args.no_bootstrap {
         args.push("--no-bootstrap".to_string());
     }
+    if cli_args.mqtt_broker_mode != MqttBrokerMode::DockerCompose {
+        args.push(format!(
+            "--mqtt-broker-mode {}",
+            cli_args.mqtt_broker_mode.as_str()
+        ));
+    }
+    if cli_args.mqtt_broker_uri != DEFAULT_MQTT_BROKER_URI {
+        args.push(format!(
+            "--mqtt-broker-uri {}",
+            shell_escape(&cli_args.mqtt_broker_uri)
+        ));
+    }
     if let Some(claims_path) = &cli_args.claims_path {
         args.push(format!(
             "--claims-path {}",
@@ -2148,8 +2118,8 @@ fn write_zero_copy_matrix_row_artifact(
                 .iter()
                 .find_map(|(key, value)| (*key == "RUST_LOG").then_some((*value).to_string()))
                 .unwrap_or_default(),
-            mqtt_broker_required: true,
-            docker_compose_required: true,
+            mqtt_broker_required: false,
+            docker_compose_required: false,
             lola_bundled_required: template.requires_lola_bundled,
             lola_bridge_lib_dir: lola_bridge_lib_dir.map(|path| path.display().to_string()),
             bazel: lola_bazel.map(ToString::to_string),
@@ -2286,6 +2256,18 @@ fn render_repro_command(
     if cli_args.no_bootstrap {
         args.push("--no-bootstrap".to_string());
     }
+    if cli_args.mqtt_broker_mode != MqttBrokerMode::DockerCompose {
+        args.push(format!(
+            "--mqtt-broker-mode {}",
+            cli_args.mqtt_broker_mode.as_str()
+        ));
+    }
+    if cli_args.mqtt_broker_uri != DEFAULT_MQTT_BROKER_URI {
+        args.push(format!(
+            "--mqtt-broker-uri {}",
+            shell_escape(&cli_args.mqtt_broker_uri)
+        ));
+    }
     if let Some(claims_path) = &cli_args.claims_path {
         args.push(format!(
             "--claims-path {}",
@@ -2340,7 +2322,99 @@ fn ensure_process_exited(process: Option<&mut ManagedProcess>, role: &str) -> Re
     Ok(())
 }
 
-async fn start_mqtt_broker(repo_root: &Path, no_bootstrap: bool, deadline: Instant) -> Result<()> {
+enum MqttBrokerHandle {
+    DockerCompose,
+    Native(ManagedProcess),
+}
+
+async fn preflight_mqtt_broker(repo_root: &Path, cli_args: &ScenarioCliArgs) -> Result<()> {
+    match cli_args.mqtt_broker_mode {
+        MqttBrokerMode::DockerCompose => {
+            assert_command_success(
+                run_shell_command(repo_root, repo_root, "docker --version", true).await?,
+                "docker --version",
+            )?;
+            assert_command_success(
+                run_shell_command(repo_root, repo_root, "docker compose version", true).await?,
+                "docker compose version",
+            )
+        }
+        MqttBrokerMode::External => probe_mqtt_broker_uri(&cli_args.mqtt_broker_uri).await,
+        MqttBrokerMode::Native => {
+            if probe_mqtt_broker_uri(&cli_args.mqtt_broker_uri)
+                .await
+                .is_ok()
+            {
+                return Ok(());
+            }
+            let _ = resolve_mosquitto_command(repo_root).await?;
+            Ok(())
+        }
+    }
+}
+
+async fn start_mqtt_broker(
+    repo_root: &Path,
+    artifact_dir: &Path,
+    cli_args: &ScenarioCliArgs,
+    deadline: Instant,
+) -> Result<Option<MqttBrokerHandle>> {
+    match cli_args.mqtt_broker_mode {
+        MqttBrokerMode::DockerCompose => {
+            start_docker_compose_mqtt_broker(repo_root, cli_args.no_bootstrap, deadline).await?;
+            Ok(Some(MqttBrokerHandle::DockerCompose))
+        }
+        MqttBrokerMode::External => {
+            probe_mqtt_broker_uri(&cli_args.mqtt_broker_uri).await?;
+            Ok(None)
+        }
+        MqttBrokerMode::Native => {
+            if probe_mqtt_broker_uri(&cli_args.mqtt_broker_uri)
+                .await
+                .is_ok()
+            {
+                return Ok(None);
+            }
+            start_native_mqtt_broker(
+                repo_root,
+                artifact_dir,
+                &cli_args.mqtt_broker_uri,
+                cli_args.no_bootstrap,
+                deadline,
+            )
+            .await
+            .map(MqttBrokerHandle::Native)
+            .map(Some)
+        }
+    }
+}
+
+async fn stop_mqtt_broker(
+    repo_root: &Path,
+    no_bootstrap: bool,
+    handle: &mut MqttBrokerHandle,
+) -> Result<()> {
+    match handle {
+        MqttBrokerHandle::DockerCompose => {
+            stop_docker_compose_mqtt_broker(repo_root, no_bootstrap).await
+        }
+        MqttBrokerHandle::Native(process) => {
+            process
+                .terminate_gracefully(
+                    Duration::from_secs(env::SIGINT_GRACE_SECS),
+                    Duration::from_secs(env::SIGTERM_GRACE_SECS),
+                )
+                .await?;
+            ensure_process_exited(Some(process), "mqtt broker")
+        }
+    }
+}
+
+async fn start_docker_compose_mqtt_broker(
+    repo_root: &Path,
+    no_bootstrap: bool,
+    deadline: Instant,
+) -> Result<()> {
     let compose_path = repo_root
         .join("utils")
         .join("mosquitto")
@@ -2385,7 +2459,7 @@ async fn start_mqtt_broker(repo_root: &Path, no_bootstrap: bool, deadline: Insta
     }
 }
 
-async fn stop_mqtt_broker(repo_root: &Path, no_bootstrap: bool) -> Result<()> {
+async fn stop_docker_compose_mqtt_broker(repo_root: &Path, no_bootstrap: bool) -> Result<()> {
     let compose_path = repo_root
         .join("utils")
         .join("mosquitto")
@@ -2395,6 +2469,128 @@ async fn stop_mqtt_broker(repo_root: &Path, no_bootstrap: bool) -> Result<()> {
 
     let outcome = run_shell_command(repo_root, repo_root, &down_command, no_bootstrap).await?;
     assert_command_success(outcome, "docker compose down")
+}
+
+async fn start_native_mqtt_broker(
+    repo_root: &Path,
+    artifact_dir: &Path,
+    broker_uri: &str,
+    no_bootstrap: bool,
+    deadline: Instant,
+) -> Result<ManagedProcess> {
+    let (host, port) = parse_mqtt_broker_uri(broker_uri)?;
+    if !is_local_mqtt_host(&host) {
+        return Err(anyhow!(
+            "native MQTT broker mode can only start local mosquitto instances, got host '{}' from '{}'",
+            host,
+            broker_uri
+        ));
+    }
+
+    let mosquitto = resolve_mosquitto_command(repo_root).await?;
+    let process_spec = ProcessSpec {
+        name: "mosquitto".to_string(),
+        workdir: repo_root.to_path_buf(),
+        executable: mosquitto,
+        args: vec!["-p".to_string(), port.to_string(), "-v".to_string()],
+        env: Vec::new(),
+        log_file_name: "mosquitto.log".to_string(),
+    };
+    let mut process =
+        ManagedProcess::spawn(process_spec, repo_root, artifact_dir, no_bootstrap).await?;
+    let broker_deadline = Instant::now() + Duration::from_secs(env::BROKER_READY_TIMEOUT_SECS);
+
+    loop {
+        if probe_mqtt_broker_uri(broker_uri).await.is_ok() {
+            return Ok(process);
+        }
+        process.refresh_exit_status().await?;
+        if process.has_exited() {
+            return Err(anyhow!(
+                "native mosquitto process exited before broker readiness; see {}",
+                process.log_path.display()
+            ));
+        }
+        if Instant::now() >= broker_deadline {
+            return Err(anyhow!(
+                "timed out waiting for native MQTT broker readiness at {}",
+                broker_uri
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "scenario hard timeout reached while waiting for native MQTT broker readiness"
+            ));
+        }
+
+        tokio::time::sleep(Duration::from_millis(env::LOG_POLL_INTERVAL_MS)).await;
+    }
+}
+
+async fn resolve_mosquitto_command(repo_root: &Path) -> Result<PathBuf> {
+    let outcome = run_shell_command(repo_root, repo_root, "command -v mosquitto", true).await?;
+    if outcome.status_code == Some(0) {
+        if let Some(path) = outcome
+            .stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+        {
+            return Ok(PathBuf::from(path));
+        }
+    }
+
+    Err(anyhow!(
+        "native MQTT broker mode requires mosquitto on PATH (status={:?})\nstdout:\n{}\nstderr:\n{}",
+        outcome.status_code,
+        outcome.stdout,
+        outcome.stderr
+    ))
+}
+
+async fn probe_mqtt_broker_uri(broker_uri: &str) -> Result<()> {
+    let (host, port) = parse_mqtt_broker_uri(broker_uri)?;
+    let addrs = (host.as_str(), port)
+        .to_socket_addrs()
+        .with_context(|| format!("unable to resolve MQTT broker at {broker_uri}"))?;
+    let mut last_error = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+            Ok(_) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    Err(anyhow!(
+        "unable to connect to MQTT broker at {}: {}",
+        broker_uri,
+        last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "no resolved socket addresses".to_string())
+    ))
+}
+
+fn parse_mqtt_broker_uri(broker_uri: &str) -> Result<(String, u16)> {
+    let trimmed = broker_uri.trim();
+    let without_scheme = trimmed
+        .strip_prefix("mqtt://")
+        .or_else(|| trimmed.strip_prefix("tcp://"))
+        .unwrap_or(trimmed)
+        .trim_end_matches('/');
+    let (host, port) = without_scheme
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow!("MQTT broker URI must be host:port, got '{}'", broker_uri))?;
+    if host.is_empty() {
+        return Err(anyhow!("MQTT broker URI host is empty: '{}'", broker_uri));
+    }
+    let port = port
+        .parse::<u16>()
+        .with_context(|| format!("MQTT broker URI port is invalid: '{broker_uri}'"))?;
+    Ok((host.to_string(), port))
+}
+
+fn is_local_mqtt_host(host: &str) -> bool {
+    matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
 }
 
 async fn spawn_template_process(
@@ -2408,7 +2604,7 @@ async fn spawn_template_process(
     let mut args = template
         .args
         .iter()
-        .map(|arg| arg.to_string())
+        .map(|arg| resolve_process_arg(arg, cli_args))
         .collect::<Vec<_>>();
     if template.bounded_sender {
         args.push("--send-count".to_string());
@@ -2446,6 +2642,14 @@ async fn spawn_template_process(
     };
 
     ManagedProcess::spawn(process_spec, repo_root, artifact_dir, cli_args.no_bootstrap).await
+}
+
+fn resolve_process_arg(arg: &str, cli_args: &ScenarioCliArgs) -> String {
+    if arg == DEFAULT_MQTT_BROKER_URI {
+        cli_args.mqtt_broker_uri.clone()
+    } else {
+        arg.to_string()
+    }
 }
 
 async fn ensure_no_stale_processes(signatures: &[&str]) -> Result<()> {
