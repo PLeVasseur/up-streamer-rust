@@ -5834,7 +5834,7 @@ dependencies = [
 [[package]]
 name = "up-transport-vsomeip"
 version = "0.4.1"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=28272c99dad6ac872c533837b336fb4b0d7eb737#28272c99dad6ac872c533837b336fb4b0d7eb737"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=d91db579107ee484fba1a63ce0f98cb38e17b68d#d91db579107ee484fba1a63ce0f98cb38e17b68d"
 dependencies = [
  "async-trait",
  "bimap",
@@ -6027,7 +6027,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 [[package]]
 name = "vsomeip-proc-macro"
 version = "0.4.1"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=28272c99dad6ac872c533837b336fb4b0d7eb737#28272c99dad6ac872c533837b336fb4b0d7eb737"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=d91db579107ee484fba1a63ce0f98cb38e17b68d#d91db579107ee484fba1a63ce0f98cb38e17b68d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6038,7 +6038,7 @@ dependencies = [
 [[package]]
 name = "vsomeip-sys"
 version = "0.4.1"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=28272c99dad6ac872c533837b336fb4b0d7eb737#28272c99dad6ac872c533837b336fb4b0d7eb737"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=d91db579107ee484fba1a63ce0f98cb38e17b68d#d91db579107ee484fba1a63ce0f98cb38e17b68d"
 dependencies = [
  "autocxx",
  "autocxx-build",
