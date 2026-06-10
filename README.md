@@ -110,6 +110,20 @@ Matrix custom claims directory example:
 cargo run -p transport-smoke-suite --bin transport-smoke-matrix -- --all --claims-path utils/transport-smoke-suite/claims
 ```
 
+LoLa zero-copy matrix rows need Bazel or Bazelisk to build the bundled native bridge. The smoke runner resolves it in this order:
+
+- `BAZEL` if explicitly set
+- the repo-local cache at `.cache/tools/bazelisk-v1.29.0-linux-amd64`
+- `scripts/ensure-lola-bazelisk.sh`, unless `--no-bootstrap` is passed
+
+To bootstrap the pinned Bazelisk manually:
+
+```bash
+scripts/ensure-lola-bazelisk.sh --print
+```
+
+The helper verifies the checksum in `tools/bazelisk-linux-amd64.sha256` and does not use `/tmp/opencode`.
+
 Scenario binaries:
 
 - `smoke-zenoh-mqtt-rr-zenoh-client-mqtt-service`

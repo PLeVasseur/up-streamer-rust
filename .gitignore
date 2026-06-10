@@ -18,6 +18,7 @@ tarpaulin-report.html
 .vscode/launch.json
 .vscode/settings.json
 reports/
+.cache/
 
 .cargo/
 

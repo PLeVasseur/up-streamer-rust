@@ -58,7 +58,8 @@ pub const MATRIX_SCENARIO_IDS: [&str; 15] = [
 ];
 
 const NO_ARGS: &[&str] = &[];
-const DEFAULT_BAZEL_PATH: &str = "/tmp/opencode/bazelisk/node_modules/.bin/bazelisk";
+const STREAMER_LOLA_BAZELISK_HELPER: &str = "scripts/ensure-lola-bazelisk.sh";
+const STREAMER_LOLA_BAZELISK_CACHE_PATH: &str = ".cache/tools/bazelisk-v1.29.0-linux-amd64";
 const ZERO_COPY_HARD_TIMEOUT_SECS: u64 = 600;
 const MQTT_STREAMER_ENV: &[(&str, &str)] = &[(
     "RUST_LOG",
@@ -344,8 +345,8 @@ const REQUIRED_SOMEIP_PATHS: &[&str] = &[
 ];
 
 const BUILD_ZC_ZENOH_ICEORYX2: &str = "cargo build -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy";
-const BUILD_ZC_ZENOH_LOLA: &str = "BAZEL=${BAZEL:-/tmp/opencode/bazelisk/node_modules/.bin/bazelisk} cargo build -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,lola-transport";
-const BUILD_ZC_ALL_TRANSPORTS: &str = "BAZEL=${BAZEL:-/tmp/opencode/bazelisk/node_modules/.bin/bazelisk} cargo build -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy,lola-transport";
+const BUILD_ZC_ZENOH_LOLA: &str = "cargo build -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,lola-transport";
+const BUILD_ZC_ALL_TRANSPORTS: &str = "cargo build -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy,lola-transport";
 
 const REQUIRED_ZC_ZENOH_ICEORYX2_PATHS: &[&str] = &[
     "configurable-streamer/CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5",
@@ -1475,6 +1476,7 @@ async fn run_zero_copy_scenario(
     let claims_source_path: Option<PathBuf> = None;
     let mut streamer_process: Option<ManagedProcess> = None;
     let mut mqtt_broker_started = false;
+    let mut lola_bazel: Option<String> = None;
     let mut lola_bridge_lib_dir: Option<PathBuf> = None;
 
     let preflight_result = execute_phase("Preflight", &mut phase_timings, || async {
@@ -1502,18 +1504,22 @@ async fn run_zero_copy_scenario(
         )?;
 
         if template.requires_lola_bundled {
-            ensure_lola_bazel_available(&repo_root, &mut blocked_reason).await?;
+            lola_bazel = Some(
+                ensure_lola_bazel_available(&repo_root, cli_args.no_bootstrap, &mut blocked_reason)
+                    .await?,
+            );
         }
 
         if !cli_args.skip_build {
+            let build_command = zero_copy_build_command(template, lola_bazel.as_deref())?;
             let outcome = run_shell_command(
                 &repo_root,
                 &repo_root,
-                template.build_command,
+                &build_command,
                 cli_args.no_bootstrap,
             )
             .await?;
-            assert_command_success(outcome, template.build_command)?;
+            assert_command_success(outcome, &build_command)?;
         }
 
         if template.requires_lola_bundled {
@@ -1713,6 +1719,7 @@ async fn run_zero_copy_scenario(
         failure_reason.clone(),
         &streamer_process,
         lola_bridge_lib_dir.as_ref(),
+        lola_bazel.as_deref(),
     )?;
 
     let no_process: Option<ManagedProcess> = None;
@@ -1860,34 +1867,133 @@ fn assert_zero_copy_tooling(
 
 async fn ensure_lola_bazel_available(
     repo_root: &Path,
+    no_bootstrap: bool,
     blocked_reason: &mut Option<String>,
 ) -> Result<String> {
-    let bazel = std::env::var("BAZEL").unwrap_or_else(|_| DEFAULT_BAZEL_PATH.to_string());
-    let bazel_path = Path::new(&bazel);
-    if bazel_path.is_absolute() || bazel.contains('/') {
-        if bazel_path.exists() {
-            return Ok(bazel);
+    if let Ok(bazel) = std::env::var("BAZEL") {
+        let bazel = bazel.trim();
+        if !bazel.is_empty() {
+            return validate_lola_bazel_command(repo_root, bazel, "BAZEL", blocked_reason).await;
         }
+    }
+
+    let cached_bazelisk = repo_root.join(STREAMER_LOLA_BAZELISK_CACHE_PATH);
+    if is_executable_file(&cached_bazelisk) {
+        return Ok(cached_bazelisk.display().to_string());
+    }
+
+    let helper = repo_root.join(STREAMER_LOLA_BAZELISK_HELPER);
+    if no_bootstrap {
         let error = anyhow!(
-            "LoLa bundled zero-copy row is blocked because BAZEL points to missing executable: {}",
-            bazel
+            "LoLa bundled zero-copy row is blocked because BAZEL is unset, repo-local Bazelisk is missing at {}, and --no-bootstrap prevents running {}",
+            cached_bazelisk.display(),
+            STREAMER_LOLA_BAZELISK_HELPER
         );
         *blocked_reason = Some(error.to_string());
         return Err(error);
     }
 
-    let command = format!("command -v {}", shell_escape(&bazel));
+    if !helper.is_file() {
+        let error = anyhow!(
+            "LoLa bundled zero-copy row is blocked because the Streamer Bazelisk helper is missing: {}",
+            helper.display()
+        );
+        *blocked_reason = Some(error.to_string());
+        return Err(error);
+    }
+
+    let command = format!(
+        "{} --print",
+        shell_escape(helper.to_string_lossy().as_ref())
+    );
     let outcome = run_shell_command(repo_root, repo_root, &command, true).await?;
     if outcome.status_code == Some(0) {
-        return Ok(bazel);
+        let resolved = outcome.stdout.trim();
+        if !resolved.is_empty() && is_executable_file(Path::new(resolved)) {
+            return Ok(resolved.to_string());
+        }
     }
 
     let error = anyhow!(
-        "LoLa bundled zero-copy row is blocked because BAZEL command '{}' is not on PATH",
+        "LoLa bundled zero-copy row is blocked because {} failed to provide an executable Bazelisk path (status={:?})\nstdout:\n{}\nstderr:\n{}",
+        STREAMER_LOLA_BAZELISK_HELPER,
+        outcome.status_code,
+        outcome.stdout,
+        outcome.stderr
+    );
+    *blocked_reason = Some(error.to_string());
+    Err(error)
+}
+
+async fn validate_lola_bazel_command(
+    repo_root: &Path,
+    bazel: &str,
+    source: &str,
+    blocked_reason: &mut Option<String>,
+) -> Result<String> {
+    let bazel_path = Path::new(bazel);
+    if bazel_path.is_absolute() || bazel.contains('/') {
+        if is_executable_file(bazel_path) {
+            return Ok(bazel.to_string());
+        }
+        let error = anyhow!(
+            "LoLa bundled zero-copy row is blocked because {source} points to a missing or non-executable Bazel command: {bazel}"
+        );
+        *blocked_reason = Some(error.to_string());
+        return Err(error);
+    }
+
+    let command = format!("command -v {}", shell_escape(bazel));
+    let outcome = run_shell_command(repo_root, repo_root, &command, true).await?;
+    if outcome.status_code == Some(0) {
+        let resolved = outcome.stdout.lines().next().unwrap_or(bazel).trim();
+        if !resolved.is_empty() {
+            return Ok(resolved.to_string());
+        }
+    }
+
+    let error = anyhow!(
+        "LoLa bundled zero-copy row is blocked because {source} command '{}' is not on PATH",
         bazel
     );
     *blocked_reason = Some(error.to_string());
     Err(error)
+}
+
+fn zero_copy_build_command(
+    template: &ZeroCopyScenarioTemplate,
+    lola_bazel: Option<&str>,
+) -> Result<String> {
+    if template.requires_lola_bundled {
+        let bazel = lola_bazel.ok_or_else(|| {
+            anyhow!("LoLa bundled zero-copy build requires a resolved Bazel command before build")
+        })?;
+        Ok(format!(
+            "BAZEL={} {}",
+            shell_escape(bazel),
+            template.build_command
+        ))
+    } else {
+        Ok(template.build_command.to_string())
+    }
+}
+
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        true
+    }
 }
 
 async fn spawn_zero_copy_streamer(
@@ -1986,6 +2092,7 @@ fn write_zero_copy_matrix_row_artifact(
     failure_reason: Option<String>,
     streamer_process: &Option<ManagedProcess>,
     lola_bridge_lib_dir: Option<&PathBuf>,
+    lola_bazel: Option<&str>,
 ) -> Result<PathBuf> {
     let artifact_path = artifact_dir.join("zero-copy-matrix-row.json");
     let row = ZeroCopyMatrixRowArtifact {
@@ -2045,9 +2152,7 @@ fn write_zero_copy_matrix_row_artifact(
             docker_compose_required: true,
             lola_bundled_required: template.requires_lola_bundled,
             lola_bridge_lib_dir: lola_bridge_lib_dir.map(|path| path.display().to_string()),
-            bazel: template
-                .requires_lola_bundled
-                .then(|| std::env::var("BAZEL").unwrap_or_else(|_| DEFAULT_BAZEL_PATH.to_string())),
+            bazel: lola_bazel.map(ToString::to_string),
         },
         dependency_sources: dependency_sources(repo_root)?,
     };

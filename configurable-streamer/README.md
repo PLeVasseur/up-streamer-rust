@@ -78,7 +78,7 @@ cargo run -p configurable-streamer --features experimental-copy-minimized-routin
 cargo run -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy,lola-transport -- --config="CONFIG_ZEROCOPY_EXAMPLE.json5"
 ```
 
-The LoLa feature uses the default bundled native bridge build. If your environment does not provide `bazel`, set `BAZEL` to a Bazel or Bazelisk binary before building. The current binary still initializes MQTT at startup, so keep the MQTT broker prerequisite from the basic examples even when the zero-copy fixture has no MQTT endpoints.
+The LoLa feature uses the default bundled native bridge build. If your environment does not provide `bazel`, set `BAZEL` to a Bazel or Bazelisk binary before building. The Streamer smoke matrix can also bootstrap the pinned Bazelisk with `scripts/ensure-lola-bazelisk.sh` and caches it under `.cache/tools/`. The current binary still initializes MQTT at startup, so keep the MQTT broker prerequisite from the basic examples even when the zero-copy fixture has no MQTT endpoints.
 
 ## Running the Streamer in an example service mesh
 
