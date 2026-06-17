@@ -94,6 +94,27 @@ After following along with the [cargo docs](#generating-cargo-docs-locally) gene
 - [ ] Routing of Publish messages (requires further development of uSubscription interface)
 - [x] Mechanism to retrieve messages received on and sent over transports
 
+## Route Copy Semantics
+
+`up-streamer` exposes route diagnostics so applications can distinguish route
+behavior instead of inferring it from the endpoint transport type.
+
+- `UTransport` routes are compatibility routes through `UMessage` listener/send
+  APIs. They do not preserve selected-wire native frame metadata.
+- Owned-frame routes are owned/copying compatibility routes. If they project
+  through `UMessage`, they are not selected-wire preservation evidence.
+- Copy-minimized routes are feature-gated one-copy routes. They borrow receive
+  payload slices and copy those bytes into an egress transmit loan, avoiding an
+  intermediate owned payload allocation but still copying payload bytes once.
+- Stable-container payloads on copy-minimized routes are fail-safe: malformed
+  stable-container metadata, payload length mismatch, or insufficient egress
+  alignment rejects the frame before forwarding.
+
+The generic Streamer does not claim end-to-end no-copy forwarding. A future
+selected-wire Streamer phase may add same-wire route typing and mismatch
+rejection, but this compatibility/reference-parity layer should be read as
+one-copy copy-minimized routing only.
+
 ## Benchmark Guardrails
 
 `up-streamer` uses a pinned Criterion harness (`criterion = 0.5.1`) at:

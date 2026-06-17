@@ -88,6 +88,86 @@ impl USubscription for EmptySubscription {
     }
 }
 
+struct StaticSubscription {
+    subscriptions: Vec<SubscriptionInfo>,
+}
+
+impl StaticSubscription {
+    fn new(subscriptions: Vec<SubscriptionInfo>) -> Self {
+        Self { subscriptions }
+    }
+}
+
+#[async_trait]
+impl USubscription for StaticSubscription {
+    async fn subscribe(
+        &self,
+        _topic: &UUri,
+        _expiration: Option<u64>,
+        _min_sample_period: Option<u32>,
+    ) -> Result<SubscriptionStatus, UStatus> {
+        Err(UStatus::fail_with_code(
+            UCode::Unimplemented,
+            "subscribe is not used by this test",
+        ))
+    }
+
+    async fn unsubscribe(&self, _topic: &UUri) -> Result<(), UStatus> {
+        Err(UStatus::fail_with_code(
+            UCode::Unimplemented,
+            "unsubscribe is not used by this test",
+        ))
+    }
+
+    async fn fetch_subscriptions_by_topic(
+        &self,
+        _topic: &UUri,
+    ) -> Result<Vec<SubscriptionInfo>, UStatus> {
+        Ok(self.subscriptions.clone())
+    }
+
+    async fn fetch_subscriptions_by_subscriber(
+        &self,
+        _subscriber: &UUri,
+    ) -> Result<Vec<SubscriptionInfo>, UStatus> {
+        Err(UStatus::fail_with_code(
+            UCode::Unimplemented,
+            "fetch_subscriptions_by_subscriber is not used by this test",
+        ))
+    }
+
+    async fn register_for_notifications(&self, _topic: &UUri) -> Result<(), UStatus> {
+        Ok(())
+    }
+
+    async fn unregister_for_notifications(&self, _topic: &UUri) -> Result<(), UStatus> {
+        Ok(())
+    }
+
+    async fn fetch_subscribers(&self, _topic: &UUri) -> Result<Vec<UUri>, UStatus> {
+        Ok(Vec::new())
+    }
+
+    async fn reset(
+        &self,
+        _reason: ResetReason,
+        _message: Option<String>,
+        _before: Option<u64>,
+    ) -> Result<(), UStatus> {
+        Ok(())
+    }
+}
+
+fn subscription(topic: &str, subscriber: &str) -> SubscriptionInfo {
+    SubscriptionInfo::new(
+        topic.parse::<UUri>().expect("valid topic URI"),
+        subscriber.parse::<UUri>().expect("valid subscriber URI"),
+        SubscriptionStatus::Subscribed,
+        None,
+        None,
+    )
+}
+
 fn payload_frame(payload: &'static [u8]) -> UVecRxLease {
     let message = UMessageBuilder::publish(
         UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8001).expect("topic"),
@@ -223,12 +303,16 @@ struct InstrumentedTransportState {
     listeners: Vec<Arc<dyn UZeroCopyListener<InstrumentedRxLease>>>,
     sent_payloads: Vec<Vec<u8>>,
     loan_specs: Vec<(usize, usize)>,
+    register_calls: usize,
+    unregister_calls: usize,
 }
 
 #[derive(Clone)]
 struct InstrumentedZeroCopyTransport {
     instrumentation: Arc<RouteInstrumentation>,
     state: Arc<Mutex<InstrumentedTransportState>>,
+    fail_register_after: Option<usize>,
+    fail_unregister: bool,
 }
 
 impl InstrumentedZeroCopyTransport {
@@ -236,7 +320,19 @@ impl InstrumentedZeroCopyTransport {
         Self {
             instrumentation,
             state: Arc::new(Mutex::new(InstrumentedTransportState::default())),
+            fail_register_after: None,
+            fail_unregister: false,
         }
+    }
+
+    fn fail_register_after(mut self, successful_registrations: usize) -> Self {
+        self.fail_register_after = Some(successful_registrations);
+        self
+    }
+
+    fn fail_unregister(mut self) -> Self {
+        self.fail_unregister = true;
+        self
     }
 
     async fn inject(&self, frame: InstrumentedRxLease) {
@@ -265,6 +361,21 @@ impl InstrumentedZeroCopyTransport {
             .expect("instrumented zero-copy state lock poisoned")
             .loan_specs
             .clone()
+    }
+
+    fn listener_count(&self) -> usize {
+        self.state
+            .lock()
+            .expect("instrumented zero-copy state lock poisoned")
+            .listeners
+            .len()
+    }
+
+    fn unregister_calls(&self) -> usize {
+        self.state
+            .lock()
+            .expect("instrumented zero-copy state lock poisoned")
+            .unregister_calls
     }
 }
 
@@ -307,11 +418,21 @@ impl UZeroCopyTransportImpl for InstrumentedZeroCopyTransport {
         _sink_filter: Option<&UUri>,
         listener: Arc<dyn UZeroCopyListener<Self::Rx>>,
     ) -> Result<(), UStatus> {
-        self.state
+        let mut state = self
+            .state
             .lock()
-            .expect("instrumented zero-copy state lock poisoned")
-            .listeners
-            .push(listener);
+            .expect("instrumented zero-copy state lock poisoned");
+        if self
+            .fail_register_after
+            .is_some_and(|limit| state.register_calls >= limit)
+        {
+            return Err(UStatus::fail_with_code(
+                UCode::Unavailable,
+                "injected register failure",
+            ));
+        }
+        state.register_calls += 1;
+        state.listeners.push(listener);
         Ok(())
     }
 
@@ -325,6 +446,13 @@ impl UZeroCopyTransportImpl for InstrumentedZeroCopyTransport {
             .state
             .lock()
             .expect("instrumented zero-copy state lock poisoned");
+        state.unregister_calls += 1;
+        if self.fail_unregister {
+            return Err(UStatus::fail_with_code(
+                UCode::Unavailable,
+                "injected unregister failure",
+            ));
+        }
         let Some(index) = state
             .listeners
             .iter()
@@ -356,6 +484,26 @@ fn instrumented_payload_frame(
         slices: payload_slices.iter().map(|slice| slice.to_vec()).collect(),
         instrumentation,
     }
+}
+
+fn no_payload_frame() -> UVecRxLease {
+    let message = UMessageBuilder::publish(
+        UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8001).expect("topic"),
+    )
+    .build()
+    .expect("message");
+    let metadata = try_project_umessage_to_frame_metadata(&message).expect("metadata");
+    UVecRxLease::new(metadata, None).expect("zero-copy frame")
+}
+
+fn present_empty_payload_frame() -> UVecRxLease {
+    let message = UMessageBuilder::publish(
+        UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8001).expect("topic"),
+    )
+    .build_with_payload(Bytes::new(), UPayloadFormat::Protobuf)
+    .expect("message");
+    let metadata = try_project_umessage_to_frame_metadata(&message).expect("metadata");
+    UVecRxLease::new(metadata, Some(Vec::new())).expect("zero-copy frame")
 }
 
 async fn wait_for_sent_count(transport: &InMemoryZeroCopyTransport, expected: usize) {
@@ -516,4 +664,138 @@ async fn copy_minimized_route_uses_ordered_slices_without_owned_materialization(
         .delete_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
         .await
         .expect("copy-minimized route delete");
+}
+
+#[tokio::test]
+async fn copy_minimized_route_rejects_duplicate_same_authority_and_missing_delete() {
+    let ingress = Arc::new(InMemoryZeroCopyTransport::default());
+    let egress = Arc::new(InMemoryZeroCopyTransport::default());
+    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone());
+    let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress.clone());
+    let same_authority_endpoint =
+        ZeroCopyFrameEndpoint::new("same-authority", "authority-a", egress.clone());
+    let mut streamer = UStreamer::new("copy-minimized-route", 4, Arc::new(EmptySubscription))
+        .await
+        .expect("streamer");
+
+    let same_authority_error = streamer
+        .add_copy_minimized_route_ref(&ingress_endpoint, &same_authority_endpoint)
+        .await
+        .expect_err("same-authority route should fail");
+    assert_eq!(same_authority_error.get_code(), UCode::InvalidArgument);
+
+    streamer
+        .add_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("copy-minimized route add");
+    let duplicate_error = streamer
+        .add_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect_err("duplicate route should fail");
+    assert_eq!(duplicate_error.get_code(), UCode::AlreadyExists);
+
+    streamer
+        .delete_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("copy-minimized route delete");
+    let missing_delete_error = streamer
+        .delete_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect_err("missing route delete should fail");
+    assert_eq!(missing_delete_error.get_code(), UCode::NotFound);
+}
+
+#[tokio::test]
+async fn copy_minimized_route_preserves_no_payload_and_present_empty_payload() {
+    let ingress = Arc::new(InMemoryZeroCopyTransport::default());
+    let egress = Arc::new(InMemoryZeroCopyTransport::default());
+    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone());
+    let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress.clone());
+    let mut streamer = UStreamer::new("copy-minimized-route", 4, Arc::new(EmptySubscription))
+        .await
+        .expect("streamer");
+
+    streamer
+        .add_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("copy-minimized route add");
+
+    ingress.inject(no_payload_frame()).await;
+    ingress.inject(present_empty_payload_frame()).await;
+    wait_for_sent_count(&egress, 2).await;
+
+    let sent = egress.sent_frames();
+    assert_eq!(sent.len(), 2);
+    assert!(!sent[0].has_payload());
+    assert_eq!(sent[0].payload_len(), 0);
+    assert!(sent[1].has_payload());
+    assert_eq!(sent[1].payload_len(), 0);
+}
+
+#[tokio::test]
+async fn copy_minimized_route_rolls_back_after_partial_registration_failure() {
+    let instrumentation = Arc::new(RouteInstrumentation::default());
+    let ingress = Arc::new(
+        InstrumentedZeroCopyTransport::new(instrumentation.clone()).fail_register_after(1),
+    );
+    let egress = Arc::new(InstrumentedZeroCopyTransport::new(instrumentation));
+    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone());
+    let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress.clone());
+    let subscriptions = vec![subscription(
+        "//authority-a/5BA0/1/8001",
+        "//authority-b/5678/1/1234",
+    )];
+    let mut streamer = UStreamer::new(
+        "copy-minimized-route",
+        4,
+        Arc::new(StaticSubscription::new(subscriptions)),
+    )
+    .await
+    .expect("streamer");
+
+    let error = streamer
+        .add_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect_err("partial registration failure should fail route add");
+
+    assert_eq!(error.get_code(), UCode::Unavailable);
+    assert_eq!(ingress.listener_count(), 0);
+    assert_eq!(ingress.unregister_calls(), 1);
+    assert!(streamer.route_diagnostics().is_empty());
+}
+
+#[tokio::test]
+async fn copy_minimized_route_delete_failure_keeps_route_registered() {
+    let instrumentation = Arc::new(RouteInstrumentation::default());
+    let ingress =
+        Arc::new(InstrumentedZeroCopyTransport::new(instrumentation.clone()).fail_unregister());
+    let egress = Arc::new(InstrumentedZeroCopyTransport::new(instrumentation));
+    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone());
+    let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress.clone());
+    let mut streamer = UStreamer::new("copy-minimized-route", 4, Arc::new(EmptySubscription))
+        .await
+        .expect("streamer");
+
+    streamer
+        .add_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("copy-minimized route add");
+
+    let error = streamer
+        .delete_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect_err("injected unregister failure should fail delete");
+
+    assert_eq!(error.get_code(), UCode::Unavailable);
+    assert_eq!(streamer.route_diagnostics().len(), 1);
+    assert_eq!(ingress.listener_count(), 1);
+
+    ingress
+        .inject(instrumented_payload_frame(
+            &[b"still-", b"registered"],
+            Arc::new(RouteInstrumentation::default()),
+        ))
+        .await;
+    wait_for_instrumented_sent_count(&egress, 1).await;
+    assert_eq!(egress.sent_payloads(), vec![b"still-registered".to_vec()]);
 }

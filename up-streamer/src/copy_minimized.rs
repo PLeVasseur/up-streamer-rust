@@ -141,10 +141,51 @@ fn is_stable_container_encoding(encoding: &PayloadEncoding) -> bool {
 mod tests {
     use super::*;
     use bytes::Bytes;
+    use std::io::Cursor;
     use up_rust::{
-        try_project_umessage_to_frame_metadata, PayloadEncoding, UMessageBuilder, UPayloadFormat,
-        UUri, UVecRxLease, UVecTxBuffer,
+        try_project_umessage_to_frame_metadata, PayloadEncoding, UFrameMetadata, UMessageBuilder,
+        UPayloadFormat, UUri, UVecRxLease, UVecTxBuffer,
     };
+
+    struct TestFrame {
+        metadata: UFrameMetadata,
+        payload: Vec<u8>,
+    }
+
+    impl UFrameView for TestFrame {
+        type PayloadReader<'a>
+            = Cursor<&'a [u8]>
+        where
+            Self: 'a;
+        type PayloadSlices<'a>
+            = std::option::IntoIter<&'a [u8]>
+        where
+            Self: 'a;
+
+        fn metadata(&self) -> &UFrameMetadata {
+            &self.metadata
+        }
+
+        fn payload_len(&self) -> usize {
+            self.payload.len()
+        }
+
+        fn has_payload(&self) -> bool {
+            true
+        }
+
+        fn payload_reader(&self) -> Self::PayloadReader<'_> {
+            Cursor::new(self.payload.as_slice())
+        }
+
+        fn payload_slices(&self) -> Self::PayloadSlices<'_> {
+            Some(self.payload.as_slice()).into_iter()
+        }
+
+        fn try_contiguous_payload(&self) -> Option<&[u8]> {
+            Some(self.payload.as_slice())
+        }
+    }
 
     fn payload_frame(payload: &'static [u8]) -> UVecRxLease {
         let message = UMessageBuilder::publish(
@@ -160,24 +201,35 @@ mod tests {
         payload_len: usize,
         advertised_size: usize,
         alignment: usize,
-    ) -> UVecRxLease {
-        let message = UMessageBuilder::publish(
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8001).expect("topic"),
-        )
-        .build_with_payload(Bytes::from(vec![0; payload_len]), UPayloadFormat::Raw)
-        .expect("message");
-        let metadata = try_project_umessage_to_frame_metadata(&message)
-            .expect("metadata")
-            .into_attributes();
-        let encoding = PayloadEncoding::custom(
-            StableContainerPayloadInfo::ENCODING_ID,
+    ) -> TestFrame {
+        stable_payload_frame_with_content_type(
+            payload_len,
             format!(
                 "application/vnd.uprotocol.stable-container; type=test.Stable; variant=fixed; size={advertised_size}; align={alignment}"
             ),
         )
-        .expect("stable-container encoding");
-        let metadata = up_rust::UFrameMetadata::new(metadata, Some(encoding)).expect("metadata");
-        UVecRxLease::new(metadata, Some(vec![0; payload_len])).expect("frame")
+    }
+
+    fn stable_payload_frame_with_content_type(
+        payload_len: usize,
+        content_type: String,
+    ) -> TestFrame {
+        let message = UMessageBuilder::publish(
+            UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8001).expect("topic"),
+        )
+        .build()
+        .expect("message");
+        let metadata = try_project_umessage_to_frame_metadata(&message)
+            .expect("metadata")
+            .into_attributes();
+        let encoding =
+            PayloadEncoding::custom(StableContainerPayloadInfo::ENCODING_ID, content_type)
+                .expect("stable-container encoding");
+        let metadata = up_rust::UFrameMetadata::new_unchecked(metadata, Some(encoding));
+        TestFrame {
+            metadata,
+            payload: vec![0; payload_len],
+        }
     }
 
     #[test]
@@ -222,6 +274,19 @@ mod tests {
 
         let error = loan_spec_for_copy_minimized(&frame, CopyMinimizedRouteOptions::default())
             .expect_err("length should be rejected");
+
+        assert_eq!(error.get_code(), UCode::InvalidArgument);
+    }
+
+    #[test]
+    fn malformed_stable_container_metadata_is_rejected() {
+        let frame = stable_payload_frame_with_content_type(
+            8,
+            "application/vnd.uprotocol.stable-container; type=test.Stable".to_string(),
+        );
+
+        let error = loan_spec_for_copy_minimized(&frame, CopyMinimizedRouteOptions::default())
+            .expect_err("malformed stable-container metadata should be rejected");
 
         assert_eq!(error.get_code(), UCode::InvalidArgument);
     }
