@@ -106,14 +106,18 @@ behavior instead of inferring it from the endpoint transport type.
 - Copy-minimized routes are feature-gated one-copy routes. They borrow receive
   payload slices and copy those bytes into an egress transmit loan, avoiding an
   intermediate owned payload allocation but still copying payload bytes once.
+- Selected-wire copy-minimized routes require both endpoints to use the same
+  static selected wire `W` through `UWireTransport<_, W>`. Mismatched selected
+  wire metadata is rejected by the selected-wire transport adapter before the
+  Streamer route forwards the frame.
 - Stable-container payloads on copy-minimized routes are fail-safe: malformed
   stable-container metadata, payload length mismatch, or insufficient egress
   alignment rejects the frame before forwarding.
 
-The generic Streamer does not claim end-to-end no-copy forwarding. A future
-selected-wire Streamer phase may add same-wire route typing and mismatch
-rejection, but this compatibility/reference-parity layer should be read as
-one-copy copy-minimized routing only.
+The generic Streamer does not claim end-to-end no-copy forwarding. Even selected
+wire routes remain one-copy copy-minimized routing: frame metadata and payload
+presence are preserved, while payload bytes are copied once into the egress
+loan.
 
 ## Benchmark Guardrails
 

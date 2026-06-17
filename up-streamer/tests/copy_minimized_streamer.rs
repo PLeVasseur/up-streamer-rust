@@ -14,16 +14,18 @@ use up_rust::core::usubscription::{
     ResetReason, SubscriptionInfo, SubscriptionStatus, USubscription,
 };
 use up_rust::{
-    try_project_umessage_to_frame_metadata, InMemoryZeroCopyTransport, UCode, UFrameMetadata,
-    UFrameView, UMessageBuilder, UPayloadFormat, UStatus, UTxBuffer, UUri, UVecRxLease,
-    UZeroCopyListener, UZeroCopyTransportImpl, ValidatedTxLoanSpec,
+    try_project_umessage_to_frame_metadata, InMemoryZeroCopyTransport, PreparedTxLoanSpec,
+    ProtobufWire, UCode, UEncodedRxFrame, UEncodedZeroCopyListener, UFrameMetadata, UFrameView,
+    UMessageBuilder, UPayloadFormat, UProtocolNativeWire, UStatus, UTxBuffer, UUri, UVecRxLease,
+    UWireMetadata, UWireTransport, UZeroCopyListener, UZeroCopyTransportCore,
+    UZeroCopyTransportImpl, ValidatedTxLoanSpec,
 };
 use up_rust::{UZeroCopyRxLease, UZeroCopyTransport};
 use up_streamer::{
     CopyMinimizedRouteOptions, RouteCopySemantics, RouteKind, UStreamer, ZeroCopyFrameEndpoint,
 };
 use up_transport_iceoryx2_rust::Iceoryx2PubSub;
-use up_transport_zenoh::UPTransportZenoh;
+use up_transport_zenoh::ZenohZeroCopyCore;
 
 #[derive(Default)]
 struct EmptySubscription;
@@ -307,6 +309,14 @@ struct InstrumentedTransportState {
     unregister_calls: usize,
 }
 
+#[derive(Default)]
+struct SelectedWireCoreState {
+    listeners: Vec<Arc<dyn UEncodedZeroCopyListener<EncodedRxLease>>>,
+    sent_payloads: Vec<Vec<u8>>,
+    sent_metadata: Vec<UFrameMetadata>,
+    loan_specs: Vec<(usize, usize)>,
+}
+
 #[derive(Clone)]
 struct InstrumentedZeroCopyTransport {
     instrumentation: Arc<RouteInstrumentation>,
@@ -468,6 +478,167 @@ impl UZeroCopyTransportImpl for InstrumentedZeroCopyTransport {
     }
 }
 
+#[derive(Clone)]
+struct EncodedRxLease {
+    encoded_metadata: Vec<u8>,
+    slices: Vec<Vec<u8>>,
+}
+
+impl UEncodedRxFrame for EncodedRxLease {
+    type PayloadReader<'a>
+        = Cursor<Vec<u8>>
+    where
+        Self: 'a;
+    type PayloadSlices<'a>
+        = std::iter::Map<std::slice::Iter<'a, Vec<u8>>, fn(&'a Vec<u8>) -> &'a [u8]>
+    where
+        Self: 'a;
+
+    fn encoded_metadata(&self) -> &[u8] {
+        &self.encoded_metadata
+    }
+
+    fn payload_len(&self) -> usize {
+        self.slices.iter().map(Vec::len).sum()
+    }
+
+    fn payload_reader(&self) -> Self::PayloadReader<'_> {
+        Cursor::new(self.slices.concat())
+    }
+
+    fn payload_slices(&self) -> Self::PayloadSlices<'_> {
+        fn as_slice(value: &Vec<u8>) -> &[u8] {
+            value.as_slice()
+        }
+
+        self.slices.iter().map(as_slice)
+    }
+}
+
+#[derive(Clone, Default)]
+struct SelectedWireCore {
+    instrumentation: Arc<RouteInstrumentation>,
+    state: Arc<Mutex<SelectedWireCoreState>>,
+}
+
+impl SelectedWireCore {
+    fn new(instrumentation: Arc<RouteInstrumentation>) -> Self {
+        Self {
+            instrumentation,
+            state: Arc::new(Mutex::new(SelectedWireCoreState::default())),
+        }
+    }
+
+    async fn inject_encoded(&self, frame: EncodedRxLease) {
+        let listeners = self
+            .state
+            .lock()
+            .expect("selected-wire core state lock poisoned")
+            .listeners
+            .clone();
+        for listener in listeners {
+            listener.on_receive_encoded_zero_copy(frame.clone()).await;
+        }
+    }
+
+    fn sent_payloads(&self) -> Vec<Vec<u8>> {
+        self.state
+            .lock()
+            .expect("selected-wire core state lock poisoned")
+            .sent_payloads
+            .clone()
+    }
+
+    fn sent_metadata(&self) -> Vec<UFrameMetadata> {
+        self.state
+            .lock()
+            .expect("selected-wire core state lock poisoned")
+            .sent_metadata
+            .clone()
+    }
+
+    fn loan_specs(&self) -> Vec<(usize, usize)> {
+        self.state
+            .lock()
+            .expect("selected-wire core state lock poisoned")
+            .loan_specs
+            .clone()
+    }
+}
+
+#[async_trait]
+impl UZeroCopyTransportCore for SelectedWireCore {
+    type Tx = InstrumentedTxBuffer;
+    type Rx = EncodedRxLease;
+
+    async fn loan_prepared_tx(&self, spec: PreparedTxLoanSpec) -> Result<Self::Tx, UStatus> {
+        self.instrumentation
+            .loan_tx_calls
+            .fetch_add(1, Ordering::SeqCst);
+        self.state
+            .lock()
+            .expect("selected-wire core state lock poisoned")
+            .loan_specs
+            .push((spec.payload_len(), spec.payload_alignment()));
+        Ok(InstrumentedTxBuffer {
+            metadata: spec.metadata().clone(),
+            payload: vec![0; spec.payload_len()],
+            instrumentation: self.instrumentation.clone(),
+        })
+    }
+
+    async fn send_prepared_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
+        self.instrumentation
+            .send_calls
+            .fetch_add(1, Ordering::SeqCst);
+        let mut state = self
+            .state
+            .lock()
+            .expect("selected-wire core state lock poisoned");
+        state.sent_metadata.push(buffer.metadata);
+        state.sent_payloads.push(buffer.payload);
+        Ok(())
+    }
+
+    async fn register_encoded_zero_copy_listener(
+        &self,
+        _source_filter: &UUri,
+        _sink_filter: Option<&UUri>,
+        listener: Arc<dyn UEncodedZeroCopyListener<Self::Rx>>,
+    ) -> Result<(), UStatus> {
+        self.state
+            .lock()
+            .expect("selected-wire core state lock poisoned")
+            .listeners
+            .push(listener);
+        Ok(())
+    }
+
+    async fn unregister_encoded_zero_copy_listener(
+        &self,
+        _source_filter: &UUri,
+        _sink_filter: Option<&UUri>,
+        listener: Arc<dyn UEncodedZeroCopyListener<Self::Rx>>,
+    ) -> Result<(), UStatus> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("selected-wire core state lock poisoned");
+        let Some(index) = state
+            .listeners
+            .iter()
+            .position(|registered| Arc::ptr_eq(registered, &listener))
+        else {
+            return Err(UStatus::fail_with_code(
+                UCode::NotFound,
+                "selected-wire listener not registered",
+            ));
+        };
+        state.listeners.remove(index);
+        Ok(())
+    }
+}
+
 fn instrumented_payload_frame(
     payload_slices: &[&'static [u8]],
     instrumentation: Arc<RouteInstrumentation>,
@@ -483,6 +654,23 @@ fn instrumented_payload_frame(
         metadata,
         slices: payload_slices.iter().map(|slice| slice.to_vec()).collect(),
         instrumentation,
+    }
+}
+
+fn selected_wire_payload_frame<W>(payload_slices: &[&'static [u8]]) -> EncodedRxLease
+where
+    W: UWireMetadata,
+{
+    let payload_len: usize = payload_slices.iter().map(|slice| slice.len()).sum();
+    let message = UMessageBuilder::publish(
+        UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8001).expect("topic"),
+    )
+    .build_with_payload(Bytes::from(vec![0; payload_len]), UPayloadFormat::Protobuf)
+    .expect("message");
+    let metadata = try_project_umessage_to_frame_metadata(&message).expect("metadata");
+    EncodedRxLease {
+        encoded_metadata: W::encode_frame_metadata(&metadata).expect("encoded metadata"),
+        slices: payload_slices.iter().map(|slice| slice.to_vec()).collect(),
     }
 }
 
@@ -527,6 +715,15 @@ async fn wait_for_instrumented_sent_count(
     }
 }
 
+async fn wait_for_selected_wire_sent_count(transport: &SelectedWireCore, expected: usize) {
+    for _ in 0..20 {
+        if transport.sent_payloads().len() >= expected {
+            return;
+        }
+        sleep(Duration::from_millis(10)).await;
+    }
+}
+
 fn assert_route_pair<I, E>()
 where
     I: UZeroCopyTransport + Send + Sync + 'static,
@@ -539,10 +736,13 @@ where
 
 #[test]
 fn selected_zenoh_iceoryx2_route_pairs_typecheck() {
-    assert_route_pair::<UPTransportZenoh, UPTransportZenoh>();
-    assert_route_pair::<UPTransportZenoh, Iceoryx2PubSub>();
-    assert_route_pair::<Iceoryx2PubSub, UPTransportZenoh>();
-    assert_route_pair::<Iceoryx2PubSub, Iceoryx2PubSub>();
+    type Zenoh = UWireTransport<ZenohZeroCopyCore, ProtobufWire>;
+    type Iceoryx2 = UWireTransport<Iceoryx2PubSub, ProtobufWire>;
+
+    assert_route_pair::<Zenoh, Zenoh>();
+    assert_route_pair::<Zenoh, Iceoryx2>();
+    assert_route_pair::<Iceoryx2, Zenoh>();
+    assert_route_pair::<Iceoryx2, Iceoryx2>();
 }
 
 #[tokio::test]
@@ -798,4 +998,81 @@ async fn copy_minimized_route_delete_failure_keeps_route_registered() {
         .await;
     wait_for_instrumented_sent_count(&egress, 1).await;
     assert_eq!(egress.sent_payloads(), vec![b"still-registered".to_vec()]);
+}
+
+#[tokio::test]
+async fn selected_wire_copy_minimized_route_accepts_same_static_wire() {
+    let instrumentation = Arc::new(RouteInstrumentation::default());
+    let ingress_core = SelectedWireCore::new(instrumentation.clone());
+    let egress_core = SelectedWireCore::new(instrumentation);
+    let ingress = Arc::new(UWireTransport::new(ingress_core.clone(), ProtobufWire));
+    let egress = Arc::new(UWireTransport::new(egress_core.clone(), ProtobufWire));
+    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress);
+    let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
+    let mut streamer = UStreamer::new("selected-wire-route", 4, Arc::new(EmptySubscription))
+        .await
+        .expect("streamer");
+
+    streamer
+        .add_selected_wire_copy_minimized_route_ref_with_options(
+            &ingress_endpoint,
+            &egress_endpoint,
+            CopyMinimizedRouteOptions {
+                payload_alignment: 8,
+            },
+        )
+        .await
+        .expect("selected-wire route add");
+
+    ingress_core
+        .inject_encoded(selected_wire_payload_frame::<ProtobufWire>(&[
+            b"selected-",
+            b"wire",
+        ]))
+        .await;
+    wait_for_selected_wire_sent_count(&egress_core, 1).await;
+
+    assert_eq!(egress_core.sent_payloads(), vec![b"selected-wire".to_vec()]);
+    assert_eq!(egress_core.loan_specs(), vec![(b"selected-wire".len(), 8)]);
+    assert_eq!(egress_core.sent_metadata().len(), 1);
+
+    streamer
+        .delete_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("selected-wire route delete");
+}
+
+#[tokio::test]
+async fn selected_wire_copy_minimized_route_drops_mismatched_wire_before_forwarding() {
+    let instrumentation = Arc::new(RouteInstrumentation::default());
+    let ingress_core = SelectedWireCore::new(instrumentation.clone());
+    let egress_core = SelectedWireCore::new(instrumentation);
+    let ingress = Arc::new(UWireTransport::new(ingress_core.clone(), ProtobufWire));
+    let egress = Arc::new(UWireTransport::new(egress_core.clone(), ProtobufWire));
+    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress);
+    let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
+    let mut streamer = UStreamer::new("selected-wire-route", 4, Arc::new(EmptySubscription))
+        .await
+        .expect("streamer");
+
+    streamer
+        .add_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("selected-wire route add");
+
+    ingress_core
+        .inject_encoded(selected_wire_payload_frame::<UProtocolNativeWire>(&[
+            b"wrong-wire",
+        ]))
+        .await;
+    sleep(Duration::from_millis(20)).await;
+
+    assert!(egress_core.sent_payloads().is_empty());
+    assert!(egress_core.loan_specs().is_empty());
+    assert_eq!(egress_core.sent_metadata().len(), 0);
+
+    streamer
+        .delete_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("selected-wire route delete");
 }

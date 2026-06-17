@@ -25,7 +25,6 @@ experimental-copy-minimized-routing = ["up-streamer/experimental-copy-minimized-
 zenoh-zero-copy = ["up-transport-zenoh/zero-copy"]
 iceoryx2-zero-copy = [
     "dep:up-transport-iceoryx2-rust",
-    "up-transport-iceoryx2-rust/zero-copy",
 ]
 lola-transport = [
     "dep:up-transport-lola-rust",
@@ -44,7 +43,7 @@ tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
 up-streamer = { path = "../up-streamer" }
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "a4029c46d5cb4ad758a63a01e267ab1f29bb3038", optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "88e669b8483e677bb24fa6db3b25614540345cef", optional = true }
 up-transport-zenoh = { workspace = true }
 up-transport-mqtt5 = { workspace = true }
 zenoh = { workspace = true }

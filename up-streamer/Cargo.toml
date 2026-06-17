@@ -43,7 +43,7 @@ futures = { workspace = true }
 integration-test-utils = { path = "../utils/integration-test-utils" }
 tokio-condvar = { version = "0.3.0" }
 up-rust = { workspace = true, features = ["test-util"] }
-up-transport-iceoryx2-rust = { workspace = true, features = ["zero-copy"] }
+up-transport-iceoryx2-rust = { workspace = true }
 up-transport-zenoh = { workspace = true, features = ["zero-copy"] }
 usubscription-static-file = { path = "../utils/usubscription-static-file" }
 
