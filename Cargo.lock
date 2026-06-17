@@ -896,6 +896,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "clap",
+ "configurable-streamer-wire-support",
  "hello-world-protos",
  "json5",
  "protobuf",
@@ -903,7 +904,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "up-rust 0.10.0-SNAPSHOT (git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=26d70ef45af61fdd17d3e130845a5be155154b2e)",
+ "up-rust",
  "up-streamer",
  "up-transport-iceoryx2-rust",
  "up-transport-lola-rust",
@@ -911,6 +912,17 @@ dependencies = [
  "up-transport-zenoh",
  "usubscription-static-file",
  "zenoh",
+]
+
+[[package]]
+name = "configurable-streamer-wire-support"
+version = "0.1.0"
+dependencies = [
+ "up-rust",
+ "up-streamer",
+ "up-transport-iceoryx2-rust",
+ "up-transport-lola-rust",
+ "up-transport-zenoh",
 ]
 
 [[package]]
@@ -1480,7 +1492,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "up-rust 0.10.0-SNAPSHOT (git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=26d70ef45af61fdd17d3e130845a5be155154b2e)",
+ "up-rust",
  "up-transport-mqtt5",
  "up-transport-vsomeip",
  "up-transport-zenoh",
@@ -2553,7 +2565,7 @@ dependencies = [
  "tokio-condvar",
  "tracing",
  "tracing-subscriber",
- "up-rust 0.10.0-SNAPSHOT (git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=26d70ef45af61fdd17d3e130845a5be155154b2e)",
+ "up-rust",
  "up-streamer",
  "uuid",
 ]
@@ -5741,7 +5753,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "up-rust 0.10.0-SNAPSHOT (git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=26d70ef45af61fdd17d3e130845a5be155154b2e)",
+ "up-rust",
  "up-streamer",
  "up-transport-vsomeip",
  "up-transport-zenoh",
@@ -5761,7 +5773,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "up-rust 0.10.0-SNAPSHOT (git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=26d70ef45af61fdd17d3e130845a5be155154b2e)",
+ "up-rust",
  "up-streamer",
  "up-transport-vsomeip",
  "up-transport-zenoh",
@@ -5771,27 +5783,6 @@ dependencies = [
  "zenoh-plugin-trait",
  "zenoh-result",
  "zenoh-util",
-]
-
-[[package]]
-name = "up-rust"
-version = "0.10.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-rust.git?rev=0ad33e8a8508dd7c189780e0ac51095ece8995aa#0ad33e8a8508dd7c189780e0ac51095ece8995aa"
-dependencies = [
- "async-trait",
- "bytes",
- "mediatype",
- "protobuf",
- "protobuf-codegen",
- "protoc-bin-vendored",
- "rand 0.9.4",
- "regex",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "up-rust-macros 0.10.0-SNAPSHOT (git+https://github.com/PLeVasseur/up-rust.git?rev=0ad33e8a8508dd7c189780e0ac51095ece8995aa)",
- "uriparse",
- "uuid-simd",
 ]
 
 [[package]]
@@ -5811,19 +5802,9 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
- "up-rust-macros 0.10.0-SNAPSHOT (git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=26d70ef45af61fdd17d3e130845a5be155154b2e)",
+ "up-rust-macros",
  "uriparse",
  "uuid-simd",
-]
-
-[[package]]
-name = "up-rust-macros"
-version = "0.10.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-rust.git?rev=0ad33e8a8508dd7c189780e0ac51095ece8995aa#0ad33e8a8508dd7c189780e0ac51095ece8995aa"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
 ]
 
 [[package]]
@@ -5852,7 +5833,7 @@ dependencies = [
  "tokio",
  "tokio-condvar",
  "tracing",
- "up-rust 0.10.0-SNAPSHOT (git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=26d70ef45af61fdd17d3e130845a5be155154b2e)",
+ "up-rust",
  "up-transport-iceoryx2-rust",
  "up-transport-zenoh",
  "usubscription-static-file",
@@ -5868,18 +5849,18 @@ dependencies = [
  "iceoryx2",
  "iceoryx2-bb-container",
  "tokio",
- "up-rust 0.10.0-SNAPSHOT (git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=26d70ef45af61fdd17d3e130845a5be155154b2e)",
+ "up-rust",
 ]
 
 [[package]]
 name = "up-transport-lola-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=88e669b8483e677bb24fa6db3b25614540345cef#88e669b8483e677bb24fa6db3b25614540345cef"
+source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=68797c049dc752094c80f9d208a672a8ae5ed445#68797c049dc752094c80f9d208a672a8ae5ed445"
 dependencies = [
  "async-trait",
  "protobuf",
  "tokio",
- "up-rust 0.10.0-SNAPSHOT (git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=26d70ef45af61fdd17d3e130845a5be155154b2e)",
+ "up-rust",
 ]
 
 [[package]]
@@ -5900,7 +5881,7 @@ dependencies = [
  "slab",
  "testcontainers",
  "tokio",
- "up-rust 0.10.0-SNAPSHOT (git+https://github.com/PLeVasseur/up-rust.git?rev=0ad33e8a8508dd7c189780e0ac51095ece8995aa)",
+ "up-rust",
 ]
 
 [[package]]
@@ -5922,7 +5903,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "up-rust 0.10.0-SNAPSHOT (git+https://github.com/PLeVasseur/up-rust.git?rev=0ad33e8a8508dd7c189780e0ac51095ece8995aa)",
+ "up-rust",
  "vsomeip-proc-macro",
  "vsomeip-sys",
 ]
@@ -5946,7 +5927,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "up-rust 0.10.0-SNAPSHOT (git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=26d70ef45af61fdd17d3e130845a5be155154b2e)",
+ "up-rust",
  "zenoh",
 ]
 
@@ -6008,7 +5989,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "up-rust 0.10.0-SNAPSHOT (git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=26d70ef45af61fdd17d3e130845a5be155154b2e)",
+ "up-rust",
 ]
 
 [[package]]

@@ -1,0 +1,33 @@
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "configurable-streamer-wire-support"
+rust-version.workspace = true
+version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+
+[features]
+default = []
+zenoh-zero-copy = ["dep:up-transport-zenoh", "up-transport-zenoh/zero-copy"]
+iceoryx2-zero-copy = ["dep:up-transport-iceoryx2-rust"]
+lola-transport = ["dep:up-transport-lola-rust", "up-transport-lola-rust/zero-copy"]
+
+[dependencies]
+up-rust = { workspace = true }
+up-streamer = { path = "../../up-streamer", features = ["experimental-copy-minimized-routing"] }
+up-transport-zenoh = { workspace = true, optional = true }
+up-transport-iceoryx2-rust = { workspace = true, optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "68797c049dc752094c80f9d208a672a8ae5ed445", optional = true }

@@ -17,6 +17,7 @@ members = [
     "utils/integration-test-utils",
     "example-streamer-implementations",
     "utils/criterion-guardrail",
+    "utils/configurable-streamer-wire-support",
     "utils/transport-smoke-suite",
     "configurable-streamer",
     "up-linux-streamer-plugin",
@@ -68,6 +69,9 @@ zenoh-core = { version = "1.2.1" }
 zenoh-plugin-trait = { version = "1.2.1" }
 zenoh-result = { version = "1.2.1" }
 zenoh-util = { version = "1.2.1" }
+
+[patch."https://github.com/PLeVasseur/up-rust"]
+up-rust = { git = "ssh://git@github.com/PLeVasseur/up-rust.git", rev = "26d70ef45af61fdd17d3e130845a5be155154b2e" }
 
 [profile.dev]
 debug = true

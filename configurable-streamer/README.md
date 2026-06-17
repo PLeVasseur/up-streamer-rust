@@ -60,9 +60,20 @@ The configurable streamer can expose copy-minimized routes when it is built with
 - `CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5` routes between Zenoh shared memory and iceoryx2.
 - `CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5` routes between Zenoh shared memory and LoLa using `MW_COM_CONFIG_LOLA.json`.
 - `CONFIG_ZEROCOPY_EXAMPLE.json5` includes Zenoh shared memory, iceoryx2, and LoLa with pairwise copy-minimized forwarding.
+- `CONFIG_ZEROCOPY_MISMATCH_NEGATIVE_EXAMPLE.json5` documents the expected startup failure for an unsupported wire format declaration.
 - `MW_COM_CONFIG_LOLA.json` is the LoLa MW COM service/event fixture used by the LoLa examples.
 
-Each copy-minimized endpoint sets `routing_mode: "copy_minimized"`. MQTT endpoints cannot use copy-minimized routing; these examples keep the required MQTT transport section with an empty endpoint list.
+Each copy-minimized endpoint sets `routing_mode: "copy_minimized"`. Copy-minimized forwarding uses `forwarding_routes` entries instead of the legacy `forwarding` string array so each configured route can declare the selected wire format explicitly:
+
+```json5
+forwarding_routes: [
+  { endpoint: "iceoryx2-zc", wire_format: "protobuf" },
+]
+```
+
+The route declaration must use the same wire format for the ingress and egress adapter pair. Unsupported wire format names, missing `wire_format` on copy-minimized routes, MQTT endpoints, owned-only endpoints, or uncompiled zero-copy transports fail during startup before forwarding is registered. The current implementation preserves the one-copy copy-minimized route semantics from `up-streamer`; it is not a generic no-copy forwarding path. If route metadata cannot be decoded for the configured wire format, the selected-wire adapter drops or rejects the frame before Streamer forwarding.
+
+Owned/default routes can continue to use the legacy `forwarding` array and do not require `wire_format`. MQTT endpoints cannot use copy-minimized routing; these examples keep the required MQTT transport section with an empty endpoint list.
 
 Run the examples from the `configurable-streamer` directory so the relative config file paths resolve:
 

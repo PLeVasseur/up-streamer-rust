@@ -20,7 +20,9 @@
           endpoint: "zenoh-zc",
           routing_mode: "copy_minimized",
           copy_minimized_payload_alignment: 8,
-          forwarding: ["lola-zc"],
+          forwarding_routes: [
+            { endpoint: "lola-zc", wire_format: "protobuf" },
+          ],
         },
       ],
     },
@@ -42,7 +44,9 @@
           lola_sample_alignment: 8,
           lola_max_samples: 16,
           lola_mw_com_config_file: "MW_COM_CONFIG_LOLA.json",
-          forwarding: ["zenoh-zc"],
+          forwarding_routes: [
+            { endpoint: "zenoh-zc", wire_format: "protobuf" },
+          ],
         },
       ],
     },

@@ -107,6 +107,8 @@ pub struct EndpointConfig {
     #[serde(default)]
     pub(crate) forwarding: Vec<String>,
     #[serde(default)]
+    pub(crate) forwarding_routes: Vec<ForwardingRouteConfig>,
+    #[serde(default)]
     pub(crate) routing_mode: RoutingMode,
     #[serde(default)]
     pub(crate) copy_minimized_payload_alignment: Option<usize>,
@@ -128,6 +130,14 @@ pub struct EndpointConfig {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
+pub struct ForwardingRouteConfig {
+    pub(crate) endpoint: String,
+    #[serde(default)]
+    pub(crate) wire_format: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct MqttConfigDetails {
     pub(crate) hostname: String,
     pub(crate) port: u16,
@@ -142,5 +152,57 @@ impl MqttTransport {
         let config_contents = std::fs::read_to_string(&self.config_file)?;
         self.mqtt_details = Some(json5::from_str(&config_contents)?);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_config(route_fragment: &str) -> String {
+        format!(
+            r#"{{
+                up_streamer_config: {{ message_queue_size: 4 }},
+                streamer_uuri: {{ authority: "authority-streamer", ue_id: 1, ue_version_major: 1 }},
+                usubscription_config: {{ mode: "static_file", file_path: "subscriptions.json" }},
+                transports: {{
+                    zenoh: {{
+                        config_file: "ZENOH_CONFIG.json5",
+                        endpoints: [{{
+                            authority: "authority-a",
+                            endpoint: "zenoh-zc",
+                            routing_mode: "copy_minimized",
+                            {route_fragment}
+                        }}],
+                    }},
+                    mqtt: {{ config_file: "MQTT_CONFIG.json5", endpoints: [] }},
+                }},
+            }}"#
+        )
+    }
+
+    #[test]
+    fn forwarding_route_accepts_explicit_wire_format() {
+        let config: Config = json5::from_str(&base_config(
+            r#"forwarding_routes: [{ endpoint: "iceoryx2-zc", wire_format: "protobuf" }],"#,
+        ))
+        .expect("config parses");
+
+        let endpoint = &config.transports.zenoh.endpoints[0];
+        assert!(endpoint.forwarding.is_empty());
+        assert_eq!(endpoint.forwarding_routes[0].endpoint, "iceoryx2-zc");
+        assert_eq!(
+            endpoint.forwarding_routes[0].wire_format.as_deref(),
+            Some("protobuf")
+        );
+    }
+
+    #[test]
+    fn unknown_forwarding_route_field_is_rejected() {
+        let result = json5::from_str::<Config>(&base_config(
+            r#"forwarding_routes: [{ endpoint: "iceoryx2-zc", unexpected: "value" }],"#,
+        ));
+
+        assert!(result.is_err());
     }
 }

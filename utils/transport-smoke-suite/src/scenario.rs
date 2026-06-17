@@ -211,6 +211,7 @@ struct ZeroCopyRouteTemplate {
     ingress_authority: &'static str,
     egress: &'static str,
     egress_authority: &'static str,
+    wire_format: &'static str,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -254,6 +255,7 @@ struct ZeroCopyRouteArtifact {
     ingress_authority: String,
     egress: String,
     egress_authority: String,
+    wire_format: String,
 }
 
 #[derive(Serialize)]
@@ -371,17 +373,20 @@ const BUILD_ZC_ALL_TRANSPORTS: &str = "cargo build -p configurable-streamer --fe
 
 const REQUIRED_ZC_ZENOH_ICEORYX2_PATHS: &[&str] = &[
     "configurable-streamer/CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5",
+    "configurable-streamer/CONFIG_ZEROCOPY_MISMATCH_NEGATIVE_EXAMPLE.json5",
     "configurable-streamer/ZENOH_CONFIG.json5",
     "configurable-streamer/subscription_data.json",
 ];
 const REQUIRED_ZC_ZENOH_LOLA_PATHS: &[&str] = &[
     "configurable-streamer/CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5",
+    "configurable-streamer/CONFIG_ZEROCOPY_MISMATCH_NEGATIVE_EXAMPLE.json5",
     "configurable-streamer/ZENOH_CONFIG.json5",
     "configurable-streamer/subscription_data.json",
     "configurable-streamer/MW_COM_CONFIG_LOLA.json",
 ];
 const REQUIRED_ZC_ALL_TRANSPORTS_PATHS: &[&str] = &[
     "configurable-streamer/CONFIG_ZEROCOPY_EXAMPLE.json5",
+    "configurable-streamer/CONFIG_ZEROCOPY_MISMATCH_NEGATIVE_EXAMPLE.json5",
     "configurable-streamer/ZENOH_CONFIG.json5",
     "configurable-streamer/subscription_data.json",
     "configurable-streamer/MW_COM_CONFIG_LOLA.json",
@@ -392,48 +397,56 @@ const ROUTE_ZENOH_TO_ICEORYX2: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
     ingress_authority: "authority-a",
     egress: "iceoryx2-zc",
     egress_authority: "authority-b",
+    wire_format: "protobuf",
 };
 const ROUTE_ICEORYX2_TO_ZENOH: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
     ingress: "iceoryx2-zc",
     ingress_authority: "authority-b",
     egress: "zenoh-zc",
     egress_authority: "authority-a",
+    wire_format: "protobuf",
 };
 const ROUTE_ZENOH_TO_LOLA: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
     ingress: "zenoh-zc",
     ingress_authority: "authority-a",
     egress: "lola-zc",
     egress_authority: "authority-b",
+    wire_format: "protobuf",
 };
 const ROUTE_LOLA_TO_ZENOH: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
     ingress: "lola-zc",
     ingress_authority: "authority-b",
     egress: "zenoh-zc",
     egress_authority: "authority-a",
+    wire_format: "protobuf",
 };
 const ROUTE_ALL_ZENOH_TO_LOLA: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
     ingress: "zenoh-zc",
     ingress_authority: "authority-a",
     egress: "lola-zc",
     egress_authority: "authority-c",
+    wire_format: "protobuf",
 };
 const ROUTE_ALL_LOLA_TO_ZENOH: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
     ingress: "lola-zc",
     ingress_authority: "authority-c",
     egress: "zenoh-zc",
     egress_authority: "authority-a",
+    wire_format: "protobuf",
 };
 const ROUTE_ICEORYX2_TO_LOLA: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
     ingress: "iceoryx2-zc",
     ingress_authority: "authority-b",
     egress: "lola-zc",
     egress_authority: "authority-c",
+    wire_format: "protobuf",
 };
 const ROUTE_LOLA_TO_ICEORYX2: ZeroCopyRouteTemplate = ZeroCopyRouteTemplate {
     ingress: "lola-zc",
     ingress_authority: "authority-c",
     egress: "iceoryx2-zc",
     egress_authority: "authority-b",
+    wire_format: "protobuf",
 };
 
 const ZC_ROUTES_ZENOH_ICEORYX2: &[ZeroCopyRouteTemplate] =
@@ -2152,6 +2165,7 @@ fn route_to_artifact(route: ZeroCopyRouteTemplate) -> ZeroCopyRouteArtifact {
         ingress_authority: route.ingress_authority.to_string(),
         egress: route.egress.to_string(),
         egress_authority: route.egress_authority.to_string(),
+        wire_format: route.wire_format.to_string(),
     }
 }
 

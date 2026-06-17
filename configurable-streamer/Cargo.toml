@@ -22,11 +22,13 @@ license.workspace = true
 [features]
 default = []
 experimental-copy-minimized-routing = ["up-streamer/experimental-copy-minimized-routing"]
-zenoh-zero-copy = ["up-transport-zenoh/zero-copy"]
+zenoh-zero-copy = ["up-transport-zenoh/zero-copy", "configurable-streamer-wire-support/zenoh-zero-copy"]
 iceoryx2-zero-copy = [
+    "configurable-streamer-wire-support/iceoryx2-zero-copy",
     "dep:up-transport-iceoryx2-rust",
 ]
 lola-transport = [
+    "configurable-streamer-wire-support/lola-transport",
     "dep:up-transport-lola-rust",
     "up-transport-lola-rust/zero-copy",
 ]
@@ -42,8 +44,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
 up-streamer = { path = "../up-streamer" }
+configurable-streamer-wire-support = { path = "../utils/configurable-streamer-wire-support" }
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "88e669b8483e677bb24fa6db3b25614540345cef", optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "68797c049dc752094c80f9d208a672a8ae5ed445", optional = true }
 up-transport-zenoh = { workspace = true }
 up-transport-mqtt5 = { workspace = true }
 zenoh = { workspace = true }

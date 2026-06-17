@@ -13,8 +13,12 @@
 
 mod config;
 
-use crate::config::{Config, EndpointConfig, RoutingMode, SubscriptionProviderMode};
+use crate::config::{
+    Config, EndpointConfig, ForwardingRouteConfig, RoutingMode, SubscriptionProviderMode,
+};
 use clap::Parser;
+#[cfg(feature = "experimental-copy-minimized-routing")]
+use configurable_streamer_wire_support::{RouteWireEndpoint, RouteWireFormat};
 use std::io::Read;
 #[cfg(all(
     feature = "experimental-copy-minimized-routing",
@@ -22,12 +26,15 @@ use std::io::Read;
 ))]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::{collections::HashMap, fs::File};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+};
 use tracing::info;
 use up_rust::core::usubscription::USubscription;
 use up_rust::{UCode, UStatus, UTransport};
 #[cfg(feature = "experimental-copy-minimized-routing")]
-use up_streamer::{CopyMinimizedRouteOptions, ZeroCopyFrameEndpoint};
+use up_streamer::CopyMinimizedRouteOptions;
 use up_streamer::{Endpoint, UStreamer};
 #[cfg(all(
     feature = "experimental-copy-minimized-routing",
@@ -40,6 +47,11 @@ use up_transport_iceoryx2_rust::Iceoryx2PubSub;
 ))]
 use up_transport_lola_rust::{LolaTransportConfig, UTransportLola};
 use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions, MqttClientOptions};
+#[cfg(all(
+    feature = "experimental-copy-minimized-routing",
+    feature = "zenoh-zero-copy"
+))]
+use up_transport_zenoh::ZenohZeroCopyCore;
 use up_transport_zenoh::{zenoh_config::Config as ZenohConfig, UPTransportZenoh};
 use usubscription_static_file::USubscriptionStaticFile;
 
@@ -54,18 +66,7 @@ struct StreamerArgs {
 struct ConfiguredEndpoint {
     standard: Option<Endpoint>,
     #[cfg(feature = "experimental-copy-minimized-routing")]
-    zero_copy: Option<ZeroCopyEndpoint>,
-}
-
-#[cfg(feature = "experimental-copy-minimized-routing")]
-#[derive(Clone)]
-enum ZeroCopyEndpoint {
-    #[cfg(feature = "zenoh-zero-copy")]
-    Zenoh(ZeroCopyFrameEndpoint<UPTransportZenoh>),
-    #[cfg(feature = "iceoryx2-zero-copy")]
-    Iceoryx2(ZeroCopyFrameEndpoint<Iceoryx2PubSub>),
-    #[cfg(feature = "lola-transport")]
-    Lola(ZeroCopyFrameEndpoint<UTransportLola>),
+    route_wire_endpoints: HashMap<RouteWireFormat, RouteWireEndpoint>,
 }
 
 fn invalid_config(message: impl Into<String>) -> UStatus {
@@ -90,6 +91,79 @@ fn insert_configured_endpoint(
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+struct PendingRoute<'a> {
+    target: &'a str,
+    wire_format: Option<&'a str>,
+}
+
+fn endpoint_routes(endpoint_config: &EndpointConfig) -> Vec<PendingRoute<'_>> {
+    let mut routes = Vec::with_capacity(
+        endpoint_config.forwarding.len() + endpoint_config.forwarding_routes.len(),
+    );
+    for target in &endpoint_config.forwarding {
+        routes.push(PendingRoute {
+            target,
+            wire_format: None,
+        });
+    }
+    for ForwardingRouteConfig {
+        endpoint,
+        wire_format,
+    } in &endpoint_config.forwarding_routes
+    {
+        routes.push(PendingRoute {
+            target: endpoint,
+            wire_format: wire_format.as_deref(),
+        });
+    }
+    routes
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+fn required_route_wire_format(
+    endpoint_name: &str,
+    target_name: &str,
+    configured: Option<&str>,
+) -> Result<RouteWireFormat, UStatus> {
+    let configured = configured.ok_or_else(|| {
+        invalid_config(format!(
+            "copy_minimized route {endpoint_name}->{target_name} requires wire_format"
+        ))
+    })?;
+    RouteWireFormat::parse(configured)
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+fn collect_route_wire_formats(
+    endpoint_configs: &[&[EndpointConfig]],
+) -> Result<HashMap<String, HashSet<RouteWireFormat>>, UStatus> {
+    let mut route_wire_formats: HashMap<String, HashSet<RouteWireFormat>> = HashMap::new();
+    for configs in endpoint_configs {
+        for endpoint_config in *configs {
+            if endpoint_config.routing_mode != RoutingMode::CopyMinimized {
+                continue;
+            }
+            for route in endpoint_routes(endpoint_config) {
+                let route_wire_format = required_route_wire_format(
+                    &endpoint_config.endpoint,
+                    route.target,
+                    route.wire_format,
+                )?;
+                route_wire_formats
+                    .entry(endpoint_config.endpoint.clone())
+                    .or_default()
+                    .insert(route_wire_format);
+                route_wire_formats
+                    .entry(route.target.to_string())
+                    .or_default()
+                    .insert(route_wire_format);
+            }
+        }
+    }
+    Ok(route_wire_formats)
+}
+
 fn standard_endpoint<'a>(
     endpoint: &'a ConfiguredEndpoint,
     endpoint_name: &str,
@@ -102,15 +176,19 @@ fn standard_endpoint<'a>(
 }
 
 #[cfg(feature = "experimental-copy-minimized-routing")]
-fn zero_copy_endpoint<'a>(
+fn route_wire_endpoint<'a>(
     endpoint: &'a ConfiguredEndpoint,
     endpoint_name: &str,
-) -> Result<&'a ZeroCopyEndpoint, UStatus> {
-    endpoint.zero_copy.as_ref().ok_or_else(|| {
-        invalid_config(format!(
-            "endpoint {endpoint_name} is not available for copy_minimized routing; enable the matching zero-copy transport feature"
-        ))
-    })
+    route_wire_format: RouteWireFormat,
+) -> Result<&'a RouteWireEndpoint, UStatus> {
+    endpoint
+        .route_wire_endpoints
+        .get(&route_wire_format)
+        .ok_or_else(|| {
+            invalid_config(format!(
+                "endpoint {endpoint_name} is not available for requested route wire format"
+            ))
+        })
 }
 
 fn ensure_copy_minimized_endpoint(
@@ -119,11 +197,11 @@ fn ensure_copy_minimized_endpoint(
 ) -> Result<(), UStatus> {
     #[cfg(feature = "experimental-copy-minimized-routing")]
     {
-        if endpoint.zero_copy.is_some() {
+        if !endpoint.route_wire_endpoints.is_empty() {
             return Ok(());
         }
         return Err(invalid_config(format!(
-            "endpoint {endpoint_name} uses copy_minimized routing but no zero-copy endpoint is compiled for its transport"
+            "endpoint {endpoint_name} uses copy_minimized routing but no route wire endpoint is available"
         )));
     }
 
@@ -140,35 +218,69 @@ fn ensure_copy_minimized_endpoint(
     feature = "experimental-copy-minimized-routing",
     feature = "zenoh-zero-copy"
 ))]
-fn zenoh_zero_copy_endpoint(
+async fn zenoh_route_wire_endpoints(
     endpoint_config: &EndpointConfig,
-    transport: Arc<UPTransportZenoh>,
-) -> Option<ZeroCopyEndpoint> {
-    Some(ZeroCopyEndpoint::Zenoh(ZeroCopyFrameEndpoint::new(
-        &endpoint_config.endpoint,
-        &endpoint_config.authority,
-        transport,
-    )))
+    config_file: &str,
+    streamer_authority: &str,
+    route_wire_formats: Option<&HashSet<RouteWireFormat>>,
+) -> Result<HashMap<RouteWireFormat, RouteWireEndpoint>, UStatus> {
+    let mut endpoints = HashMap::new();
+    if let Some(route_wire_formats) = route_wire_formats {
+        for route_wire_format in route_wire_formats {
+            let zenoh_config = ZenohConfig::from_file(config_file).map_err(|e| {
+                UStatus::fail_with_code(
+                    UCode::InvalidArgument,
+                    format!("Unable to load Zenoh config file for route wire endpoint: {e:?}"),
+                )
+            })?;
+            let core = ZenohZeroCopyCore::new(zenoh_config, streamer_authority.to_string()).await?;
+            endpoints.insert(
+                *route_wire_format,
+                configurable_streamer_wire_support::zenoh_endpoint(
+                    &endpoint_config.endpoint,
+                    &endpoint_config.authority,
+                    core,
+                    *route_wire_format,
+                ),
+            );
+        }
+    }
+    Ok(endpoints)
 }
 
 #[cfg(all(
     feature = "experimental-copy-minimized-routing",
     not(feature = "zenoh-zero-copy")
 ))]
-fn zenoh_zero_copy_endpoint(
+async fn zenoh_route_wire_endpoints(
     _endpoint_config: &EndpointConfig,
-    _transport: Arc<UPTransportZenoh>,
-) -> Option<ZeroCopyEndpoint> {
-    None
+    _config_file: &str,
+    _streamer_authority: &str,
+    route_wire_formats: Option<&HashSet<RouteWireFormat>>,
+) -> Result<HashMap<RouteWireFormat, RouteWireEndpoint>, UStatus> {
+    if route_wire_formats.is_some_and(|formats| !formats.is_empty()) {
+        return Err(invalid_config(
+            "Zenoh route wire formats require configurable-streamer feature zenoh-zero-copy",
+        ));
+    }
+    Ok(HashMap::new())
 }
 
-fn register_zenoh_endpoints(
+async fn register_zenoh_endpoints(
     endpoints: &mut HashMap<String, ConfiguredEndpoint>,
     endpoint_configs: &[EndpointConfig],
+    config_file: &str,
+    streamer_authority: &str,
+    #[cfg(feature = "experimental-copy-minimized-routing")] route_wire_formats: &HashMap<
+        String,
+        HashSet<RouteWireFormat>,
+    >,
     transport: Arc<UPTransportZenoh>,
 ) -> Result<(), UStatus> {
     for endpoint_config in endpoint_configs {
         let standard_transport: Arc<dyn UTransport> = transport.clone();
+        #[cfg(feature = "experimental-copy-minimized-routing")]
+        let endpoint_route_wire_formats = route_wire_formats.get(&endpoint_config.endpoint);
         let endpoint = ConfiguredEndpoint {
             standard: Some(Endpoint::new(
                 &endpoint_config.endpoint,
@@ -176,7 +288,13 @@ fn register_zenoh_endpoints(
                 standard_transport,
             )),
             #[cfg(feature = "experimental-copy-minimized-routing")]
-            zero_copy: zenoh_zero_copy_endpoint(endpoint_config, transport.clone()),
+            route_wire_endpoints: zenoh_route_wire_endpoints(
+                endpoint_config,
+                config_file,
+                streamer_authority,
+                endpoint_route_wire_formats,
+            )
+            .await?,
         };
         if endpoint_config.routing_mode == RoutingMode::CopyMinimized {
             ensure_copy_minimized_endpoint(&endpoint, &endpoint_config.endpoint)?;
@@ -209,7 +327,7 @@ fn register_mqtt_endpoints(
                     transport.clone(),
                 )),
                 #[cfg(feature = "experimental-copy-minimized-routing")]
-                zero_copy: None,
+                route_wire_endpoints: HashMap::new(),
             },
         )?;
     }
@@ -224,21 +342,27 @@ fn register_mqtt_endpoints(
 fn register_iceoryx2_endpoints(
     endpoints: &mut HashMap<String, ConfiguredEndpoint>,
     endpoint_configs: &[EndpointConfig],
-    transport: Arc<Iceoryx2PubSub>,
+    route_wire_formats: &HashMap<String, HashSet<RouteWireFormat>>,
+    transport: Iceoryx2PubSub,
 ) -> Result<(), UStatus> {
     for endpoint_config in endpoint_configs {
-        let standard_transport: Arc<dyn UTransport> = transport.clone();
+        let mut route_wire_endpoints = HashMap::new();
+        if let Some(route_wire_formats) = route_wire_formats.get(&endpoint_config.endpoint) {
+            for route_wire_format in route_wire_formats {
+                route_wire_endpoints.insert(
+                    *route_wire_format,
+                    configurable_streamer_wire_support::iceoryx2_endpoint(
+                        &endpoint_config.endpoint,
+                        &endpoint_config.authority,
+                        transport.clone(),
+                        *route_wire_format,
+                    ),
+                );
+            }
+        }
         let endpoint = ConfiguredEndpoint {
-            standard: Some(Endpoint::new(
-                &endpoint_config.endpoint,
-                &endpoint_config.authority,
-                standard_transport,
-            )),
-            zero_copy: Some(ZeroCopyEndpoint::Iceoryx2(ZeroCopyFrameEndpoint::new(
-                &endpoint_config.endpoint,
-                &endpoint_config.authority,
-                transport.clone(),
-            ))),
+            standard: None,
+            route_wire_endpoints,
         };
         if endpoint_config.routing_mode == RoutingMode::CopyMinimized {
             ensure_copy_minimized_endpoint(&endpoint, &endpoint_config.endpoint)?;
@@ -256,6 +380,7 @@ fn register_iceoryx2_endpoints(
 fn register_lola_endpoints(
     endpoints: &mut HashMap<String, ConfiguredEndpoint>,
     endpoint_configs: &[EndpointConfig],
+    route_wire_formats: &HashMap<String, HashSet<RouteWireFormat>>,
     config_dir: &Path,
 ) -> Result<(), UStatus> {
     for endpoint_config in endpoint_configs {
@@ -266,16 +391,26 @@ fn register_lola_endpoints(
             )));
         }
         let transport = UTransportLola::build(lola_transport_config(endpoint_config, config_dir)?)?;
+        let mut route_wire_endpoints = HashMap::new();
+        if let Some(route_wire_formats) = route_wire_formats.get(&endpoint_config.endpoint) {
+            for route_wire_format in route_wire_formats {
+                route_wire_endpoints.insert(
+                    *route_wire_format,
+                    configurable_streamer_wire_support::lola_endpoint(
+                        &endpoint_config.endpoint,
+                        &endpoint_config.authority,
+                        transport.zero_copy_core(),
+                        *route_wire_format,
+                    ),
+                );
+            }
+        }
         insert_configured_endpoint(
             endpoints,
             endpoint_config,
             ConfiguredEndpoint {
                 standard: None,
-                zero_copy: Some(ZeroCopyEndpoint::Lola(ZeroCopyFrameEndpoint::new(
-                    &endpoint_config.endpoint,
-                    &endpoint_config.authority,
-                    transport,
-                ))),
+                route_wire_endpoints,
             },
         )?;
     }
@@ -400,7 +535,8 @@ async fn wire_forwarding_rules(
     endpoint_configs: &[EndpointConfig],
 ) -> Result<(), UStatus> {
     for endpoint_config in endpoint_configs {
-        for forwarding_target in &endpoint_config.forwarding {
+        for route in endpoint_routes(endpoint_config) {
+            let forwarding_target = route.target;
             let left_endpoint = endpoints.get(&endpoint_config.endpoint).ok_or_else(|| {
                 invalid_config(format!(
                     "Unknown endpoint in forwarding rules: {}",
@@ -430,6 +566,7 @@ async fn wire_forwarding_rules(
                         &endpoint_config.endpoint,
                         forwarding_target,
                         endpoint_config.copy_minimized_payload_alignment,
+                        route.wire_format,
                     )
                     .await?;
                 }
@@ -448,14 +585,17 @@ async fn wire_copy_minimized_route(
     left_name: &str,
     right_name: &str,
     payload_alignment: Option<usize>,
+    route_wire_format: Option<&str>,
 ) -> Result<(), UStatus> {
     let options = CopyMinimizedRouteOptions {
         payload_alignment: payload_alignment.unwrap_or(1),
     };
-    add_configured_copy_minimized_route(
+    let route_wire_format = required_route_wire_format(left_name, right_name, route_wire_format)?;
+    configurable_streamer_wire_support::add_route_wire_format(
         streamer,
-        zero_copy_endpoint(left_endpoint, left_name)?,
-        zero_copy_endpoint(right_endpoint, right_name)?,
+        route_wire_endpoint(left_endpoint, left_name, route_wire_format)?,
+        route_wire_endpoint(right_endpoint, right_name, route_wire_format)?,
+        route_wire_format,
         options,
     )
     .await
@@ -469,79 +609,11 @@ async fn wire_copy_minimized_route(
     left_name: &str,
     right_name: &str,
     _payload_alignment: Option<usize>,
+    _route_wire_format: Option<&str>,
 ) -> Result<(), UStatus> {
     Err(invalid_config(format!(
         "copy_minimized route {left_name}->{right_name} requires configurable-streamer feature experimental-copy-minimized-routing"
     )))
-}
-
-#[cfg(feature = "experimental-copy-minimized-routing")]
-async fn add_configured_copy_minimized_route(
-    streamer: &mut UStreamer,
-    ingress: &ZeroCopyEndpoint,
-    egress: &ZeroCopyEndpoint,
-    options: CopyMinimizedRouteOptions,
-) -> Result<(), UStatus> {
-    #[allow(unreachable_patterns)]
-    match (ingress, egress) {
-        #[cfg(feature = "zenoh-zero-copy")]
-        (ZeroCopyEndpoint::Zenoh(left), ZeroCopyEndpoint::Zenoh(right)) => {
-            streamer
-                .add_copy_minimized_route_ref_with_options(left, right, options)
-                .await
-        }
-        #[cfg(all(feature = "zenoh-zero-copy", feature = "iceoryx2-zero-copy"))]
-        (ZeroCopyEndpoint::Zenoh(left), ZeroCopyEndpoint::Iceoryx2(right)) => {
-            streamer
-                .add_copy_minimized_route_ref_with_options(left, right, options)
-                .await
-        }
-        #[cfg(all(feature = "zenoh-zero-copy", feature = "lola-transport"))]
-        (ZeroCopyEndpoint::Zenoh(left), ZeroCopyEndpoint::Lola(right)) => {
-            streamer
-                .add_copy_minimized_route_ref_with_options(left, right, options)
-                .await
-        }
-        #[cfg(all(feature = "iceoryx2-zero-copy", feature = "zenoh-zero-copy"))]
-        (ZeroCopyEndpoint::Iceoryx2(left), ZeroCopyEndpoint::Zenoh(right)) => {
-            streamer
-                .add_copy_minimized_route_ref_with_options(left, right, options)
-                .await
-        }
-        #[cfg(feature = "iceoryx2-zero-copy")]
-        (ZeroCopyEndpoint::Iceoryx2(left), ZeroCopyEndpoint::Iceoryx2(right)) => {
-            streamer
-                .add_copy_minimized_route_ref_with_options(left, right, options)
-                .await
-        }
-        #[cfg(all(feature = "iceoryx2-zero-copy", feature = "lola-transport"))]
-        (ZeroCopyEndpoint::Iceoryx2(left), ZeroCopyEndpoint::Lola(right)) => {
-            streamer
-                .add_copy_minimized_route_ref_with_options(left, right, options)
-                .await
-        }
-        #[cfg(all(feature = "lola-transport", feature = "zenoh-zero-copy"))]
-        (ZeroCopyEndpoint::Lola(left), ZeroCopyEndpoint::Zenoh(right)) => {
-            streamer
-                .add_copy_minimized_route_ref_with_options(left, right, options)
-                .await
-        }
-        #[cfg(all(feature = "lola-transport", feature = "iceoryx2-zero-copy"))]
-        (ZeroCopyEndpoint::Lola(left), ZeroCopyEndpoint::Iceoryx2(right)) => {
-            streamer
-                .add_copy_minimized_route_ref_with_options(left, right, options)
-                .await
-        }
-        #[cfg(feature = "lola-transport")]
-        (ZeroCopyEndpoint::Lola(left), ZeroCopyEndpoint::Lola(right)) => {
-            streamer
-                .add_copy_minimized_route_ref_with_options(left, right, options)
-                .await
-        }
-        _ => Err(invalid_config(
-            "copy_minimized route uses an unsupported zero-copy endpoint combination",
-        )),
-    }
 }
 
 async fn wait_for_shutdown_signal() -> Result<(), UStatus> {
@@ -551,6 +623,25 @@ async fn wait_for_shutdown_signal() -> Result<(), UStatus> {
             format!("Unable to wait for shutdown signal: {error:?}"),
         )
     })
+}
+
+#[cfg(all(test, feature = "experimental-copy-minimized-routing"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_minimized_route_requires_wire_format() {
+        let result = required_route_wire_format("ingress", "egress", None);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn copy_minimized_route_rejects_unsupported_wire_format() {
+        let result = required_route_wire_format("ingress", "egress", Some("unsupported"));
+
+        assert!(result.is_err());
+    }
 }
 
 #[tokio::main]
@@ -582,6 +673,23 @@ async fn main() -> Result<(), UStatus> {
             format!("Unable to parse config file: {e:?}"),
         )
     })?;
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    let route_wire_formats = collect_route_wire_formats(&[
+        &config.transports.zenoh.endpoints,
+        &config.transports.mqtt.endpoints,
+        config
+            .transports
+            .iceoryx2
+            .as_ref()
+            .map(|transport| transport.endpoints.as_slice())
+            .unwrap_or(&[]),
+        config
+            .transports
+            .lola
+            .as_ref()
+            .map(|transport| transport.endpoints.as_slice())
+            .unwrap_or(&[]),
+    ])?;
     if !config.transports.mqtt.endpoints.is_empty() {
         config.transports.mqtt.load_mqtt_details().map_err(|e| {
             UStatus::fail_with_code(
@@ -614,23 +722,15 @@ async fn main() -> Result<(), UStatus> {
     let mut endpoints: HashMap<String, ConfiguredEndpoint> = HashMap::new();
 
     // build the zenoh transport
-    let zenoh_config =
-        ZenohConfig::from_file(config.transports.zenoh.config_file).map_err(|e| {
+    let zenoh_config = ZenohConfig::from_file(config.transports.zenoh.config_file.clone())
+        .map_err(|e| {
             UStatus::fail_with_code(
                 UCode::InvalidArgument,
                 format!("Unable to load Zenoh config file: {e:?}"),
             )
         })?;
     let zenoh_transport = Arc::new(
-        UPTransportZenoh::builder(config.streamer_uuri.authority.clone())
-            .map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::Internal,
-                    format!("Unable to create Zenoh transport builder: {e:?}"),
-                )
-            })?
-            .with_config(zenoh_config)
-            .build()
+        UPTransportZenoh::new(zenoh_config, config.streamer_uuri.authority.clone())
             .await
             .map_err(|e| {
                 UStatus::fail_with_code(
@@ -671,8 +771,13 @@ async fn main() -> Result<(), UStatus> {
     register_zenoh_endpoints(
         &mut endpoints,
         &config.transports.zenoh.endpoints,
+        &config.transports.zenoh.config_file,
+        &config.streamer_uuri.authority,
+        #[cfg(feature = "experimental-copy-minimized-routing")]
+        &route_wire_formats,
         zenoh_transport,
-    )?;
+    )
+    .await?;
     if let Some(mqtt5_transport) = mqtt5_transport {
         register_mqtt_endpoints(
             &mut endpoints,
@@ -689,6 +794,7 @@ async fn main() -> Result<(), UStatus> {
             register_iceoryx2_endpoints(
                 &mut endpoints,
                 &iceoryx2_config.endpoints,
+                &route_wire_formats,
                 Iceoryx2PubSub::new(),
             )?;
         }
@@ -709,7 +815,12 @@ async fn main() -> Result<(), UStatus> {
             feature = "lola-transport"
         ))]
         {
-            register_lola_endpoints(&mut endpoints, &lola_config.endpoints, &config_dir)?;
+            register_lola_endpoints(
+                &mut endpoints,
+                &lola_config.endpoints,
+                &route_wire_formats,
+                &config_dir,
+            )?;
         }
         #[cfg(not(all(
             feature = "experimental-copy-minimized-routing",
