@@ -118,6 +118,36 @@ const PASSIVE_ZENOH_SUBSCRIBER_ARGS_B: &[&str] = &[
     "0x8001",
 ];
 
+const PASSIVE_ZENOH_SERVICE_ARGS_B_FROM_SOMEIP: &[&str] = &[
+    "--uauthority",
+    "authority-b",
+    "--uentity",
+    "0x11236",
+    "--uversion",
+    "0x1",
+    "--resource",
+    "0x0421",
+];
+
+const PASSIVE_ZENOH_SUBSCRIBER_ARGS_B_FROM_SOMEIP: &[&str] = &[
+    "--uauthority",
+    "authority-b",
+    "--uentity",
+    "0x5678",
+    "--uversion",
+    "0x1",
+    "--resource",
+    "0x1234",
+    "--source-authority",
+    "authority-a",
+    "--source-uentity",
+    "0x15BA0",
+    "--source-uversion",
+    "0x1",
+    "--source-resource",
+    "0x8001",
+];
+
 const PASSIVE_SOMEIP_SUBSCRIBER_ARGS_A: &[&str] = &[
     "--uauthority",
     "authority-a",
@@ -807,7 +837,7 @@ const SCENARIO_SOMEIP_RR_SOMEIP_CLIENT_ZENOH_SERVICE: ScenarioTemplate = Scenari
         name: "service",
         workdir: ".",
         binary: "zenoh_service",
-        args: NO_ARGS,
+        args: PASSIVE_ZENOH_SERVICE_ARGS_B_FROM_SOMEIP,
         env: PASSIVE_INFO_ENV,
         log_file: "service.log",
         readiness_marker: Some(env::READY_LISTENER_REGISTERED),
@@ -895,7 +925,7 @@ const SCENARIO_SOMEIP_PS_SOMEIP_PUBLISHER_ZENOH_SUBSCRIBER: ScenarioTemplate = S
         name: "subscriber",
         workdir: ".",
         binary: "zenoh_subscriber",
-        args: PASSIVE_ZENOH_SUBSCRIBER_ARGS_B,
+        args: PASSIVE_ZENOH_SUBSCRIBER_ARGS_B_FROM_SOMEIP,
         env: PASSIVE_INFO_ENV,
         log_file: "subscriber.log",
         readiness_marker: Some(env::READY_LISTENER_REGISTERED),

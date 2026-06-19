@@ -102,6 +102,10 @@ async fn main() -> Result<(), UStatus> {
 
     let source = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
 
+    if args.send_count > 0 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
     let mut sent_count: u64 = 0;
     loop {
         if args.send_count > 0 && sent_count >= args.send_count {
@@ -133,6 +137,10 @@ async fn main() -> Result<(), UStatus> {
 
         publisher.send(publish_msg).await?;
         sent_count += 1;
+    }
+
+    if args.send_count > 0 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
     Ok(())

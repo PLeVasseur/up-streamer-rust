@@ -86,7 +86,7 @@ async fn main() -> Result<(), UStatus> {
             .unwrap(),
     );
 
-    let source_filter = UUri::any();
+    let source_filter = UUri::any().clone_with_resource_id(0);
     let sink_filter = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
 
     let service_request_responder: Arc<dyn UListener> =

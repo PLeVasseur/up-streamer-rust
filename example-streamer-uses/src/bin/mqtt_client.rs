@@ -119,6 +119,10 @@ async fn main() -> Result<(), UStatus> {
         .register_listener(&sink, Some(&source), service_response_listener)
         .await?;
 
+    if args.send_count > 0 {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+
     let mut i: u64 = 0;
     let mut sent_count: u64 = 0;
     loop {
@@ -142,6 +146,10 @@ async fn main() -> Result<(), UStatus> {
 
         client.send(request_msg).await?;
         sent_count += 1;
+    }
+
+    if args.send_count > 0 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
     Ok(())

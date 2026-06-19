@@ -129,5 +129,9 @@ async fn main() -> Result<(), UStatus> {
         sent_count += 1;
     }
 
+    if args.send_count > 0 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
     Ok(())
 }
