@@ -132,15 +132,7 @@ async fn main() -> Result<(), UStatus> {
         })?;
 
     let zenoh_transport: Arc<dyn UTransport> = Arc::new(
-        UPTransportZenoh::builder(config.streamer_uuri.authority.clone())
-            .map_err(|error| {
-                UStatus::fail_with_code(
-                    UCode::Internal,
-                    format!("Unable to create Zenoh transport builder: {error:?}"),
-                )
-            })?
-            .with_config(zenoh_config)
-            .build()
+        UPTransportZenoh::new(zenoh_config, streamer_uuri.to_string())
             .await
             .map_err(|error| {
                 UStatus::fail_with_code(

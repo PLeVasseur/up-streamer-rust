@@ -81,10 +81,7 @@ async fn main() -> Result<(), UStatus> {
 
     let service_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
     let service: Arc<dyn UTransport> = Arc::new(
-        UPTransportZenoh::builder(service_uuri.authority_name())
-            .expect("Unable to create Zenoh transport builder")
-            .with_config(zenoh_config)
-            .build()
+        UPTransportZenoh::new(zenoh_config, service_uuri.to_string())
             .await
             .unwrap(),
     );

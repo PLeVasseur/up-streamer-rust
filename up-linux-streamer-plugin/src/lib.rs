@@ -186,14 +186,13 @@ pub mod plugin {
         trace!("streamer_uuri: {streamer_uuri:#?}");
         let host_transport: Arc<dyn UTransport> = Arc::new(match config.host_config.transport {
             HostTransport::Zenoh => {
-                let zenoh_session = zenoh::session::init(runtime.clone()).await.map_err(|err| {
-                    zerror!("Unable to initialize Zenoh session from runtime: {}", err)
-                })?;
-                UPTransportZenoh::builder(config.streamer_uuri.authority.clone())
-                    .map_err(|err| zerror!("Unable to create Zenoh transport builder: {}", err))?
-                    .with_session(zenoh_session)
-                    .build()
-                    .map_err(|err| zerror!("Unable to initialize Zenoh UTransport: {}", err))?
+                let _ = runtime;
+                UPTransportZenoh::new(
+                    up_transport_zenoh::zenoh_config::Config::default(),
+                    streamer_uuri.to_string(),
+                )
+                .await
+                .map_err(|err| zerror!("Unable to initialize Zenoh UTransport: {}", err))?
             } // other host transports can be added here as they become available
         });
 

@@ -107,15 +107,13 @@ async fn main() -> Result<(), UStatus> {
             .expect("Unable to set Zenoh Config");
     }
 
-    let source = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
+    let client_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
     let client: Arc<dyn UTransport> = Arc::new(
-        UPTransportZenoh::builder(source.authority_name())
-            .expect("Unable to create Zenoh transport builder")
-            .with_config(zenoh_config)
-            .build()
+        UPTransportZenoh::new(zenoh_config, client_uuri.to_string())
             .await
             .unwrap(),
     );
+    let source = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
     let sink = cli::build_uuri(
         &args.target_authority,
         target_uentity,

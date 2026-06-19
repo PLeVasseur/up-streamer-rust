@@ -89,10 +89,7 @@ async fn main() -> Result<(), UStatus> {
 
     let publisher_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
     let publisher: Arc<dyn UTransport> = Arc::new(
-        UPTransportZenoh::builder(publisher_uuri.authority_name())
-            .expect("Unable to create Zenoh transport builder")
-            .with_config(zenoh_config)
-            .build()
+        UPTransportZenoh::new(zenoh_config, publisher_uuri.to_string())
             .await
             .unwrap(),
     );

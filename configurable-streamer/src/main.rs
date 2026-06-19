@@ -32,7 +32,7 @@ use std::{
 };
 use tracing::info;
 use up_rust::core::usubscription::USubscription;
-use up_rust::{UCode, UStatus, UTransport};
+use up_rust::{UCode, UStatus, UTransport, UUri};
 #[cfg(feature = "experimental-copy-minimized-routing")]
 use up_streamer::CopyMinimizedRouteOptions;
 use up_streamer::{Endpoint, UStreamer};
@@ -221,7 +221,7 @@ fn ensure_copy_minimized_endpoint(
 async fn zenoh_route_wire_endpoints(
     endpoint_config: &EndpointConfig,
     config_file: &str,
-    streamer_authority: &str,
+    streamer_uri: &str,
     route_wire_formats: Option<&HashSet<RouteWireFormat>>,
 ) -> Result<HashMap<RouteWireFormat, RouteWireEndpoint>, UStatus> {
     let mut endpoints = HashMap::new();
@@ -233,7 +233,7 @@ async fn zenoh_route_wire_endpoints(
                     format!("Unable to load Zenoh config file for route wire endpoint: {e:?}"),
                 )
             })?;
-            let core = ZenohZeroCopyCore::new(zenoh_config, streamer_authority.to_string()).await?;
+            let core = ZenohZeroCopyCore::new(zenoh_config, streamer_uri.to_string()).await?;
             endpoints.insert(
                 *route_wire_format,
                 configurable_streamer_wire_support::zenoh_endpoint(
@@ -255,7 +255,7 @@ async fn zenoh_route_wire_endpoints(
 async fn zenoh_route_wire_endpoints(
     _endpoint_config: &EndpointConfig,
     _config_file: &str,
-    _streamer_authority: &str,
+    _streamer_uri: &str,
     route_wire_formats: Option<&HashSet<RouteWireFormat>>,
 ) -> Result<HashMap<RouteWireFormat, RouteWireEndpoint>, UStatus> {
     if route_wire_formats.is_some_and(|formats| !formats.is_empty()) {
@@ -270,28 +270,39 @@ async fn register_zenoh_endpoints(
     endpoints: &mut HashMap<String, ConfiguredEndpoint>,
     endpoint_configs: &[EndpointConfig],
     config_file: &str,
-    streamer_authority: &str,
+    streamer_uri: &str,
     #[cfg(feature = "experimental-copy-minimized-routing")] route_wire_formats: &HashMap<
         String,
         HashSet<RouteWireFormat>,
     >,
-    transport: Arc<UPTransportZenoh>,
+    transport: Option<Arc<UPTransportZenoh>>,
 ) -> Result<(), UStatus> {
     for endpoint_config in endpoint_configs {
-        let standard_transport: Arc<dyn UTransport> = transport.clone();
-        #[cfg(feature = "experimental-copy-minimized-routing")]
-        let endpoint_route_wire_formats = route_wire_formats.get(&endpoint_config.endpoint);
-        let endpoint = ConfiguredEndpoint {
-            standard: Some(Endpoint::new(
+        let standard = if endpoint_config.routing_mode == RoutingMode::CopyMinimized {
+            None
+        } else {
+            let transport = transport.as_ref().ok_or_else(|| {
+                invalid_config(format!(
+                    "Zenoh endpoint {} requires regular UTransport routing but no Zenoh UTransport was initialized",
+                    endpoint_config.endpoint
+                ))
+            })?;
+            let standard_transport: Arc<dyn UTransport> = transport.clone();
+            Some(Endpoint::new(
                 &endpoint_config.endpoint,
                 &endpoint_config.authority,
                 standard_transport,
-            )),
+            ))
+        };
+        #[cfg(feature = "experimental-copy-minimized-routing")]
+        let endpoint_route_wire_formats = route_wire_formats.get(&endpoint_config.endpoint);
+        let endpoint = ConfiguredEndpoint {
+            standard,
             #[cfg(feature = "experimental-copy-minimized-routing")]
             route_wire_endpoints: zenoh_route_wire_endpoints(
                 endpoint_config,
                 config_file,
-                streamer_authority,
+                streamer_uri,
                 endpoint_route_wire_formats,
             )
             .await?,
@@ -721,24 +732,49 @@ async fn main() -> Result<(), UStatus> {
 
     let mut endpoints: HashMap<String, ConfiguredEndpoint> = HashMap::new();
 
-    // build the zenoh transport
-    let zenoh_config = ZenohConfig::from_file(config.transports.zenoh.config_file.clone())
-        .map_err(|e| {
-            UStatus::fail_with_code(
-                UCode::InvalidArgument,
-                format!("Unable to load Zenoh config file: {e:?}"),
-            )
-        })?;
-    let zenoh_transport = Arc::new(
-        UPTransportZenoh::new(zenoh_config, config.streamer_uuri.authority.clone())
-            .await
+    let streamer_uuri = UUri::try_from_parts(
+        &config.streamer_uuri.authority,
+        config.streamer_uuri.ue_id,
+        config.streamer_uuri.ue_version_major,
+        0,
+    )
+    .map_err(|e| {
+        UStatus::fail_with_code(
+            UCode::InvalidArgument,
+            format!("Unable to form streamer UUri: {e:?}"),
+        )
+    })?;
+
+    // Build regular Zenoh UTransport only for non-copy-minimized endpoints. Copy-minimized
+    // Zenoh endpoints open their own wire core from the same config and cannot share a router
+    // listen port with an unused regular transport session.
+    let zenoh_transport = if config
+        .transports
+        .zenoh
+        .endpoints
+        .iter()
+        .any(|endpoint| endpoint.routing_mode != RoutingMode::CopyMinimized)
+    {
+        let zenoh_config = ZenohConfig::from_file(config.transports.zenoh.config_file.clone())
             .map_err(|e| {
                 UStatus::fail_with_code(
-                    UCode::Internal,
-                    format!("Unable to initialize Zenoh UTransport: {e:?}"),
+                    UCode::InvalidArgument,
+                    format!("Unable to load Zenoh config file: {e:?}"),
                 )
-            })?,
-    );
+            })?;
+        Some(Arc::new(
+            UPTransportZenoh::new(zenoh_config, streamer_uuri.to_string())
+                .await
+                .map_err(|e| {
+                    UStatus::fail_with_code(
+                        UCode::Internal,
+                        format!("Unable to initialize Zenoh UTransport: {e:?}"),
+                    )
+                })?,
+        ))
+    } else {
+        None
+    };
 
     // build the mqtt5 transport only when the selected config uses MQTT endpoints
     let mqtt5_transport: Option<Arc<dyn UTransport>> =
@@ -772,7 +808,7 @@ async fn main() -> Result<(), UStatus> {
         &mut endpoints,
         &config.transports.zenoh.endpoints,
         &config.transports.zenoh.config_file,
-        &config.streamer_uuri.authority,
+        &streamer_uuri.to_string(),
         #[cfg(feature = "experimental-copy-minimized-routing")]
         &route_wire_formats,
         zenoh_transport,

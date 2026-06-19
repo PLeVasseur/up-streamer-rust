@@ -66,6 +66,7 @@ pub enum RouteWireEndpoint {
 
 impl RouteWireEndpoint {
     pub fn route_wire_format(&self) -> RouteWireFormat {
+        #[allow(unreachable_patterns)]
         match self {
             #[cfg(feature = "zenoh-zero-copy")]
             Self::ZenohNative(_) => RouteWireFormat::Native,
@@ -79,6 +80,7 @@ impl RouteWireEndpoint {
             Self::LolaNative(_) => RouteWireFormat::Native,
             #[cfg(feature = "lola-transport")]
             Self::LolaProtobuf(_) => RouteWireFormat::Protobuf,
+            _ => unreachable!("no route wire endpoints are available without transport features"),
         }
     }
 }
