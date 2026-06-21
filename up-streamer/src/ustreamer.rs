@@ -1031,8 +1031,39 @@ impl UStreamer {
         E: UZeroCopyTransportCore + Send + Sync + 'static,
         W: UWireMetadata + Send + Sync + 'static,
     {
-        self.add_copy_minimized_route_ref_with_options(ingress, egress, options)
+        if ingress.authority == egress.authority {
+            return Err(UStatus::fail_with_code(
+                UCode::InvalidArgument,
+                "ingress and egress authorities must differ",
+            ));
+        }
+
+        let route_key = ZeroCopyRouteKey::new(ingress, egress);
+        if self.copy_minimized_routes.contains_key(&route_key) {
+            return Err(UStatus::fail_with_code(
+                UCode::AlreadyExists,
+                "copy-minimized route already exists",
+            ));
+        }
+
+        let filters = self
+            .copy_minimized_route_filters(&ingress.authority, &egress.authority)
             .await
+            .into_iter()
+            // UWireTransport re-filters decoded metadata; publish frames do not carry a sink URI.
+            .map(|(source_filter, _sink_filter)| (source_filter, None))
+            .collect::<Vec<_>>();
+        let binding = CopyMinimizedRouteBinding::new(
+            ingress,
+            egress,
+            filters,
+            self.message_queue_size,
+            options,
+        )
+        .await?;
+        self.copy_minimized_routes
+            .insert(route_key, Box::new(binding));
+        Ok(())
     }
 
     /// Adds a selected-wire copy-minimized route, consuming endpoint values after registration.
