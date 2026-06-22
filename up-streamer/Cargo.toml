@@ -21,7 +21,10 @@ license.workspace = true
 
 [features]
 default = []
-experimental-copy-minimized-routing = []
+experimental-copy-minimized-routing = [
+    "up-rust/selected-wire-protobuf-metadata",
+    "up-rust/selected-wire-transport-adapter",
+]
 owned-frame-transport = ["up-rust/owned-frame-transport"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

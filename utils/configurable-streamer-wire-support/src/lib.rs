@@ -11,10 +11,35 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport"
+))]
 use std::sync::Arc;
 
-use up_rust::{ProtobufWire, UCode, UProtocolNativeWire, UStatus, UWireTransport, UWithWire};
-use up_streamer::{CopyMinimizedRouteOptions, UStreamer, ZeroCopyFrameEndpoint};
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport"
+))]
+use up_rust::{
+    NativePrefixProtobufMetadataCodec, ProtobufWire, UCode, UProtocolNativeWire, UStatus,
+    UWireTransport,
+};
+#[cfg(not(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport"
+)))]
+use up_rust::{UCode, UStatus};
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport"
+))]
+use up_streamer::ZeroCopyFrameEndpoint;
+use up_streamer::{CopyMinimizedRouteOptions, UStreamer};
 
 #[cfg(feature = "iceoryx2-zero-copy")]
 use up_transport_iceoryx2_rust::Iceoryx2PubSub;
@@ -33,6 +58,7 @@ impl RouteWireFormat {
     pub fn parse(value: &str) -> Result<Self, UStatus> {
         match value {
             "up_native" | "native" => Ok(Self::Native),
+            // Native-prefix protobuf metadata codec, not XCDRv2 metadata.
             "protobuf" => Ok(Self::Protobuf),
             other => Err(invalid_config(format!(
                 "unsupported route wire format: {other}"
@@ -51,17 +77,49 @@ impl RouteWireFormat {
 #[derive(Clone)]
 pub enum RouteWireEndpoint {
     #[cfg(feature = "zenoh-zero-copy")]
-    ZenohNative(ZeroCopyFrameEndpoint<UWireTransport<ZenohZeroCopyCore, UProtocolNativeWire>>),
+    ZenohNative(
+        ZeroCopyFrameEndpoint<
+            UWireTransport<
+                ZenohZeroCopyCore,
+                UProtocolNativeWire,
+                NativePrefixProtobufMetadataCodec,
+            >,
+        >,
+    ),
     #[cfg(feature = "zenoh-zero-copy")]
-    ZenohProtobuf(ZeroCopyFrameEndpoint<UWireTransport<ZenohZeroCopyCore, ProtobufWire>>),
+    ZenohProtobuf(
+        ZeroCopyFrameEndpoint<
+            UWireTransport<ZenohZeroCopyCore, ProtobufWire, NativePrefixProtobufMetadataCodec>,
+        >,
+    ),
     #[cfg(feature = "iceoryx2-zero-copy")]
-    Iceoryx2Native(ZeroCopyFrameEndpoint<UWireTransport<Iceoryx2PubSub, UProtocolNativeWire>>),
+    Iceoryx2Native(
+        ZeroCopyFrameEndpoint<
+            UWireTransport<Iceoryx2PubSub, UProtocolNativeWire, NativePrefixProtobufMetadataCodec>,
+        >,
+    ),
     #[cfg(feature = "iceoryx2-zero-copy")]
-    Iceoryx2Protobuf(ZeroCopyFrameEndpoint<UWireTransport<Iceoryx2PubSub, ProtobufWire>>),
+    Iceoryx2Protobuf(
+        ZeroCopyFrameEndpoint<
+            UWireTransport<Iceoryx2PubSub, ProtobufWire, NativePrefixProtobufMetadataCodec>,
+        >,
+    ),
     #[cfg(feature = "lola-transport")]
-    LolaNative(ZeroCopyFrameEndpoint<UWireTransport<LolaZeroCopyCore, UProtocolNativeWire>>),
+    LolaNative(
+        ZeroCopyFrameEndpoint<
+            UWireTransport<
+                LolaZeroCopyCore,
+                UProtocolNativeWire,
+                NativePrefixProtobufMetadataCodec,
+            >,
+        >,
+    ),
     #[cfg(feature = "lola-transport")]
-    LolaProtobuf(ZeroCopyFrameEndpoint<UWireTransport<LolaZeroCopyCore, ProtobufWire>>),
+    LolaProtobuf(
+        ZeroCopyFrameEndpoint<
+            UWireTransport<LolaZeroCopyCore, ProtobufWire, NativePrefixProtobufMetadataCodec>,
+        >,
+    ),
 }
 
 impl RouteWireEndpoint {
@@ -96,12 +154,20 @@ pub fn zenoh_endpoint(
         RouteWireFormat::Native => RouteWireEndpoint::ZenohNative(ZeroCopyFrameEndpoint::new(
             name,
             authority,
-            Arc::new(core.with_wire(UProtocolNativeWire)),
+            Arc::new(UWireTransport::new(
+                core,
+                UProtocolNativeWire,
+                NativePrefixProtobufMetadataCodec,
+            )),
         )),
         RouteWireFormat::Protobuf => RouteWireEndpoint::ZenohProtobuf(ZeroCopyFrameEndpoint::new(
             name,
             authority,
-            Arc::new(core.with_wire(ProtobufWire)),
+            Arc::new(UWireTransport::new(
+                core,
+                ProtobufWire,
+                NativePrefixProtobufMetadataCodec,
+            )),
         )),
     }
 }
@@ -117,11 +183,23 @@ pub fn iceoryx2_endpoint(
         RouteWireFormat::Native => RouteWireEndpoint::Iceoryx2Native(ZeroCopyFrameEndpoint::new(
             name,
             authority,
-            Arc::new(core.with_wire(UProtocolNativeWire)),
+            Arc::new(UWireTransport::new(
+                core,
+                UProtocolNativeWire,
+                NativePrefixProtobufMetadataCodec,
+            )),
         )),
-        RouteWireFormat::Protobuf => RouteWireEndpoint::Iceoryx2Protobuf(
-            ZeroCopyFrameEndpoint::new(name, authority, Arc::new(core.with_wire(ProtobufWire))),
-        ),
+        RouteWireFormat::Protobuf => {
+            RouteWireEndpoint::Iceoryx2Protobuf(ZeroCopyFrameEndpoint::new(
+                name,
+                authority,
+                Arc::new(UWireTransport::new(
+                    core,
+                    ProtobufWire,
+                    NativePrefixProtobufMetadataCodec,
+                )),
+            ))
+        }
     }
 }
 
@@ -136,12 +214,20 @@ pub fn lola_endpoint(
         RouteWireFormat::Native => RouteWireEndpoint::LolaNative(ZeroCopyFrameEndpoint::new(
             name,
             authority,
-            Arc::new(core.with_wire(UProtocolNativeWire)),
+            Arc::new(UWireTransport::new(
+                core,
+                UProtocolNativeWire,
+                NativePrefixProtobufMetadataCodec,
+            )),
         )),
         RouteWireFormat::Protobuf => RouteWireEndpoint::LolaProtobuf(ZeroCopyFrameEndpoint::new(
             name,
             authority,
-            Arc::new(core.with_wire(ProtobufWire)),
+            Arc::new(UWireTransport::new(
+                core,
+                ProtobufWire,
+                NativePrefixProtobufMetadataCodec,
+            )),
         )),
     }
 }
@@ -160,6 +246,16 @@ pub async fn add_route_wire_format(
             "route wire format {} does not match both route endpoints",
             route_wire_format.label()
         )));
+    }
+
+    #[cfg(not(any(
+        feature = "zenoh-zero-copy",
+        feature = "iceoryx2-zero-copy",
+        feature = "lola-transport"
+    )))]
+    {
+        let _ = &mut *streamer;
+        let _ = &options;
     }
 
     #[allow(unreachable_patterns)]

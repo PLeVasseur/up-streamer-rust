@@ -190,7 +190,8 @@ impl SubscriptionCache {
 mod tests {
     use super::SubscriptionCache;
     use std::str::FromStr;
-    use up_rust::core::usubscription::{SubscriptionInfo, SubscriptionStatus};
+    use up_rust::communication::SubscriptionStatus;
+    use up_rust::core::usubscription::SubscriptionInfo;
     use up_rust::UUri;
 
     fn subscription(topic: &str, subscriber: &str) -> SubscriptionInfo {

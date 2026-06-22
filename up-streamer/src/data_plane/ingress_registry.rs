@@ -460,7 +460,8 @@ mod tests {
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::{Arc, Mutex as StdMutex};
-    use up_rust::core::usubscription::{SubscriptionInfo, SubscriptionStatus};
+    use up_rust::communication::SubscriptionStatus;
+    use up_rust::core::usubscription::SubscriptionInfo;
     use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
 
     #[derive(Clone, Debug, Eq, PartialEq, Hash)]

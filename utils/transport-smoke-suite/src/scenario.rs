@@ -1742,16 +1742,16 @@ async fn run_zero_copy_scenario(
         ScenarioClassification::Blocked => 2,
     };
 
-    let zero_copy_artifact = write_zero_copy_matrix_row_artifact(
-        &repo_root,
-        &artifact_dir,
+    let zero_copy_artifact = write_zero_copy_matrix_row_artifact(ZeroCopyMatrixRowArtifactInput {
+        repo_root: &repo_root,
+        artifact_dir: &artifact_dir,
         template,
         classification,
-        failure_reason.clone(),
-        &streamer_process,
-        lola_bridge_lib_dir.as_ref(),
-        lola_bazel.as_deref(),
-    )?;
+        failure_reason: failure_reason.clone(),
+        streamer_process: &streamer_process,
+        lola_bridge_lib_dir: lola_bridge_lib_dir.as_ref(),
+        lola_bazel: lola_bazel.as_deref(),
+    })?;
 
     let no_process: Option<ManagedProcess> = None;
     let process_metadata = gather_process_metadata(&streamer_process, &no_process, &no_process);
@@ -2097,27 +2097,32 @@ fn render_zero_copy_repro_command(
     args.join(" ")
 }
 
-fn write_zero_copy_matrix_row_artifact(
-    repo_root: &Path,
-    artifact_dir: &Path,
-    template: &ZeroCopyScenarioTemplate,
+struct ZeroCopyMatrixRowArtifactInput<'a> {
+    repo_root: &'a Path,
+    artifact_dir: &'a Path,
+    template: &'a ZeroCopyScenarioTemplate,
     classification: ScenarioClassification,
     failure_reason: Option<String>,
-    streamer_process: &Option<ManagedProcess>,
-    lola_bridge_lib_dir: Option<&PathBuf>,
-    lola_bazel: Option<&str>,
+    streamer_process: &'a Option<ManagedProcess>,
+    lola_bridge_lib_dir: Option<&'a PathBuf>,
+    lola_bazel: Option<&'a str>,
+}
+
+fn write_zero_copy_matrix_row_artifact(
+    input: ZeroCopyMatrixRowArtifactInput<'_>,
 ) -> Result<PathBuf> {
-    let artifact_path = artifact_dir.join("zero-copy-matrix-row.json");
+    let artifact_path = input.artifact_dir.join("zero-copy-matrix-row.json");
     let row = ZeroCopyMatrixRowArtifact {
         schema_version: "1.0",
-        scenario_id: template.id.to_string(),
-        row_description: template.row_description.to_string(),
-        classification,
-        failure_reason,
-        config_file: format!("configurable-streamer/{}", template.config_file),
-        cargo_features: split_features(template.cargo_features),
-        selected_route: template.selected_route.map(route_to_artifact),
-        configured_routes: template
+        scenario_id: input.template.id.to_string(),
+        row_description: input.template.row_description.to_string(),
+        classification: input.classification,
+        failure_reason: input.failure_reason,
+        config_file: format!("configurable-streamer/{}", input.template.config_file),
+        cargo_features: split_features(input.template.cargo_features),
+        selected_route: input.template.selected_route.map(route_to_artifact),
+        configured_routes: input
+            .template
             .configured_routes
             .iter()
             .copied()
@@ -2133,7 +2138,8 @@ fn write_zero_copy_matrix_row_artifact(
             probe: "startup_only",
             note: "frame metadata is not observed because the row does not inject payload traffic",
         },
-        route_diagnostics: template
+        route_diagnostics: input
+            .template
             .configured_routes
             .iter()
             .copied()
@@ -2141,13 +2147,15 @@ fn write_zero_copy_matrix_row_artifact(
             .collect(),
         listener_cleanup: ListenerCleanupArtifact {
             teardown_phase_recorded: true,
-            process_exit_status: streamer_process
+            process_exit_status: input
+                .streamer_process
                 .as_ref()
                 .and_then(|process| process.exit_status_code),
             cleanup_signal: "SIGINT_then_SIGTERM_if_needed",
             note: "scenario teardown terminates the configurable-streamer process group and verifies process exit",
         },
-        raw_logs: streamer_process
+        raw_logs: input
+            .streamer_process
             .as_ref()
             .map(|process| {
                 vec![RawLogArtifact {
@@ -2163,11 +2171,13 @@ fn write_zero_copy_matrix_row_artifact(
                 .unwrap_or_default(),
             mqtt_broker_required: false,
             docker_compose_required: false,
-            lola_bundled_required: template.requires_lola_bundled,
-            lola_bridge_lib_dir: lola_bridge_lib_dir.map(|path| path.display().to_string()),
-            bazel: lola_bazel.map(ToString::to_string),
+            lola_bundled_required: input.template.requires_lola_bundled,
+            lola_bridge_lib_dir: input
+                .lola_bridge_lib_dir
+                .map(|path| path.display().to_string()),
+            bazel: input.lola_bazel.map(ToString::to_string),
         },
-        dependency_sources: dependency_sources(repo_root)?,
+        dependency_sources: dependency_sources(input.repo_root)?,
     };
 
     let payload = serde_json::to_string_pretty(&row).context("serialize zero-copy row artifact")?;
@@ -2368,7 +2378,7 @@ fn ensure_process_exited(process: Option<&mut ManagedProcess>, role: &str) -> Re
 
 enum MqttBrokerHandle {
     DockerCompose,
-    Native(ManagedProcess),
+    Native(Box<ManagedProcess>),
 }
 
 async fn preflight_mqtt_broker(repo_root: &Path, cli_args: &ScenarioCliArgs) -> Result<()> {
@@ -2427,6 +2437,7 @@ async fn start_mqtt_broker(
                 deadline,
             )
             .await
+            .map(Box::new)
             .map(MqttBrokerHandle::Native)
             .map(Some)
         }
@@ -2449,7 +2460,7 @@ async fn stop_mqtt_broker(
                     Duration::from_secs(env::SIGTERM_GRACE_SECS),
                 )
                 .await?;
-            ensure_process_exited(Some(process), "mqtt broker")
+            ensure_process_exited(Some(process.as_mut()), "mqtt broker")
         }
     }
 }

@@ -54,7 +54,7 @@ use up_rust::{
 };
 use up_rust::{UCode, UStatus, UUri};
 #[cfg(feature = "experimental-copy-minimized-routing")]
-use up_rust::{UWireMetadata, UWireTransport, UZeroCopyTransportCore};
+use up_rust::{UWire, UWireMetadataCodec, UWireTransport, UZeroCopyTransportCore};
 #[cfg(feature = "experimental-copy-minimized-routing")]
 use up_rust::{UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport};
 
@@ -998,16 +998,17 @@ impl UStreamer {
 
     /// Adds a selected-wire copy-minimized route between endpoints with the same static wire `W`.
     #[cfg(feature = "experimental-copy-minimized-routing")]
-    pub async fn add_selected_wire_copy_minimized_route_ref<I, E, W>(
+    pub async fn add_selected_wire_copy_minimized_route_ref<I, E, W, C>(
         &mut self,
-        ingress: &ZeroCopyFrameEndpoint<UWireTransport<I, W>>,
-        egress: &ZeroCopyFrameEndpoint<UWireTransport<E, W>>,
+        ingress: &ZeroCopyFrameEndpoint<UWireTransport<I, W, C>>,
+        egress: &ZeroCopyFrameEndpoint<UWireTransport<E, W, C>>,
     ) -> Result<(), UStatus>
     where
         I: UZeroCopyTransportCore + Send + Sync + 'static,
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
-        W: UWireMetadata + Send + Sync + 'static,
+        W: UWire + Send + Sync + 'static,
+        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
     {
         self.add_selected_wire_copy_minimized_route_ref_with_options(
             ingress,
@@ -1019,17 +1020,18 @@ impl UStreamer {
 
     /// Adds a selected-wire copy-minimized route with explicit options.
     #[cfg(feature = "experimental-copy-minimized-routing")]
-    pub async fn add_selected_wire_copy_minimized_route_ref_with_options<I, E, W>(
+    pub async fn add_selected_wire_copy_minimized_route_ref_with_options<I, E, W, C>(
         &mut self,
-        ingress: &ZeroCopyFrameEndpoint<UWireTransport<I, W>>,
-        egress: &ZeroCopyFrameEndpoint<UWireTransport<E, W>>,
+        ingress: &ZeroCopyFrameEndpoint<UWireTransport<I, W, C>>,
+        egress: &ZeroCopyFrameEndpoint<UWireTransport<E, W, C>>,
         options: CopyMinimizedRouteOptions,
     ) -> Result<(), UStatus>
     where
         I: UZeroCopyTransportCore + Send + Sync + 'static,
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
-        W: UWireMetadata + Send + Sync + 'static,
+        W: UWire + Send + Sync + 'static,
+        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
     {
         if ingress.authority == egress.authority {
             return Err(UStatus::fail_with_code(
@@ -1068,16 +1070,17 @@ impl UStreamer {
 
     /// Adds a selected-wire copy-minimized route, consuming endpoint values after registration.
     #[cfg(feature = "experimental-copy-minimized-routing")]
-    pub async fn add_selected_wire_copy_minimized_route<I, E, W>(
+    pub async fn add_selected_wire_copy_minimized_route<I, E, W, C>(
         &mut self,
-        ingress: ZeroCopyFrameEndpoint<UWireTransport<I, W>>,
-        egress: ZeroCopyFrameEndpoint<UWireTransport<E, W>>,
+        ingress: ZeroCopyFrameEndpoint<UWireTransport<I, W, C>>,
+        egress: ZeroCopyFrameEndpoint<UWireTransport<E, W, C>>,
     ) -> Result<(), UStatus>
     where
         I: UZeroCopyTransportCore + Send + Sync + 'static,
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
-        W: UWireMetadata + Send + Sync + 'static,
+        W: UWire + Send + Sync + 'static,
+        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
     {
         self.add_selected_wire_copy_minimized_route_ref(&ingress, &egress)
             .await
@@ -1085,17 +1088,18 @@ impl UStreamer {
 
     /// Adds a selected-wire copy-minimized route with explicit options, consuming endpoint values.
     #[cfg(feature = "experimental-copy-minimized-routing")]
-    pub async fn add_selected_wire_copy_minimized_route_with_options<I, E, W>(
+    pub async fn add_selected_wire_copy_minimized_route_with_options<I, E, W, C>(
         &mut self,
-        ingress: ZeroCopyFrameEndpoint<UWireTransport<I, W>>,
-        egress: ZeroCopyFrameEndpoint<UWireTransport<E, W>>,
+        ingress: ZeroCopyFrameEndpoint<UWireTransport<I, W, C>>,
+        egress: ZeroCopyFrameEndpoint<UWireTransport<E, W, C>>,
         options: CopyMinimizedRouteOptions,
     ) -> Result<(), UStatus>
     where
         I: UZeroCopyTransportCore + Send + Sync + 'static,
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
-        W: UWireMetadata + Send + Sync + 'static,
+        W: UWire + Send + Sync + 'static,
+        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
     {
         self.add_selected_wire_copy_minimized_route_ref_with_options(&ingress, &egress, options)
             .await
@@ -1154,32 +1158,34 @@ impl UStreamer {
 
     /// Deletes a selected-wire copy-minimized route between endpoints with the same static wire `W`.
     #[cfg(feature = "experimental-copy-minimized-routing")]
-    pub async fn delete_selected_wire_copy_minimized_route_ref<I, E, W>(
+    pub async fn delete_selected_wire_copy_minimized_route_ref<I, E, W, C>(
         &mut self,
-        ingress: &ZeroCopyFrameEndpoint<UWireTransport<I, W>>,
-        egress: &ZeroCopyFrameEndpoint<UWireTransport<E, W>>,
+        ingress: &ZeroCopyFrameEndpoint<UWireTransport<I, W, C>>,
+        egress: &ZeroCopyFrameEndpoint<UWireTransport<E, W, C>>,
     ) -> Result<(), UStatus>
     where
         I: UZeroCopyTransportCore + Send + Sync + 'static,
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
-        W: UWireMetadata + Send + Sync + 'static,
+        W: UWire + Send + Sync + 'static,
+        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
     {
         self.delete_copy_minimized_route_ref(ingress, egress).await
     }
 
     /// Deletes a selected-wire copy-minimized route, consuming endpoint values after deletion.
     #[cfg(feature = "experimental-copy-minimized-routing")]
-    pub async fn delete_selected_wire_copy_minimized_route<I, E, W>(
+    pub async fn delete_selected_wire_copy_minimized_route<I, E, W, C>(
         &mut self,
-        ingress: ZeroCopyFrameEndpoint<UWireTransport<I, W>>,
-        egress: ZeroCopyFrameEndpoint<UWireTransport<E, W>>,
+        ingress: ZeroCopyFrameEndpoint<UWireTransport<I, W, C>>,
+        egress: ZeroCopyFrameEndpoint<UWireTransport<E, W, C>>,
     ) -> Result<(), UStatus>
     where
         I: UZeroCopyTransportCore + Send + Sync + 'static,
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
-        W: UWireMetadata + Send + Sync + 'static,
+        W: UWire + Send + Sync + 'static,
+        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
     {
         self.delete_selected_wire_copy_minimized_route_ref(&ingress, &egress)
             .await
@@ -1314,9 +1320,8 @@ mod tests {
     use async_trait::async_trait;
     use std::collections::VecDeque;
     use std::sync::{Arc, Mutex};
-    use up_rust::core::usubscription::{
-        ResetReason, SubscriptionInfo, SubscriptionStatus, USubscription,
-    };
+    use up_rust::communication::SubscriptionStatus;
+    use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
     use up_rust::{UCode, UStatus, UUri};
 
     struct SequencedUSubscription {

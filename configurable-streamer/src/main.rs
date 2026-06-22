@@ -19,6 +19,10 @@ use crate::config::{
 use clap::Parser;
 #[cfg(feature = "experimental-copy-minimized-routing")]
 use configurable_streamer_wire_support::{RouteWireEndpoint, RouteWireFormat};
+use std::collections::HashMap;
+#[cfg(feature = "experimental-copy-minimized-routing")]
+use std::collections::HashSet;
+use std::fs::File;
 use std::io::Read;
 #[cfg(all(
     feature = "experimental-copy-minimized-routing",
@@ -26,10 +30,6 @@ use std::io::Read;
 ))]
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
-};
 use tracing::info;
 use up_rust::core::usubscription::USubscription;
 use up_rust::{UCode, UStatus, UTransport, UUri};
@@ -277,6 +277,11 @@ async fn register_zenoh_endpoints(
     >,
     transport: Option<Arc<UPTransportZenoh>>,
 ) -> Result<(), UStatus> {
+    #[cfg(not(feature = "experimental-copy-minimized-routing"))]
+    {
+        let _ = (config_file, streamer_uri);
+    }
+
     for endpoint_config in endpoint_configs {
         let standard = if endpoint_config.routing_mode == RoutingMode::CopyMinimized {
             None

@@ -19,9 +19,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, error, warn};
-use up_rust::core::usubscription::{
-    ResetReason, SubscriptionInfo, SubscriptionStatus, USubscription,
-};
+use up_rust::communication::SubscriptionStatus;
+use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
 use up_rust::{UCode, UStatus, UUri};
 
 const STATIC_RESOURCE_ID: u16 = 0x8001;

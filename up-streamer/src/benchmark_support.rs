@@ -22,7 +22,8 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use up_rust::core::usubscription::{SubscriptionInfo, SubscriptionStatus};
+use up_rust::communication::SubscriptionStatus;
+use up_rust::core::usubscription::SubscriptionInfo;
 use up_rust::{UCode, UListener, UMessage, UMessageBuilder, UStatus, UTransport, UUri};
 
 fn subscription(topic: UUri, subscriber: UUri) -> SubscriptionInfo {
