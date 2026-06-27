@@ -54,7 +54,7 @@ use up_rust::{
 };
 use up_rust::{UCode, UStatus, UUri};
 #[cfg(feature = "experimental-copy-minimized-routing")]
-use up_rust::{UWire, UWireMetadataCodec, UWireTransport, UZeroCopyTransportCore};
+use up_rust::{UWire, UWireMetadataCodecFor, UWireTransport, UZeroCopyTransportCore};
 #[cfg(feature = "experimental-copy-minimized-routing")]
 use up_rust::{UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport};
 
@@ -671,10 +671,7 @@ impl UStreamer {
             )
             .and_then(|message| {
                 let metadata = try_project_umessage_to_frame_metadata(&message)?;
-                UOwnedFrame::new(
-                    metadata,
-                    message.payload().map(bytes::Bytes::copy_from_slice),
-                )
+                UOwnedFrame::new(metadata, message.payload())
             }) {
                 Ok(frame) => frame,
                 Err(error) => {
@@ -1008,7 +1005,7 @@ impl UStreamer {
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
         W: UWire + Send + Sync + 'static,
-        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
+        C: UWireMetadataCodecFor<W> + Clone + Send + Sync + 'static,
     {
         self.add_selected_wire_copy_minimized_route_ref_with_options(
             ingress,
@@ -1031,7 +1028,7 @@ impl UStreamer {
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
         W: UWire + Send + Sync + 'static,
-        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
+        C: UWireMetadataCodecFor<W> + Clone + Send + Sync + 'static,
     {
         if ingress.authority == egress.authority {
             return Err(UStatus::fail_with_code(
@@ -1080,7 +1077,7 @@ impl UStreamer {
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
         W: UWire + Send + Sync + 'static,
-        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
+        C: UWireMetadataCodecFor<W> + Clone + Send + Sync + 'static,
     {
         self.add_selected_wire_copy_minimized_route_ref(&ingress, &egress)
             .await
@@ -1099,7 +1096,7 @@ impl UStreamer {
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
         W: UWire + Send + Sync + 'static,
-        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
+        C: UWireMetadataCodecFor<W> + Clone + Send + Sync + 'static,
     {
         self.add_selected_wire_copy_minimized_route_ref_with_options(&ingress, &egress, options)
             .await
@@ -1168,7 +1165,7 @@ impl UStreamer {
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
         W: UWire + Send + Sync + 'static,
-        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
+        C: UWireMetadataCodecFor<W> + Clone + Send + Sync + 'static,
     {
         self.delete_copy_minimized_route_ref(ingress, egress).await
     }
@@ -1185,7 +1182,7 @@ impl UStreamer {
         I::Rx: Send + 'static,
         E: UZeroCopyTransportCore + Send + Sync + 'static,
         W: UWire + Send + Sync + 'static,
-        C: UWireMetadataCodec + Clone + Send + Sync + 'static,
+        C: UWireMetadataCodecFor<W> + Clone + Send + Sync + 'static,
     {
         self.delete_selected_wire_copy_minimized_route_ref(&ingress, &egress)
             .await

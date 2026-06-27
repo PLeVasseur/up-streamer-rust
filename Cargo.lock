@@ -513,7 +513,7 @@ dependencies = [
  "bitflags 2.13.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "log",
  "prettyplease",
  "proc-macro2",
@@ -2628,24 +2628,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.13.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
@@ -3771,7 +3753,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "81bddcdb20abf9501610992b6759a4c888aef7d1a7247ef75e2404275ac24af1"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
@@ -3784,7 +3766,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.14.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "syn 2.0.118",
@@ -5805,7 +5787,7 @@ dependencies = [
 [[package]]
 name = "up-rust"
 version = "0.10.0-SNAPSHOT"
-source = "git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=b16c4cdb7cfa4294ee3d13b5f151aabe228dbb32#b16c4cdb7cfa4294ee3d13b5f151aabe228dbb32"
+source = "git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=2b36c9ae906a109bc65cd00c757669f2b0d07ad8#2b36c9ae906a109bc65cd00c757669f2b0d07ad8"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5827,7 +5809,7 @@ dependencies = [
 [[package]]
 name = "up-rust-macros"
 version = "0.10.0-SNAPSHOT"
-source = "git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=b16c4cdb7cfa4294ee3d13b5f151aabe228dbb32#b16c4cdb7cfa4294ee3d13b5f151aabe228dbb32"
+source = "git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=2b36c9ae906a109bc65cd00c757669f2b0d07ad8#2b36c9ae906a109bc65cd00c757669f2b0d07ad8"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5859,7 +5841,7 @@ dependencies = [
 [[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=2f8eea66afd08f32a92a30156e9b89cff651b5d0#2f8eea66afd08f32a92a30156e9b89cff651b5d0"
+source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=10b84108ba3b5e34a5f3d2cdda527e4d9f8a5267#10b84108ba3b5e34a5f3d2cdda527e4d9f8a5267"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5873,7 +5855,7 @@ dependencies = [
 [[package]]
 name = "up-transport-lola-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=070e4211e200b84d58fe935c54f823628ff33343#070e4211e200b84d58fe935c54f823628ff33343"
+source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=95d3fcb90b9979b34c43ee2aab118a111017831b#95d3fcb90b9979b34c43ee2aab118a111017831b"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5930,7 +5912,7 @@ dependencies = [
 [[package]]
 name = "up-transport-zenoh"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=804c978d5b54244e65246603c3f2a5eca4923ec8#804c978d5b54244e65246603c3f2a5eca4923ec8"
+source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=316e5af635f75d573b66601ccf8da94e292ab15d#316e5af635f75d573b66601ccf8da94e292ab15d"
 dependencies = [
  "anyhow",
  "async-trait",

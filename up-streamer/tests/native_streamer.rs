@@ -5,9 +5,8 @@ use bytes::Bytes;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration};
-use up_rust::core::usubscription::{
-    ResetReason, SubscriptionInfo, SubscriptionStatus, USubscription,
-};
+use up_rust::communication::SubscriptionStatus;
+use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
 use up_rust::{
     try_project_umessage_to_frame_metadata, UCode, UMessageBuilder, UOwnedFrame, UOwnedListener,
     UOwnedTransportImpl, UPayloadFormat, UStatus, UUri, ValidatedOwnedFrame,
@@ -149,7 +148,7 @@ fn owned_payload_frame() -> UOwnedFrame {
     )
     .expect("message");
     let metadata = try_project_umessage_to_frame_metadata(&message).expect("metadata");
-    UOwnedFrame::new(metadata, message.payload().map(Bytes::copy_from_slice)).expect("owned frame")
+    UOwnedFrame::new(metadata, message.payload()).expect("owned frame")
 }
 
 #[tokio::test]
