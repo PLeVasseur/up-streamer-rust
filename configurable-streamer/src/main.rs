@@ -18,7 +18,8 @@ use crate::config::{
 };
 use clap::Parser;
 #[cfg(feature = "experimental-copy-minimized-routing")]
-use configurable_streamer_wire_support::{RouteWireEndpoint, RouteWireFormat};
+use configurable_streamer_wire_support::RouteWireEndpoint;
+use configurable_streamer_wire_support::RouteWireFormat;
 use std::collections::HashMap;
 #[cfg(feature = "experimental-copy-minimized-routing")]
 use std::collections::HashSet;
@@ -94,10 +95,10 @@ fn insert_configured_endpoint(
 #[derive(Clone, Debug)]
 struct PendingRoute<'a> {
     target: &'a str,
-    wire_format: Option<&'a str>,
+    wire_format: Option<RouteWireFormat>,
 }
 
-fn endpoint_routes(endpoint_config: &EndpointConfig) -> Vec<PendingRoute<'_>> {
+fn endpoint_routes(endpoint_config: &EndpointConfig) -> Result<Vec<PendingRoute<'_>>, UStatus> {
     let mut routes = Vec::with_capacity(
         endpoint_config.forwarding.len() + endpoint_config.forwarding_routes.len(),
     );
@@ -114,24 +115,26 @@ fn endpoint_routes(endpoint_config: &EndpointConfig) -> Vec<PendingRoute<'_>> {
     {
         routes.push(PendingRoute {
             target: endpoint,
-            wire_format: wire_format.as_deref(),
+            wire_format: wire_format
+                .as_deref()
+                .map(RouteWireFormat::parse)
+                .transpose()?,
         });
     }
-    routes
+    Ok(routes)
 }
 
 #[cfg(feature = "experimental-copy-minimized-routing")]
 fn required_route_wire_format(
     endpoint_name: &str,
     target_name: &str,
-    configured: Option<&str>,
+    configured: Option<RouteWireFormat>,
 ) -> Result<RouteWireFormat, UStatus> {
-    let configured = configured.ok_or_else(|| {
+    configured.ok_or_else(|| {
         invalid_config(format!(
             "copy_minimized route {endpoint_name}->{target_name} requires wire_format"
         ))
-    })?;
-    RouteWireFormat::parse(configured)
+    })
 }
 
 #[cfg(feature = "experimental-copy-minimized-routing")]
@@ -144,7 +147,7 @@ fn collect_route_wire_formats(
             if endpoint_config.routing_mode != RoutingMode::CopyMinimized {
                 continue;
             }
-            for route in endpoint_routes(endpoint_config) {
+            for route in endpoint_routes(endpoint_config)? {
                 let route_wire_format = required_route_wire_format(
                     &endpoint_config.endpoint,
                     route.target,
@@ -551,7 +554,7 @@ async fn wire_forwarding_rules(
     endpoint_configs: &[EndpointConfig],
 ) -> Result<(), UStatus> {
     for endpoint_config in endpoint_configs {
-        for route in endpoint_routes(endpoint_config) {
+        for route in endpoint_routes(endpoint_config)? {
             let forwarding_target = route.target;
             let left_endpoint = endpoints.get(&endpoint_config.endpoint).ok_or_else(|| {
                 invalid_config(format!(
@@ -601,7 +604,7 @@ async fn wire_copy_minimized_route(
     left_name: &str,
     right_name: &str,
     payload_alignment: Option<usize>,
-    route_wire_format: Option<&str>,
+    route_wire_format: Option<RouteWireFormat>,
 ) -> Result<(), UStatus> {
     let options = CopyMinimizedRouteOptions {
         payload_alignment: payload_alignment.unwrap_or(1),
@@ -625,7 +628,7 @@ async fn wire_copy_minimized_route(
     left_name: &str,
     right_name: &str,
     _payload_alignment: Option<usize>,
-    _route_wire_format: Option<&str>,
+    _route_wire_format: Option<RouteWireFormat>,
 ) -> Result<(), UStatus> {
     Err(invalid_config(format!(
         "copy_minimized route {left_name}->{right_name} requires configurable-streamer feature experimental-copy-minimized-routing"
@@ -654,7 +657,7 @@ mod tests {
 
     #[test]
     fn copy_minimized_route_rejects_unsupported_wire_format() {
-        let result = required_route_wire_format("ingress", "egress", Some("unsupported"));
+        let result = RouteWireFormat::parse("unsupported");
 
         assert!(result.is_err());
     }

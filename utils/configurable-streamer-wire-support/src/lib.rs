@@ -11,6 +11,8 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+use std::{fmt, str::FromStr};
+
 #[cfg(any(
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",
@@ -56,6 +58,25 @@ pub enum RouteWireFormat {
 
 impl RouteWireFormat {
     pub fn parse(value: &str) -> Result<Self, UStatus> {
+        value.parse()
+    }
+
+    pub const fn as_config_value(self) -> &'static str {
+        match self {
+            Self::Native => "up_native",
+            Self::Protobuf => "protobuf",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        self.as_config_value()
+    }
+}
+
+impl FromStr for RouteWireFormat {
+    type Err = UStatus;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "up_native" | "native" => Ok(Self::Native),
             // Native-prefix protobuf metadata codec, not XCDRv2 metadata.
@@ -65,12 +86,11 @@ impl RouteWireFormat {
             ))),
         }
     }
+}
 
-    fn label(self) -> &'static str {
-        match self {
-            Self::Native => "up_native",
-            Self::Protobuf => "protobuf",
-        }
+impl fmt::Display for RouteWireFormat {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_config_value())
     }
 }
 
@@ -239,14 +259,11 @@ pub async fn add_route_wire_format(
     route_wire_format: RouteWireFormat,
     options: CopyMinimizedRouteOptions,
 ) -> Result<(), UStatus> {
-    if ingress.route_wire_format() != route_wire_format
-        || egress.route_wire_format() != route_wire_format
-    {
-        return Err(invalid_config(format!(
-            "route wire format {} does not match both route endpoints",
-            route_wire_format.label()
-        )));
-    }
+    validate_route_wire_formats(
+        ingress.route_wire_format(),
+        egress.route_wire_format(),
+        route_wire_format,
+    )?;
 
     #[cfg(not(any(
         feature = "zenoh-zero-copy",
@@ -374,6 +391,74 @@ pub async fn add_route_wire_format(
     }
 }
 
+pub fn validate_route_wire_formats(
+    ingress: RouteWireFormat,
+    egress: RouteWireFormat,
+    route: RouteWireFormat,
+) -> Result<(), UStatus> {
+    if ingress != route || egress != route {
+        return Err(invalid_config(format!(
+            "route wire format {} does not match both route endpoints",
+            route.label()
+        )));
+    }
+
+    Ok(())
+}
+
 fn invalid_config(message: impl Into<String>) -> UStatus {
     UStatus::fail_with_code(UCode::InvalidArgument, message.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn route_wire_format_accepts_legacy_native_alias_and_emits_canonical_config_value() {
+        let native = RouteWireFormat::parse("native").expect("native alias parses");
+
+        assert_eq!(native, RouteWireFormat::Native);
+        assert_eq!(native.as_config_value(), "up_native");
+        assert_eq!(native.to_string(), "up_native");
+    }
+
+    #[test]
+    fn route_wire_format_rejects_open_plugin_names() {
+        let error = RouteWireFormat::parse("third_party_plugin").expect_err("open plugin rejected");
+
+        assert_eq!(error.get_code(), UCode::InvalidArgument);
+    }
+
+    #[test]
+    fn mismatched_route_wire_endpoint_formats_are_rejected_before_typed_route_call() {
+        let error = validate_route_wire_formats(
+            RouteWireFormat::Native,
+            RouteWireFormat::Protobuf,
+            RouteWireFormat::Native,
+        )
+        .expect_err("mismatch rejected");
+
+        assert_eq!(error.get_code(), UCode::InvalidArgument);
+    }
+
+    #[test]
+    fn route_wire_format_parse_smoke_bound_is_tiny_for_config_reification() {
+        let start = std::time::Instant::now();
+        let mut parsed = 0_usize;
+        for value in ["up_native", "native", "protobuf"]
+            .into_iter()
+            .cycle()
+            .take(10_000)
+        {
+            RouteWireFormat::parse(value).expect("known wire parses");
+            parsed += 1;
+        }
+
+        assert_eq!(parsed, 10_000);
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "closed route-wire parse smoke should be negligible"
+        );
+    }
 }
