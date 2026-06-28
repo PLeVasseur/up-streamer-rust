@@ -30,4 +30,4 @@ up-rust = { workspace = true }
 up-streamer = { path = "../../up-streamer", features = ["experimental-copy-minimized-routing"] }
 up-transport-zenoh = { workspace = true, optional = true }
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "bfd5338cff584518b0460c91682bd5cc9addd0e5", optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "a812f3abba4f0e155ce9f4d3f563a4ff39f5609b", optional = true }
