@@ -22,9 +22,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info, trace};
 use up_rust::core::usubscription::USubscription;
-use up_rust::{UCode, UStatus, UTransport, UUri};
+use up_rust::{UCode, UPayloadFormat, UStatus, UTransport, UUri};
 use up_streamer::{Endpoint, UStreamer};
-use up_transport_vsomeip::UPTransportVsomeip;
+use up_transport_vsomeip::{TransportConfig, UPTransportVsomeip};
 use up_transport_zenoh::{zenoh_config::Config as ZenohConfig, UPTransportZenoh};
 use usubscription_static_file::USubscriptionStaticFile;
 
@@ -178,11 +178,14 @@ async fn main() -> Result<(), UStatus> {
 
     // There will be at most one vsomeip_transport, as there is a connection into device and a streamer
     let someip_transport: Arc<dyn UTransport> = Arc::new(
-        UPTransportVsomeip::new_with_config(
+        UPTransportVsomeip::new_with_config_and_transport_config(
             host_uuri,
             &config.someip_config.authority,
             &someip_config_file_abs_path,
             None,
+            TransportConfig {
+                notification_payload_format: UPayloadFormat::Protobuf,
+            },
         )
         .map_err(|error| {
             UStatus::fail_with_code(
