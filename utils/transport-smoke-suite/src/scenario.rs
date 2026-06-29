@@ -2024,10 +2024,7 @@ async fn spawn_zero_copy_streamer(
     let process_spec = ProcessSpec {
         name: "streamer".to_string(),
         workdir: repo_root.join("configurable-streamer"),
-        executable: repo_root
-            .join("target")
-            .join("debug")
-            .join("configurable-streamer"),
+        executable: target_debug_binary(repo_root, "configurable-streamer"),
         args: vec!["--config".to_string(), template.config_file.to_string()],
         env: env_pairs,
         log_file_name: "streamer.log".to_string(),
@@ -2648,6 +2645,21 @@ fn is_local_mqtt_host(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]")
 }
 
+fn target_debug_binary(repo_root: &Path, binary: &str) -> PathBuf {
+    let target_dir = std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root.join(path)
+            }
+        })
+        .unwrap_or_else(|| repo_root.join("target"));
+
+    target_dir.join("debug").join(binary)
+}
+
 async fn spawn_template_process(
     repo_root: &Path,
     artifact_dir: &Path,
@@ -2661,6 +2673,9 @@ async fn spawn_template_process(
         .iter()
         .map(|arg| resolve_process_arg(arg, cli_args))
         .collect::<Vec<_>>();
+    if scenario_template.requires_vsomeip_runtime && template.name == "streamer" {
+        args = resolve_vsomeip_streamer_args(repo_root, artifact_dir, &args)?;
+    }
     if template.bounded_sender {
         args.push("--send-count".to_string());
         args.push(cli_args.send_count.to_string());
@@ -2690,7 +2705,7 @@ async fn spawn_template_process(
     let process_spec = ProcessSpec {
         name: template.name.to_string(),
         workdir: repo_root.join(template.workdir),
-        executable: repo_root.join("target").join("debug").join(template.binary),
+        executable: target_debug_binary(repo_root, template.binary),
         args,
         env: env_pairs,
         log_file_name: template.log_file.to_string(),
@@ -2705,6 +2720,42 @@ fn resolve_process_arg(arg: &str, cli_args: &ScenarioCliArgs) -> String {
     } else {
         arg.to_string()
     }
+}
+
+fn resolve_vsomeip_streamer_args(
+    repo_root: &Path,
+    artifact_dir: &Path,
+    args: &[String],
+) -> Result<Vec<String>> {
+    let mut resolved = args.to_vec();
+    let Some(config_index) = resolved.iter().position(|arg| arg == "--config") else {
+        return Ok(resolved);
+    };
+    let Some(config_file) = resolved.get(config_index + 1) else {
+        return Ok(resolved);
+    };
+    if config_file != "DEFAULT_CONFIG.json5" {
+        return Ok(resolved);
+    }
+
+    let source_config = repo_root
+        .join("example-streamer-implementations")
+        .join(config_file);
+    let source_contents = fs::read_to_string(&source_config)
+        .with_context(|| format!("failed to read {}", source_config.display()))?;
+    let someip_config = repo_root
+        .join("example-streamer-implementations")
+        .join("vsomeip-configs")
+        .join("point_to_point.json");
+    let generated_contents = source_contents.replace(
+        "config_file: \"../../example-streamer-implementations/vsomeip-configs/point_to_point.json\"",
+        &format!("config_file: \"{}\"", someip_config.display()),
+    );
+    let generated_config = artifact_dir.join("DEFAULT_CONFIG.vsomeip-smoke.json5");
+    fs::write(&generated_config, generated_contents)
+        .with_context(|| format!("failed to write {}", generated_config.display()))?;
+    resolved[config_index + 1] = generated_config.display().to_string();
+    Ok(resolved)
 }
 
 async fn ensure_no_stale_processes(signatures: &[&str]) -> Result<()> {

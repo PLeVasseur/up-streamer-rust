@@ -13,8 +13,8 @@
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{env as std_env, fs};
 use tokio::process::Command;
 
 const LOLA_BRIDGE_LIBRARY_NAME: &str = "libup_lola_bridge.so";
@@ -120,6 +120,21 @@ pub fn ensure_paths_exist(repo_root: &Path, required_paths: &[&str]) -> Result<(
 }
 
 pub fn detect_vsomeip_runtime_lib(repo_root: &Path) -> Result<PathBuf> {
+    if let Ok(install_path) = std_env::var("VSOMEIP_INSTALL_PATH") {
+        let lib_dir = PathBuf::from(install_path.trim()).join("lib");
+        if lib_dir.exists() {
+            return Ok(lib_dir);
+        }
+    }
+
+    if let Ok(ld_library_path) = std_env::var("LD_LIBRARY_PATH") {
+        for path in std_env::split_paths(&ld_library_path) {
+            if path.join("libvsomeip3.so").exists() || path.join("libvsomeip3.so.3").exists() {
+                return Ok(path);
+            }
+        }
+    }
+
     let build_dir = repo_root.join("target").join("debug").join("build");
     if !build_dir.exists() {
         return Err(anyhow!(

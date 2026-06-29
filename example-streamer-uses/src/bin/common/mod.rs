@@ -8,7 +8,11 @@ use hello_world_protos::{
 use protobuf::Message;
 use std::sync::Arc;
 use tracing::{debug, error, info};
-use up_rust::{UListener, UMessage, UMessageBuilder, UTransport};
+use up_rust::{UListener, UMessage, UMessageBuilder, UPayloadFormat, UTransport};
+
+pub(crate) fn protobuf_payload(message: &impl Message) -> Vec<u8> {
+    message.write_to_bytes().unwrap()
+}
 
 #[allow(dead_code)]
 pub(crate) struct ServiceResponseListener;
@@ -49,7 +53,7 @@ impl UListener for ServiceRequestResponder {
         let Some(payload_bytes) = msg.payload() else {
             panic!("No bytes available");
         };
-        let hello_request = match HelloRequest::parse_from_bytes(payload_bytes) {
+        let hello_request = match HelloRequest::parse_from_bytes(&payload_bytes) {
             Ok(hello_request) => {
                 debug!("hello_request: {hello_request:?}");
                 hello_request
@@ -68,7 +72,7 @@ impl UListener for ServiceRequestResponder {
         let attributes = msg.attributes();
 
         let response_msg = UMessageBuilder::response_for_request(attributes)
-            .build_with_protobuf_payload(&hello_response)
+            .build_with_payload(protobuf_payload(&hello_response), UPayloadFormat::Protobuf)
             .unwrap();
         info!("Sending Response message:\n{:?}", &response_msg);
         self.client.send(response_msg).await.unwrap();

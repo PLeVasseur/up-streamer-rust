@@ -17,12 +17,13 @@ use chrono::Local;
 use chrono::Timelike;
 use clap::Parser;
 use common::cli;
+use common::protobuf_payload;
 use hello_world_protos::hello_world_topics::Timer;
 use hello_world_protos::timeofday::TimeOfDay;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, trace, warn};
-use up_rust::{UMessageBuilder, UStatus, UTransport};
+use up_rust::{UMessageBuilder, UPayloadFormat, UStatus, UTransport};
 use up_transport_vsomeip::UPTransportVsomeip;
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
@@ -131,7 +132,7 @@ async fn main() -> Result<(), UStatus> {
         };
 
         let publish_msg = UMessageBuilder::publish(source.clone())
-            .build_with_protobuf_payload(&timer_message)
+            .build_with_payload(protobuf_payload(&timer_message), UPayloadFormat::Protobuf)
             .unwrap();
         info!("Sending Publish message:\n{publish_msg:?}");
 

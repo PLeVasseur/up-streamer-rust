@@ -12,10 +12,10 @@
  ********************************************************************************/
 
 use clap::Parser;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
+use std::{env as std_env, fs};
 use tokio::process::Command;
 use transport_smoke_suite::claims::{claims_override_kind, ClaimsPathKind};
 use transport_smoke_suite::env;
@@ -270,7 +270,7 @@ async fn run_single_scenario(
     cli: &Cli,
     expected_branch: Option<&str>,
 ) -> anyhow::Result<ScenarioReport> {
-    let binary_path = repo_root.join("target").join("debug").join(scenario_id);
+    let binary_path = scenario_binary_path(repo_root, scenario_id);
 
     if !binary_path.exists() {
         anyhow::bail!(
@@ -354,6 +354,21 @@ async fn run_single_scenario(
     }
 
     Ok(report)
+}
+
+fn scenario_binary_path(repo_root: &Path, scenario_id: &str) -> PathBuf {
+    let target_dir = std_env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root.join(path)
+            }
+        })
+        .unwrap_or_else(|| repo_root.join("target"));
+
+    target_dir.join("debug").join(scenario_id)
 }
 
 fn parse_scenario_report_path(output: &str) -> Option<PathBuf> {

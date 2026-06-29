@@ -15,13 +15,13 @@ mod common;
 
 use clap::Parser;
 use common::cli;
-use common::ServiceResponseListener;
+use common::{protobuf_payload, ServiceResponseListener};
 use hello_world_protos::hello_world_service::HelloRequest;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
-use up_rust::{UListener, UMessageBuilder, UStatus, UTransport};
+use up_rust::{UListener, UMessageBuilder, UPayloadFormat, UStatus, UTransport};
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
     UPTransportZenoh,
@@ -143,7 +143,7 @@ async fn main() -> Result<(), UStatus> {
         i += 1;
 
         let request_msg = UMessageBuilder::request(sink.clone(), source.clone(), REQUEST_TTL)
-            .build_with_protobuf_payload(&hello_request)
+            .build_with_payload(protobuf_payload(&hello_request), UPayloadFormat::Protobuf)
             .unwrap();
         debug!("Invoking URI {} with response URI {}", &sink, &source);
         info!("Sending Request message:\n{:?}", &request_msg);
