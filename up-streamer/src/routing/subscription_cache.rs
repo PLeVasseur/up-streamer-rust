@@ -16,6 +16,7 @@
 use crate::observability::events;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use tracing::debug;
 use up_rust::core::usubscription::SubscriptionInfo;
 use up_rust::UStatus;
@@ -40,7 +41,7 @@ impl From<&SubscriptionInformation> for SubscriptionIdentityKey {
     }
 }
 
-pub(crate) type SubscriptionLookup = HashMap<SubscriptionIdentityKey, SubscriptionInformation>;
+pub(crate) type SubscriptionLookup = Arc<HashMap<SubscriptionIdentityKey, SubscriptionInformation>>;
 
 #[derive(Clone)]
 pub(crate) struct SubscriptionInformation {
@@ -77,13 +78,19 @@ impl SubscriptionCache {
         let mut merged_cache_map = HashMap::with_capacity(subscription_cache_map.len());
 
         for (authority, exact_rows) in subscription_cache_map {
-            let mut merged_rows = exact_rows.clone();
             if authority != "*" {
                 if let Some(wildcard_rows) = wildcard_rows {
-                    merged_rows.extend(wildcard_rows.clone());
+                    let mut merged_rows = (**exact_rows).clone();
+                    merged_rows.extend(
+                        wildcard_rows
+                            .iter()
+                            .map(|(key, value)| (key.clone(), value.clone())),
+                    );
+                    merged_cache_map.insert(authority.clone(), Arc::new(merged_rows));
+                    continue;
                 }
             }
-            merged_cache_map.insert(authority.clone(), merged_rows);
+            merged_cache_map.insert(authority.clone(), exact_rows.clone());
         }
 
         merged_cache_map
@@ -98,7 +105,7 @@ impl SubscriptionCache {
             "starting subscription snapshot rebuild"
         );
 
-        let mut subscription_cache_hash_map = HashMap::new();
+        let mut subscription_cache_hash_map: HashMap<_, HashMap<_, _>> = HashMap::new();
         for subscription in subscription_cache_map {
             let topic = subscription.topic().clone();
             let subscriber = subscription.subscriber().clone();
@@ -130,6 +137,11 @@ impl SubscriptionCache {
             "subscription snapshot rebuild succeeded"
         );
 
+        let subscription_cache_hash_map: HashMap<_, _> = subscription_cache_hash_map
+            .into_iter()
+            .map(|(authority, rows)| (authority, Arc::new(rows)))
+            .collect();
+
         let wildcard_merged_cache_map =
             Self::build_wildcard_merged_cache(&subscription_cache_hash_map);
 
@@ -151,14 +163,14 @@ impl SubscriptionCache {
         let exact_count = self
             .subscription_cache_map
             .get(entry)
-            .map(HashMap::len)
+            .map(|rows| rows.len())
             .unwrap_or(0);
         let wildcard_count = if entry == "*" {
             0
         } else {
             self.subscription_cache_map
                 .get("*")
-                .map(HashMap::len)
+                .map(|rows| rows.len())
                 .unwrap_or(0)
         };
 
@@ -171,7 +183,7 @@ impl SubscriptionCache {
                 .or_else(|| self.subscription_cache_map.get("*").cloned())
         };
 
-        let merged_count = merged.as_ref().map(HashMap::len).unwrap_or(0);
+        let merged_count = merged.as_ref().map(|rows| rows.len()).unwrap_or(0);
         debug!(
             event = events::SUBSCRIPTION_WILDCARD_MERGE_SUMMARY,
             component = COMPONENT,
@@ -208,8 +220,8 @@ mod tests {
         let mut topics: Vec<UUri> = cache
             .fetch_cache_entry(authority)
             .expect("authority should exist")
-            .into_values()
-            .map(|subscription| subscription.topic)
+            .values()
+            .map(|subscription| subscription.topic.clone())
             .collect();
         topics.sort_by_key(|topic| topic.to_uri(false));
         topics

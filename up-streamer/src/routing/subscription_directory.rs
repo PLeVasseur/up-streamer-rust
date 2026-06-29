@@ -66,7 +66,7 @@ impl SubscriptionDirectory {
                     snapshot_version = snapshot.version,
                     "no subscribers found for egress authority"
                 );
-                HashMap::new()
+                Arc::new(HashMap::new())
             }
         }
     }

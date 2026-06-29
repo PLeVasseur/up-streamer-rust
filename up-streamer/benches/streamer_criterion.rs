@@ -19,6 +19,7 @@ use up_streamer::benchmark_support::{
 };
 
 const ROUTING_LOOKUP_ROWS: usize = 256;
+const ROUTING_LOOKUP_SCALE_ROWS: [usize; 4] = [16, 256, 4096, 16384];
 const PUBLISH_RESOLUTION_ROWS: usize = 512;
 const INGRESS_REGISTRY_ROWS: usize = 128;
 const INGRESS_BATCH_OPS: usize = 8;
@@ -205,6 +206,34 @@ impl P51StreamerSample {
 }
 
 fn emit_p51_streamer_samples_once() {
+    for rows in ROUTING_LOOKUP_SCALE_ROWS {
+        let exact_selector = match rows {
+            16 => "route_lookup_scale/exact_16",
+            256 => "route_lookup_scale/exact_256",
+            4096 => "route_lookup_scale/exact_4096",
+            16384 => "route_lookup_scale/exact_16384",
+            _ => unreachable!("unexpected route lookup scale row count"),
+        };
+        P51StreamerSample {
+            source_filter_count: rows,
+            ..P51StreamerSample::baseline(exact_selector, "p68_arc_lookup_exact_scale")
+        }
+        .emit();
+
+        let wildcard_selector = match rows {
+            16 => "route_lookup_scale/wildcard_16",
+            256 => "route_lookup_scale/wildcard_256",
+            4096 => "route_lookup_scale/wildcard_4096",
+            16384 => "route_lookup_scale/wildcard_16384",
+            _ => unreachable!("unexpected route lookup scale row count"),
+        };
+        P51StreamerSample {
+            source_filter_count: rows,
+            ..P51StreamerSample::baseline(wildcard_selector, "p68_arc_lookup_wildcard_scale")
+        }
+        .emit();
+    }
+
     P51StreamerSample {
         source_filter_count: ROUTING_LOOKUP_ROWS,
         ..P51StreamerSample::baseline("routing_lookup/exact_authority", "classic_route_lookup")
@@ -420,6 +449,30 @@ fn streamer_criterion(c: &mut Criterion) {
         });
     });
     routing_lookup_group.finish();
+
+    let mut route_lookup_scale_group = c.benchmark_group("route_lookup_scale");
+    for rows in ROUTING_LOOKUP_SCALE_ROWS {
+        let exact_fixture = runtime
+            .block_on(RoutingLookupFixture::exact_authority(rows))
+            .expect("exact-authority scale fixture should build");
+        route_lookup_scale_group.bench_function(format!("exact_{rows}"), |b| {
+            b.iter(|| {
+                let count = runtime.block_on(exact_fixture.lookup_count());
+                black_box(count);
+            });
+        });
+
+        let wildcard_fixture = runtime
+            .block_on(RoutingLookupFixture::wildcard_authority(rows))
+            .expect("wildcard-authority scale fixture should build");
+        route_lookup_scale_group.bench_function(format!("wildcard_{rows}"), |b| {
+            b.iter(|| {
+                let count = runtime.block_on(wildcard_fixture.lookup_count());
+                black_box(count);
+            });
+        });
+    }
+    route_lookup_scale_group.finish();
 
     let publish_resolution_fixture = runtime
         .block_on(PublishResolutionFixture::new(PUBLISH_RESOLUTION_ROWS))

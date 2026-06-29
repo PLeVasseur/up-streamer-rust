@@ -163,7 +163,7 @@ mod tests {
             lookup.insert(SubscriptionIdentityKey::from(&subscription), subscription);
         }
 
-        lookup
+        lookup.into()
     }
 
     #[test]
