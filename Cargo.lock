@@ -5912,7 +5912,7 @@ dependencies = [
 [[package]]
 name = "up-transport-zenoh"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=dcf1c5154e7e1c9b628b5264de59f220e8753f5f#dcf1c5154e7e1c9b628b5264de59f220e8753f5f"
+source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=01f05d4c0436b560117349cd374e65424333cf41#01f05d4c0436b560117349cd374e65424333cf41"
 dependencies = [
  "anyhow",
  "async-trait",
