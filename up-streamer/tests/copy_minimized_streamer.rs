@@ -670,6 +670,63 @@ impl UZeroCopyTransportCore for SelectedWireCore {
     }
 }
 
+#[derive(Clone, Default)]
+struct AlternateSelectedWireCore(SelectedWireCore);
+
+impl AlternateSelectedWireCore {
+    fn new(instrumentation: Arc<RouteInstrumentation>) -> Self {
+        Self(SelectedWireCore::new(instrumentation))
+    }
+
+    fn sent_payloads(&self) -> Vec<Vec<u8>> {
+        self.0.sent_payloads()
+    }
+
+    fn sent_metadata(&self) -> Vec<UFrameMetadata> {
+        self.0.sent_metadata()
+    }
+
+    fn loan_specs(&self) -> Vec<(usize, usize)> {
+        self.0.loan_specs()
+    }
+}
+
+#[async_trait]
+impl UZeroCopyTransportCore for AlternateSelectedWireCore {
+    type Tx = InstrumentedTxBuffer;
+    type Rx = EncodedRxLease;
+
+    async fn loan_prepared_tx(&self, spec: PreparedTxLoanSpec) -> Result<Self::Tx, UStatus> {
+        self.0.loan_prepared_tx(spec).await
+    }
+
+    async fn send_prepared_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
+        self.0.send_prepared_zero_copy(buffer).await
+    }
+
+    async fn register_encoded_zero_copy_listener(
+        &self,
+        source_filter: &UUri,
+        sink_filter: Option<&UUri>,
+        listener: Arc<dyn UEncodedZeroCopyListener<Self::Rx>>,
+    ) -> Result<(), UStatus> {
+        self.0
+            .register_encoded_zero_copy_listener(source_filter, sink_filter, listener)
+            .await
+    }
+
+    async fn unregister_encoded_zero_copy_listener(
+        &self,
+        source_filter: &UUri,
+        sink_filter: Option<&UUri>,
+        listener: Arc<dyn UEncodedZeroCopyListener<Self::Rx>>,
+    ) -> Result<(), UStatus> {
+        self.0
+            .unregister_encoded_zero_copy_listener(source_filter, sink_filter, listener)
+            .await
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct StableBytes {
@@ -1154,6 +1211,71 @@ async fn zero_copy_l2_stable_publish_routes_through_streamer() {
         .delete_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
         .await
         .expect("selected-wire stable route delete");
+}
+
+#[tokio::test]
+async fn zero_copy_l2_stable_publish_routes_across_heterogeneous_selected_wire_cores() {
+    let instrumentation = Arc::new(RouteInstrumentation::default());
+    let ingress_core = SelectedWireCore::dispatch_sent(instrumentation.clone());
+    let egress_core = AlternateSelectedWireCore::new(instrumentation);
+    let ingress = Arc::new(UWireTransport::new(
+        ingress_core,
+        StableContainerWireFormat,
+        NativePrefixProtobufMetadataCodec,
+    ));
+    let egress = Arc::new(UWireTransport::new(
+        egress_core.clone(),
+        StableContainerWireFormat,
+        NativePrefixProtobufMetadataCodec,
+    ));
+    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone());
+    let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
+    let mut streamer = UStreamer::new(
+        "zero-copy-l2-cross-transport",
+        4,
+        Arc::new(EmptySubscription),
+    )
+    .await
+    .expect("streamer");
+    let publisher =
+        zero_copy::Endpoint::new(ingress, stable_uri_provider("authority-a")).publisher();
+
+    streamer
+        .add_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("heterogeneous selected-wire route add");
+    let diagnostics = streamer.route_diagnostics();
+    assert_eq!(diagnostics.len(), 1);
+    assert_eq!(diagnostics[0].route_kind, RouteKind::CopyMinimized);
+    assert_eq!(
+        diagnostics[0].copy_semantics,
+        RouteCopySemantics::CopyMinimizedOneCopy
+    );
+
+    publisher
+        .publish_stable::<StableBytes>(
+            0x8001,
+            CallOptions::for_publish(None, None, None),
+            |payload| payload.bytes.copy_from_slice(b"xprt"),
+        )
+        .await
+        .expect("stable publish succeeds");
+    wait_for_selected_wire_sent_count(&egress_core.0, 1).await;
+
+    assert_eq!(egress_core.sent_payloads(), vec![b"xprt".to_vec()]);
+    assert_eq!(
+        egress_core.loan_specs(),
+        vec![(
+            std::mem::size_of::<StableBytes>(),
+            std::mem::align_of::<StableBytes>()
+        )]
+    );
+    assert_eq!(egress_core.sent_metadata().len(), 1);
+
+    streamer
+        .delete_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("heterogeneous selected-wire route delete");
 }
 
 #[tokio::test]
