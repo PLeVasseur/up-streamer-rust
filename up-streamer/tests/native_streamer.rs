@@ -478,6 +478,57 @@ async fn owned_l2_publish_routes_through_streamer() {
 }
 
 #[tokio::test]
+async fn owned_l2_notifications_route_through_streamer() {
+    let ingress = Arc::new(RecordingOwnedTransport::default());
+    let egress = Arc::new(RecordingOwnedTransport::default());
+    let ingress_endpoint =
+        OwnedFrameEndpoint::from_owned("ingress", "authority-a", ingress.clone());
+    let egress_endpoint = OwnedFrameEndpoint::from_owned("egress", "authority-b", egress.clone());
+    let mut streamer = UStreamer::new("owned-l2-notification", 4, Arc::new(EmptySubscription))
+        .await
+        .expect("streamer");
+    let ingress_l2 = owned::Endpoint::new(ingress.clone(), uri_provider("authority-a"));
+    let egress_uri_provider = uri_provider("authority-b");
+    let egress_l2 = owned::Endpoint::new(egress.clone(), egress_uri_provider.clone());
+    let destination = egress_uri_provider.get_source_uri();
+    let listener = Arc::new(RecordingMessageListener::default());
+
+    egress_l2
+        .notifier()
+        .start_listening(&topic_uri(), listener.clone())
+        .await
+        .expect("owned notifier listener registered");
+    streamer
+        .add_owned_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("owned route add");
+
+    ingress_l2
+        .notifier()
+        .notify(
+            0x8001,
+            &destination,
+            CallOptions::for_notification(None, None, None),
+            Some(UPayload::new("owned notification", UPayloadFormat::Text)),
+        )
+        .await
+        .expect("owned notification succeeds");
+    listener.wait_for_message_count(1).await;
+
+    let messages = listener.messages();
+    assert_eq!(messages.len(), 1);
+    assert!(messages[0].is_notification());
+    assert_eq!(messages[0].source(), &topic_uri());
+    assert_eq!(messages[0].sink_unchecked(), &destination);
+    assert_eq!(
+        messages[0].payload(),
+        Some(Bytes::from_static(b"owned notification"))
+    );
+    assert_eq!(ingress.sent_frames().len(), 1);
+    assert_eq!(egress.sent_frames().len(), 1);
+}
+
+#[tokio::test]
 async fn owned_l2_rpc_routes_through_streamer() {
     let client_transport = Arc::new(RecordingOwnedTransport::default());
     let server_transport = Arc::new(RecordingOwnedTransport::default());
