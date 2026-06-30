@@ -10,15 +10,15 @@ use std::{
     },
 };
 use tokio::time::{sleep, Duration};
-use up_rust::communication::SubscriptionStatus;
+use up_rust::communication::{zero_copy, CallOptions, SubscriptionStatus};
 use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
 use up_rust::{
-    try_project_umessage_to_frame_metadata, InMemoryZeroCopyTransport,
-    NativePrefixProtobufMetadataCodec, PreparedTxLoanSpec, ProtobufWire, UCode, UEncodedRxFrame,
-    UEncodedZeroCopyListener, UFrameMetadata, UFrameView, UMessageBuilder, UPayloadFormat,
-    UProtocolNativeWire, UStatus, UTxBuffer, UUri, UVecRxLease, UWire, UWireMetadataCodec,
-    UWireTransport, UZeroCopyListener, UZeroCopyTransportCore, UZeroCopyTransportImpl,
-    ValidatedTxLoanSpec,
+    try_project_umessage_to_frame_metadata, ByteBackedStablePayload, InMemoryZeroCopyTransport,
+    NativePrefixProtobufMetadataCodec, PreparedTxLoanSpec, ProtobufWire, StableContainerWireFormat,
+    StablePayload, StaticUriProvider, UCode, UEncodedRxFrame, UEncodedZeroCopyListener,
+    UFrameMetadata, UFrameView, UMessageBuilder, UPayloadFormat, UProtocolNativeWire, UStatus,
+    UTxBuffer, UUri, UVecRxLease, UWire, UWireMetadataCodec, UWireTransport, UZeroCopyListener,
+    UZeroCopyTransportCore, UZeroCopyTransportImpl, ValidatedTxLoanSpec,
 };
 use up_rust::{UZeroCopyRxLease, UZeroCopyTransport};
 use up_streamer::{
@@ -279,6 +279,7 @@ impl UZeroCopyRxLease for InstrumentedRxLease {}
 
 struct InstrumentedTxBuffer {
     metadata: UFrameMetadata,
+    encoded_metadata: Option<Vec<u8>>,
     payload: Vec<u8>,
     instrumentation: Arc<RouteInstrumentation>,
 }
@@ -405,6 +406,7 @@ impl UZeroCopyTransportImpl for InstrumentedZeroCopyTransport {
             .push((spec.payload_len(), spec.payload_alignment()));
         Ok(InstrumentedTxBuffer {
             metadata: spec.metadata().clone(),
+            encoded_metadata: None,
             payload: vec![0; spec.payload_len()],
             instrumentation: self.instrumentation.clone(),
         })
@@ -519,6 +521,7 @@ impl UEncodedRxFrame for EncodedRxLease {
 struct SelectedWireCore {
     instrumentation: Arc<RouteInstrumentation>,
     state: Arc<Mutex<SelectedWireCoreState>>,
+    dispatch_sent: bool,
 }
 
 impl SelectedWireCore {
@@ -526,6 +529,14 @@ impl SelectedWireCore {
         Self {
             instrumentation,
             state: Arc::new(Mutex::new(SelectedWireCoreState::default())),
+            dispatch_sent: false,
+        }
+    }
+
+    fn dispatch_sent(instrumentation: Arc<RouteInstrumentation>) -> Self {
+        Self {
+            dispatch_sent: true,
+            ..Self::new(instrumentation)
         }
     }
 
@@ -582,6 +593,7 @@ impl UZeroCopyTransportCore for SelectedWireCore {
             .push((spec.payload_len(), spec.payload_alignment()));
         Ok(InstrumentedTxBuffer {
             metadata: spec.metadata().clone(),
+            encoded_metadata: Some(spec.encoded_metadata().to_vec()),
             payload: vec![0; spec.payload_len()],
             instrumentation: self.instrumentation.clone(),
         })
@@ -591,12 +603,31 @@ impl UZeroCopyTransportCore for SelectedWireCore {
         self.instrumentation
             .send_calls
             .fetch_add(1, Ordering::SeqCst);
-        let mut state = self
-            .state
-            .lock()
-            .expect("selected-wire core state lock poisoned");
-        state.sent_metadata.push(buffer.metadata);
-        state.sent_payloads.push(buffer.payload);
+        let frame = self.dispatch_sent.then(|| EncodedRxLease {
+            encoded_metadata: buffer
+                .encoded_metadata
+                .clone()
+                .expect("selected-wire TX buffer carries encoded metadata"),
+            slices: vec![buffer.payload.clone()],
+        });
+        let listeners = {
+            let mut state = self
+                .state
+                .lock()
+                .expect("selected-wire core state lock poisoned");
+            state.sent_metadata.push(buffer.metadata);
+            state.sent_payloads.push(buffer.payload);
+            if frame.is_some() {
+                state.listeners.clone()
+            } else {
+                Vec::new()
+            }
+        };
+        if let Some(frame) = frame {
+            for listener in listeners {
+                listener.on_receive_encoded_zero_copy(frame.clone()).await;
+            }
+        }
         Ok(())
     }
 
@@ -637,6 +668,22 @@ impl UZeroCopyTransportCore for SelectedWireCore {
         state.listeners.remove(index);
         Ok(())
     }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct StableBytes {
+    bytes: [u8; 4],
+}
+
+unsafe impl StablePayload for StableBytes {
+    const TYPE_NAME: &'static str = "up_streamer.tests.StableBytes";
+}
+
+unsafe impl ByteBackedStablePayload for StableBytes {}
+
+fn stable_uri_provider(authority: &str) -> Arc<StaticUriProvider> {
+    Arc::new(StaticUriProvider::new(authority, 0x5BA0, 0x01).expect("uri provider"))
 }
 
 fn instrumented_payload_frame(
@@ -1050,6 +1097,63 @@ async fn selected_wire_copy_minimized_route_accepts_same_static_wire() {
         .delete_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
         .await
         .expect("selected-wire route delete");
+}
+
+#[tokio::test]
+async fn zero_copy_l2_stable_publish_routes_through_streamer() {
+    let instrumentation = Arc::new(RouteInstrumentation::default());
+    let ingress_core = SelectedWireCore::dispatch_sent(instrumentation.clone());
+    let egress_core = SelectedWireCore::new(instrumentation);
+    let ingress = Arc::new(UWireTransport::new(
+        ingress_core,
+        StableContainerWireFormat,
+        NativePrefixProtobufMetadataCodec,
+    ));
+    let egress = Arc::new(UWireTransport::new(
+        egress_core.clone(),
+        StableContainerWireFormat,
+        NativePrefixProtobufMetadataCodec,
+    ));
+    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone());
+    let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
+    let mut streamer = UStreamer::new(
+        "zero-copy-l2-stable-publish",
+        4,
+        Arc::new(EmptySubscription),
+    )
+    .await
+    .expect("streamer");
+    let publisher =
+        zero_copy::Endpoint::new(ingress, stable_uri_provider("authority-a")).publisher();
+
+    streamer
+        .add_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("selected-wire stable route add");
+    publisher
+        .publish_stable::<StableBytes>(
+            0x8001,
+            CallOptions::for_publish(None, None, None),
+            |payload| payload.bytes.copy_from_slice(b"zcpy"),
+        )
+        .await
+        .expect("stable publish succeeds");
+    wait_for_selected_wire_sent_count(&egress_core, 1).await;
+
+    assert_eq!(egress_core.sent_payloads(), vec![b"zcpy".to_vec()]);
+    assert_eq!(
+        egress_core.loan_specs(),
+        vec![(
+            std::mem::size_of::<StableBytes>(),
+            std::mem::align_of::<StableBytes>()
+        )]
+    );
+    assert_eq!(egress_core.sent_metadata().len(), 1);
+
+    streamer
+        .delete_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("selected-wire stable route delete");
 }
 
 #[tokio::test]
