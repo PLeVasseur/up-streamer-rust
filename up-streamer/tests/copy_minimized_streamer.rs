@@ -14,11 +14,11 @@ use up_rust::communication::{zero_copy, CallOptions, SubscriptionStatus};
 use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
 use up_rust::{
     try_project_umessage_to_frame_metadata, ByteBackedStablePayload, InMemoryZeroCopyTransport,
-    NativePrefixProtobufMetadataCodec, PreparedTxLoanSpec, ProtobufWire, StableContainerWireFormat,
+    NativePrefixProtobufMetadataCodec, PreparedTxLoanSpec, ProtobufWire, ProtobufWireTransport,
     StablePayload, StaticUriProvider, UCode, UEncodedRxFrame, UEncodedZeroCopyListener,
     UFrameMetadata, UFrameView, UMessageBuilder, UPayloadFormat, UProtocolNativeWire, UStatus,
-    UTxBuffer, UUri, UVecRxLease, UWire, UWireMetadataCodec, UWireTransport, UZeroCopyListener,
-    UZeroCopyTransportCore, UZeroCopyTransportImpl, ValidatedTxLoanSpec,
+    UTxBuffer, UUri, UVecRxLease, UWire, UWireMetadataCodec, UWithNativePrefixWire,
+    UZeroCopyListener, UZeroCopyTransportCore, UZeroCopyTransportImpl, ValidatedTxLoanSpec,
 };
 use up_rust::{UZeroCopyRxLease, UZeroCopyTransport};
 use up_streamer::{
@@ -842,8 +842,8 @@ where
 
 #[test]
 fn selected_zenoh_iceoryx2_route_pairs_typecheck() {
-    type Zenoh = UWireTransport<ZenohZeroCopyCore, ProtobufWire, NativePrefixProtobufMetadataCodec>;
-    type Iceoryx2 = UWireTransport<Iceoryx2PubSub, ProtobufWire, NativePrefixProtobufMetadataCodec>;
+    type Zenoh = ProtobufWireTransport<ZenohZeroCopyCore>;
+    type Iceoryx2 = ProtobufWireTransport<Iceoryx2PubSub>;
 
     assert_route_pair::<Zenoh, Zenoh>();
     assert_route_pair::<Zenoh, Iceoryx2>();
@@ -1111,16 +1111,8 @@ async fn selected_wire_copy_minimized_route_accepts_same_static_wire() {
     let instrumentation = Arc::new(RouteInstrumentation::default());
     let ingress_core = SelectedWireCore::new(instrumentation.clone());
     let egress_core = SelectedWireCore::new(instrumentation);
-    let ingress = Arc::new(UWireTransport::new(
-        ingress_core.clone(),
-        ProtobufWire,
-        NativePrefixProtobufMetadataCodec,
-    ));
-    let egress = Arc::new(UWireTransport::new(
-        egress_core.clone(),
-        ProtobufWire,
-        NativePrefixProtobufMetadataCodec,
-    ));
+    let ingress = Arc::new(ingress_core.clone().into_protobuf_transport());
+    let egress = Arc::new(egress_core.clone().into_protobuf_transport());
     let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress);
     let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
     let mut streamer = UStreamer::new("selected-wire-route", 4, Arc::new(EmptySubscription))
@@ -1161,16 +1153,8 @@ async fn zero_copy_l2_stable_publish_routes_through_streamer() {
     let instrumentation = Arc::new(RouteInstrumentation::default());
     let ingress_core = SelectedWireCore::dispatch_sent(instrumentation.clone());
     let egress_core = SelectedWireCore::new(instrumentation);
-    let ingress = Arc::new(UWireTransport::new(
-        ingress_core,
-        StableContainerWireFormat,
-        NativePrefixProtobufMetadataCodec,
-    ));
-    let egress = Arc::new(UWireTransport::new(
-        egress_core.clone(),
-        StableContainerWireFormat,
-        NativePrefixProtobufMetadataCodec,
-    ));
+    let ingress = Arc::new(ingress_core.into_stable_container_transport());
+    let egress = Arc::new(egress_core.clone().into_stable_container_transport());
     let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone());
     let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
     let mut streamer = UStreamer::new(
@@ -1218,16 +1202,8 @@ async fn zero_copy_l2_stable_publish_routes_across_heterogeneous_selected_wire_c
     let instrumentation = Arc::new(RouteInstrumentation::default());
     let ingress_core = SelectedWireCore::dispatch_sent(instrumentation.clone());
     let egress_core = AlternateSelectedWireCore::new(instrumentation);
-    let ingress = Arc::new(UWireTransport::new(
-        ingress_core,
-        StableContainerWireFormat,
-        NativePrefixProtobufMetadataCodec,
-    ));
-    let egress = Arc::new(UWireTransport::new(
-        egress_core.clone(),
-        StableContainerWireFormat,
-        NativePrefixProtobufMetadataCodec,
-    ));
+    let ingress = Arc::new(ingress_core.into_stable_container_transport());
+    let egress = Arc::new(egress_core.clone().into_stable_container_transport());
     let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone());
     let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
     let mut streamer = UStreamer::new(
@@ -1283,16 +1259,8 @@ async fn selected_wire_copy_minimized_route_drops_mismatched_wire_before_forward
     let instrumentation = Arc::new(RouteInstrumentation::default());
     let ingress_core = SelectedWireCore::new(instrumentation.clone());
     let egress_core = SelectedWireCore::new(instrumentation);
-    let ingress = Arc::new(UWireTransport::new(
-        ingress_core.clone(),
-        ProtobufWire,
-        NativePrefixProtobufMetadataCodec,
-    ));
-    let egress = Arc::new(UWireTransport::new(
-        egress_core.clone(),
-        ProtobufWire,
-        NativePrefixProtobufMetadataCodec,
-    ));
+    let ingress = Arc::new(ingress_core.clone().into_protobuf_transport());
+    let egress = Arc::new(egress_core.clone().into_protobuf_transport());
     let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress);
     let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
     let mut streamer = UStreamer::new("selected-wire-route", 4, Arc::new(EmptySubscription))

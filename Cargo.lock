@@ -5787,7 +5787,7 @@ dependencies = [
 [[package]]
 name = "up-rust"
 version = "0.10.0-SNAPSHOT"
-source = "git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=3d5ba3805792086e1ca59e75a826c6501bc8f779#3d5ba3805792086e1ca59e75a826c6501bc8f779"
+source = "git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=98f62b4abefaa977ddfdcfcf8067b860f1303c64#98f62b4abefaa977ddfdcfcf8067b860f1303c64"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5809,7 +5809,7 @@ dependencies = [
 [[package]]
 name = "up-rust-macros"
 version = "0.10.0-SNAPSHOT"
-source = "git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=3d5ba3805792086e1ca59e75a826c6501bc8f779#3d5ba3805792086e1ca59e75a826c6501bc8f779"
+source = "git+ssh://git@github.com/PLeVasseur/up-rust.git?rev=98f62b4abefaa977ddfdcfcf8067b860f1303c64#98f62b4abefaa977ddfdcfcf8067b860f1303c64"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5841,7 +5841,7 @@ dependencies = [
 [[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=c5adaccd53af495d2597e7bcaccdce0ae4dfe4f8#c5adaccd53af495d2597e7bcaccdce0ae4dfe4f8"
+source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=5bedff250dd5ed88579d4118a12876402fd49e82#5bedff250dd5ed88579d4118a12876402fd49e82"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5856,7 +5856,7 @@ dependencies = [
 [[package]]
 name = "up-transport-lola-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=932091c5581012cf8cd73ce44686e0c64c78316d#932091c5581012cf8cd73ce44686e0c64c78316d"
+source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=958c4fe57f1d31422a35d568311b223c7760b282#958c4fe57f1d31422a35d568311b223c7760b282"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5913,7 +5913,7 @@ dependencies = [
 [[package]]
 name = "up-transport-zenoh"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=63f4b64b3eef9bdd476761fd2adf3cd9cb8d8d95#63f4b64b3eef9bdd476761fd2adf3cd9cb8d8d95"
+source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=e942d523a272b5fd7158fe4c6cdf44f3bf6c73d5#e942d523a272b5fd7158fe4c6cdf44f3bf6c73d5"
 dependencies = [
  "anyhow",
  "async-trait",
