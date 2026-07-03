@@ -25,10 +25,15 @@ use std::sync::Arc;
     feature = "iceoryx2-zero-copy",
     feature = "lola-transport"
 ))]
-use up_rust::{
-    ProtobufWire, ProtobufWireTransport, UCode, UProtocolNativeWire, UProtocolNativeWireTransport,
-    UStatus,
+use up_rust::selected_wire_user_api::{
+    ProtobufWire, ProtobufWireTransport, UProtocolNativeWire, UProtocolNativeWireTransport,
 };
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport"
+))]
+use up_rust::{UCode, UStatus};
 #[cfg(not(any(
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",

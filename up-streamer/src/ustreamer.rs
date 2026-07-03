@@ -48,7 +48,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 use up_rust::core::usubscription::{SubscriptionInfo, USubscription};
 #[cfg(feature = "experimental-copy-minimized-routing")]
-use up_rust::USelectedWireZeroCopyTransport;
+use up_rust::selected_wire_user_api::USelectedWireZeroCopyTransport;
 #[cfg(feature = "owned-frame-transport")]
 use up_rust::{
     try_project_frame_to_umessage, try_project_umessage_to_frame_metadata, UOwnedFrame,

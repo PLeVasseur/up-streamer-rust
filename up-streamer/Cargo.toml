@@ -22,10 +22,9 @@ license.workspace = true
 [features]
 default = []
 experimental-copy-minimized-routing = [
-    "up-rust/selected-wire-protobuf-metadata",
-    "up-rust/selected-wire-transport-adapter",
+    "up-rust/selected-wire-user-api",
 ]
-owned-frame-transport = ["up-rust/owned-frame-transport"]
+owned-frame-transport = ["up-rust/owned-frame-transport", "up-rust/wire-implementer-api"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -45,7 +44,7 @@ criterion = { version = "0.5.1", features = ["csv_output"] }
 futures = { workspace = true }
 integration-test-utils = { path = "../utils/integration-test-utils" }
 tokio-condvar = { version = "0.3.0" }
-up-rust = { workspace = true, features = ["test-util"] }
+up-rust = { workspace = true, features = ["test-util", "transport-implementer-api", "wire-implementer-api"] }
 up-transport-iceoryx2-rust = { workspace = true }
 up-transport-zenoh = { workspace = true, features = ["zero-copy"] }
 usubscription-static-file = { path = "../utils/usubscription-static-file" }

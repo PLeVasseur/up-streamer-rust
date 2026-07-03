@@ -12,13 +12,20 @@ use std::{
 use tokio::time::{sleep, Duration};
 use up_rust::communication::{zero_copy, CallOptions, SubscriptionStatus};
 use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
+use up_rust::selected_wire_user_api::{
+    ProtobufWireTransport, UProtocolNativeWire, UWithNativePrefixWire,
+};
+use up_rust::transport_implementer_api::{
+    PreparedTxLoanSpec, UEncodedRxFrame, UEncodedZeroCopyListener, UZeroCopyTransportCore,
+};
+use up_rust::wire_implementer_api::{
+    NativePrefixProtobufMetadataCodec, ProtobufWire, UWire, UWireMetadataCodec,
+};
 use up_rust::{
     try_project_umessage_to_frame_metadata, ByteBackedStablePayload, InMemoryZeroCopyTransport,
-    NativePrefixProtobufMetadataCodec, PreparedTxLoanSpec, ProtobufWire, ProtobufWireTransport,
-    StablePayload, StaticUriProvider, UCode, UEncodedRxFrame, UEncodedZeroCopyListener,
-    UFrameMetadata, UFrameView, UMessageBuilder, UPayloadFormat, UProtocolNativeWire, UStatus,
-    UTxBuffer, UUri, UVecRxLease, UWire, UWireMetadataCodec, UWithNativePrefixWire,
-    UZeroCopyListener, UZeroCopyTransportCore, UZeroCopyTransportImpl, ValidatedTxLoanSpec,
+    StablePayload, StaticUriProvider, UCode, UFrameMetadata, UFrameView, UMessageBuilder,
+    UPayloadFormat, UStatus, UTxBuffer, UUri, UVecRxLease, UZeroCopyListener,
+    UZeroCopyTransportImpl, ValidatedTxLoanSpec,
 };
 use up_rust::{UZeroCopyRxLease, UZeroCopyTransport};
 use up_streamer::{

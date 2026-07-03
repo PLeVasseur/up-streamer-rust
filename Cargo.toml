@@ -54,9 +54,9 @@ tokio = { version = "1.44", default-features = false, features = [
     "macros",
 ] }
 protobuf = { version = "3.7.2", features = ["with-bytes"] }
-up-rust = { git = "ssh://git@github.com/PLeVasseur/up-rust.git", rev = "98f62b4abefaa977ddfdcfcf8067b860f1303c64", default-features = false }
-up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "e942d523a272b5fd7158fe4c6cdf44f3bf6c73d5" }
-up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "5bedff250dd5ed88579d4118a12876402fd49e82" }
+up-rust = { git = "ssh://git@github.com/PLeVasseur/up-rust.git", rev = "b0b6f795f3159b7ab6dd76a923209b415369f5e2", default-features = false }
+up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "e0d1f529bb0a6eb789870045745411390452d419" }
+up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "0bed075d1a26422d1b0934580271ca3f3b8a6c94" }
 up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "442bc73a2f84d9ae70db3cedf7ff10903c6e2f07", default-features = false }
 up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "c489e4069522ca24a5ea48833887124e604b63e2" }
 zenoh = { version = "1.2.1", features = [
@@ -71,7 +71,7 @@ zenoh-result = { version = "1.2.1" }
 zenoh-util = { version = "1.2.1" }
 
 [patch."https://github.com/PLeVasseur/up-rust"]
-up-rust = { git = "ssh://git@github.com/PLeVasseur/up-rust.git", rev = "98f62b4abefaa977ddfdcfcf8067b860f1303c64" }
+up-rust = { git = "ssh://git@github.com/PLeVasseur/up-rust.git", rev = "b0b6f795f3159b7ab6dd76a923209b415369f5e2" }
 
 [profile.dev]
 debug = true
