@@ -480,16 +480,13 @@ fn zenoh_config_from_endpoint(endpoint: &str) -> Config {
 }
 
 fn request_metadata(args: &Args, sink: UUri, source: UUri) -> Result<UFrameMetadata, UStatus> {
-    UFrameMetadata::new(
-        UMessageBuilder::request(sink, source, args.timeout_ms.min(u32::MAX as u64) as u32)
-            .build()
-            .map_err(|error| {
-                invalid_config(format!("failed to build request metadata: {error:?}"))
-            })?
-            .attributes()
-            .clone(),
-        Some(selected_payload_encoding(args.encoding)),
+    UFrameMetadata::request(
+        sink,
+        source,
+        std::time::Duration::from_millis(args.timeout_ms.min(u32::MAX as u64)),
     )
+    .with_payload_encoding(selected_payload_encoding(args.encoding))
+    .build()
     .map_err(|error| invalid_config(format!("failed to build frame metadata: {error:?}")))
 }
 

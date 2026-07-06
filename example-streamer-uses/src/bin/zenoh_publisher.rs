@@ -188,17 +188,10 @@ async fn run_selected_wire_publisher(
 ) -> Result<(), UStatus> {
     let local_uri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
     let source = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
-    let metadata = UFrameMetadata::new(
-        UMessageBuilder::publish(source)
-            .build()
-            .map_err(|error| {
-                invalid_config(format!("failed to build publish metadata: {error:?}"))
-            })?
-            .attributes()
-            .clone(),
-        Some(selected_payload_encoding(args.encoding)),
-    )
-    .map_err(|error| invalid_config(format!("failed to build frame metadata: {error:?}")))?;
+    let metadata = UFrameMetadata::publish(source)
+        .with_payload_encoding(selected_payload_encoding(args.encoding))
+        .build()
+        .map_err(|error| invalid_config(format!("failed to build frame metadata: {error:?}")))?;
     let payload = selected_payload_bytes(args)?;
     let zenoh_config = zenoh_config_from_endpoint(&args.endpoint);
 

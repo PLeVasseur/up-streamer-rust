@@ -19,7 +19,7 @@ use up_rust::transport_implementer_api::{
     PreparedTxLoanSpec, UEncodedRxFrame, UEncodedZeroCopyListener, UZeroCopyTransportCore,
 };
 use up_rust::wire_implementer_api::{
-    NativePrefixProtobufMetadataCodec, ProtobufWire, UWire, UWireMetadataCodec,
+    NativePrefixFrameMetadataCodec, ProtobufWire, UWire, UWireMetadataCodec,
 };
 use up_rust::{
     try_project_umessage_to_frame_metadata, ByteBackedStablePayload, InMemoryZeroCopyTransport,
@@ -87,12 +87,7 @@ impl USubscription for EmptySubscription {
         Ok(Vec::new())
     }
 
-    async fn reset(
-        &self,
-        _reason: ResetReason,
-        _message: Option<String>,
-        _before: Option<u64>,
-    ) -> Result<(), UStatus> {
+    async fn reset(&self, _reason: ResetReason, _message: Option<String>) -> Result<(), UStatus> {
         Ok(())
     }
 }
@@ -157,12 +152,7 @@ impl USubscription for StaticSubscription {
         Ok(Vec::new())
     }
 
-    async fn reset(
-        &self,
-        _reason: ResetReason,
-        _message: Option<String>,
-        _before: Option<u64>,
-    ) -> Result<(), UStatus> {
+    async fn reset(&self, _reason: ResetReason, _message: Option<String>) -> Result<(), UStatus> {
         Ok(())
     }
 }
@@ -803,7 +793,7 @@ where
     .expect("message");
     let metadata = try_project_umessage_to_frame_metadata(&message).expect("metadata");
     EncodedRxLease {
-        encoded_metadata: NativePrefixProtobufMetadataCodec
+        encoded_metadata: NativePrefixFrameMetadataCodec
             .encode_frame_metadata(W::metadata_context(), &metadata)
             .expect("encoded metadata"),
         slices: payload_slices.iter().map(|slice| slice.to_vec()).collect(),

@@ -11,8 +11,8 @@ use up_rust::communication::{
 use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
 use up_rust::{
     try_project_umessage_to_frame_metadata, LocalUriProvider, PayloadEncoding, StaticUriProvider,
-    UAttributes, UCode, UFrameMetadata, UListener, UMessage, UMessageBuilder, UOwnedFrame,
-    UOwnedListener, UOwnedTransportImpl, UPayloadFormat, UStatus, UUri, ValidatedOwnedFrame,
+    UAttributes, UCode, UListener, UMessage, UMessageBuilder, UOwnedFrame, UOwnedListener,
+    UOwnedTransportImpl, UPayloadFormat, UStatus, UUri, ValidatedOwnedFrame,
 };
 use up_streamer::{OwnedFrameEndpoint, RouteCopySemantics, RouteKind, UStreamer};
 
@@ -69,12 +69,7 @@ impl USubscription for EmptySubscription {
         Ok(Vec::new())
     }
 
-    async fn reset(
-        &self,
-        _reason: ResetReason,
-        _message: Option<String>,
-        _before: Option<u64>,
-    ) -> Result<(), UStatus> {
+    async fn reset(&self, _reason: ResetReason, _message: Option<String>) -> Result<(), UStatus> {
         Ok(())
     }
 }
@@ -139,12 +134,7 @@ impl USubscription for SeededSubscription {
         Ok(Vec::new())
     }
 
-    async fn reset(
-        &self,
-        _reason: ResetReason,
-        _message: Option<String>,
-        _before: Option<u64>,
-    ) -> Result<(), UStatus> {
+    async fn reset(&self, _reason: ResetReason, _message: Option<String>) -> Result<(), UStatus> {
         Ok(())
     }
 }
@@ -162,11 +152,11 @@ impl RegisteredOwnedListener {
     }
 
     fn matches(&self, frame: &UOwnedFrame) -> bool {
-        let attributes = frame.metadata().attributes();
-        if !self.source_filter.matches(attributes.source()) {
+        let metadata = frame.metadata();
+        if !self.source_filter.matches(metadata.source()) {
             return false;
         }
-        match (&self.sink_filter, attributes.sink()) {
+        match (&self.sink_filter, metadata.sink()) {
             (Some(pattern), Some(candidate)) => pattern.matches(candidate),
             (None, None) => true,
             _ => false,
@@ -256,9 +246,9 @@ impl UOwnedTransportImpl for RecordingOwnedTransport {
                 received
                     .iter()
                     .position(|frame| {
-                        let attributes = frame.metadata().attributes();
-                        source_filter.matches(attributes.source())
-                            && match (sink_filter, attributes.sink()) {
+                        let metadata = frame.metadata();
+                        source_filter.matches(metadata.source())
+                            && match (sink_filter, metadata.sink()) {
                                 (Some(pattern), Some(candidate)) => pattern.matches(candidate),
                                 (None, None) => true,
                                 _ => false,
@@ -395,17 +385,16 @@ fn custom_payload_frame() -> UOwnedFrame {
     )
     .build()
     .expect("message");
-    let metadata = UFrameMetadata::new(
-        message.attributes().clone(),
-        Some(
+    let metadata = try_project_umessage_to_frame_metadata(&message)
+        .expect("metadata")
+        .with_payload_encoding(
             PayloadEncoding::custom(
                 "up.xcdr-v2",
                 "application/vnd.uprotocol.xcdr-v2;type=\"VehicleSignalV1\"",
             )
             .expect("custom encoding"),
-        ),
-    )
-    .expect("metadata");
+        )
+        .expect("custom metadata");
     UOwnedFrame::with_payload(metadata, Bytes::from_static(b"xcdrv2-fixture")).expect("owned frame")
 }
 

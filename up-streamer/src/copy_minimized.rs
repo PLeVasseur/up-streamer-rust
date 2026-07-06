@@ -219,13 +219,13 @@ mod tests {
         )
         .build()
         .expect("message");
-        let metadata = try_project_umessage_to_frame_metadata(&message)
-            .expect("metadata")
-            .into_attributes();
+        let metadata = try_project_umessage_to_frame_metadata(&message).expect("metadata");
         let encoding =
             PayloadEncoding::custom(StableContainerPayloadInfo::ENCODING_ID, content_type)
                 .expect("stable-container encoding");
-        let metadata = up_rust::UFrameMetadata::new_unchecked(metadata, Some(encoding));
+        let metadata = metadata
+            .with_payload_encoding(encoding)
+            .expect("metadata with encoding");
         TestFrame {
             metadata,
             payload: vec![0; payload_len],

@@ -322,12 +322,7 @@ impl USubscription for USubscriptionStaticFile {
         Ok(subscribers_by_key.into_values().collect())
     }
 
-    async fn reset(
-        &self,
-        _reason: ResetReason,
-        _message: Option<String>,
-        _before: Option<u64>,
-    ) -> Result<(), UStatus> {
+    async fn reset(&self, _reason: ResetReason, _message: Option<String>) -> Result<(), UStatus> {
         Ok(())
     }
 }

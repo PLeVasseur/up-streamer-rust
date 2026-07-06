@@ -1372,7 +1372,6 @@ mod tests {
             &self,
             _reason: ResetReason,
             _message: Option<String>,
-            _before: Option<u64>,
         ) -> Result<(), UStatus> {
             Ok(())
         }

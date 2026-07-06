@@ -15,7 +15,16 @@ use clap::{Parser, ValueEnum};
 use std::mem::{self, MaybeUninit};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use up_rust::selected_wire_user_api::{ProtobufWire, StableContainerWireFormat};
+use up_rust::selected_wire_user_api::ProtobufWire;
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport",
+    feature = "zenoh-owned-frame",
+    feature = "iceoryx2-owned-frame",
+    feature = "lola-owned-frame"
+))]
+use up_rust::selected_wire_user_api::StableContainerWireFormat;
 use up_rust::{
     PayloadEncoding, PayloadFormat, StableContainerPayload, StablePayloadInit, UCode,
     UFrameMetadata, UFrameView, UMessage, UMessageBuilder, UOwnedFrame, UOwnedTransport, UStatus,
@@ -258,7 +267,7 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
             let request =
                 receive_owned_frame(&transport, &source, Some(&sink), cli.timeout_ms).await?;
             let payload = request.payload_bytes().to_vec();
-            let response_metadata = response_metadata(cli, request.metadata().attributes())?;
+            let response_metadata = response_metadata(cli, request.metadata())?;
             tokio::time::sleep(Duration::from_millis(cli.rpc_response_delay_ms)).await;
             send_owned_frame_repeated(&transport, response_metadata, &payload, cli).await?;
             println!(
@@ -470,7 +479,7 @@ where
             let request =
                 receive_zero_copy_frame(&transport, &source, Some(&sink), cli.timeout_ms).await?;
             let payload = request.try_contiguous_payload().unwrap_or(&[]).to_vec();
-            let response_metadata = response_metadata(cli, request.metadata().attributes())?;
+            let response_metadata = response_metadata(cli, request.metadata())?;
             tokio::time::sleep(Duration::from_millis(cli.rpc_response_delay_ms)).await;
             send_zero_copy_frame_repeated(&transport, response_metadata, &payload, cli).await?;
             println!(
@@ -982,11 +991,16 @@ fn request_metadata(
 
 fn response_metadata(
     cli: &Cli,
-    request_attributes: &up_rust::UAttributes,
+    request_metadata: &UFrameMetadata,
 ) -> Result<UFrameMetadata, UStatus> {
+    let request_attributes = request_metadata
+        .try_project_to_attributes()
+        .map_err(|error| {
+            invalid_config(format!("failed to project request metadata: {error:?}"))
+        })?;
     frame_metadata(
         cli,
-        UMessageBuilder::response_for_request(request_attributes)
+        UMessageBuilder::response_for_request(&request_attributes)
             .build()
             .map_err(|error| {
                 invalid_config(format!("failed to build response metadata: {error:?}"))
@@ -995,8 +1009,8 @@ fn response_metadata(
 }
 
 fn frame_metadata(cli: &Cli, message: UMessage) -> Result<UFrameMetadata, UStatus> {
-    UFrameMetadata::new(
-        message.attributes().clone(),
+    up_rust::try_project_attributes_to_frame_metadata(
+        message.attributes(),
         Some(payload_encoding(cli.wire_format)),
     )
     .map_err(|error| invalid_config(format!("failed to build frame metadata: {error:?}")))
@@ -1023,7 +1037,7 @@ fn payload_encoding(wire_format: FlowWireFormat) -> PayloadEncoding {
             feature = "iceoryx2-owned-frame",
             feature = "lola-owned-frame"
         )))]
-        FlowWireFormat::Xcdrv2 => PayloadEncoding::Standard(up_rust::UPayloadFormat::Raw),
+        FlowWireFormat::Xcdrv2 => PayloadEncoding::RAW,
     }
 }
 

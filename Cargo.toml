@@ -55,11 +55,11 @@ tokio = { version = "1.44", default-features = false, features = [
     "macros",
 ] }
 protobuf = { version = "3.7.2", features = ["with-bytes"] }
-up-rust = { git = "ssh://git@github.com/PLeVasseur/up-rust.git", rev = "b0b6f795f3159b7ab6dd76a923209b415369f5e2", default-features = false }
-up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "e0d1f529bb0a6eb789870045745411390452d419" }
-up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "0bed075d1a26422d1b0934580271ca3f3b8a6c94" }
-up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "442bc73a2f84d9ae70db3cedf7ff10903c6e2f07", default-features = false }
-up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "c489e4069522ca24a5ea48833887124e604b63e2" }
+up-rust = { git = "ssh://git@github.com/PLeVasseur/up-rust.git", rev = "45263b6f97857f29e2d61815643d67051171e98e", default-features = false }
+up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "cf783a2b85d919977c7aaa578b969ba9bf00040c" }
+up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "1b086b37599b07ecea0c8f39ead22a1bb7412b64" }
+up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "f0c72af45a5f5030a71fcef2ae0e551ca0d7cec8", default-features = false }
+up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "cbd8774999b7216519da9c2f9e8135ab17c9a501" }
 zenoh = { version = "1.2.1", features = [
     "default",
     "plugins",
@@ -72,7 +72,7 @@ zenoh-result = { version = "1.2.1" }
 zenoh-util = { version = "1.2.1" }
 
 [patch."https://github.com/PLeVasseur/up-rust"]
-up-rust = { git = "ssh://git@github.com/PLeVasseur/up-rust.git", rev = "b0b6f795f3159b7ab6dd76a923209b415369f5e2" }
+up-rust = { git = "ssh://git@github.com/PLeVasseur/up-rust.git", rev = "45263b6f97857f29e2d61815643d67051171e98e" }
 
 [profile.dev]
 debug = true
