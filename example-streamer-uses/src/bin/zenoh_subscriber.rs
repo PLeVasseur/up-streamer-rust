@@ -13,18 +13,24 @@
 
 mod common;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use common::cli;
 use common::PublishReceiver;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
+use std::time::{Duration, Instant};
 use tracing::info;
-use up_rust::{UListener, UStatus, UTransport};
+use up_rust::selected_wire_user_api::{ProtobufWire, StableContainerWireFormat};
+use up_rust::{
+    UCode, UFrameView, UListener, UOwnedFrame, UOwnedTransport, UStatus, UTransport, UUri,
+    UZeroCopyRxLease, UZeroCopyTransport,
+};
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
-    UPTransportZenoh,
+    UPTransportZenoh, ZenohOwnedCore, ZenohZeroCopyCore,
 };
+use up_wire_xcdrv2::XcdrV2Wire;
 
 const DEFAULT_ENDPOINT: &str = "tcp/127.0.0.1:7447";
 const DEFAULT_UAUTHORITY: &str = "authority-b";
@@ -35,6 +41,19 @@ const DEFAULT_SOURCE_AUTHORITY: &str = "authority-a";
 const DEFAULT_SOURCE_UENTITY: &str = "0x5BA0";
 const DEFAULT_SOURCE_UVERSION: &str = "0x1";
 const DEFAULT_SOURCE_RESOURCE: &str = "0x8001";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum RouteFamily {
+    OwnedFrame,
+    CopyMinimized,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum Encoding {
+    Native,
+    Protobuf,
+    Xcdrv2,
+}
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -66,6 +85,15 @@ struct Args {
     /// Source resource ID filter for publish subscription (decimal or 0x-prefixed hex)
     #[arg(long, default_value = DEFAULT_SOURCE_RESOURCE)]
     source_resource: String,
+    /// Optional selected-wire route family. Omit this flag to use the classic UTransport example path.
+    #[arg(long, value_enum)]
+    route_family: Option<RouteFamily>,
+    /// Payload encoding used when --route-family selects a selected-wire path.
+    #[arg(long, value_enum, default_value = "protobuf")]
+    encoding: Encoding,
+    /// Timeout for selected-wire receive examples.
+    #[arg(long, default_value_t = 5000)]
+    timeout_ms: u64,
 }
 
 #[tokio::main]
@@ -80,6 +108,19 @@ async fn main() -> Result<(), UStatus> {
     let source_uentity = cli::parse_u32_status("--source-uentity", &args.source_uentity)?;
     let source_uversion = cli::parse_u8_status("--source-uversion", &args.source_uversion)?;
     let source_resource = cli::parse_u16_status("--source-resource", &args.source_resource)?;
+
+    if let Some(route_family) = args.route_family {
+        return run_selected_wire_subscriber(
+            &args,
+            route_family,
+            uentity,
+            uversion,
+            source_uentity,
+            source_uversion,
+            source_resource,
+        )
+        .await;
+    }
 
     info!("Started zenoh_subscriber");
 
@@ -123,4 +164,173 @@ async fn main() -> Result<(), UStatus> {
 
     thread::park();
     Ok(())
+}
+
+async fn run_selected_wire_subscriber(
+    args: &Args,
+    route_family: RouteFamily,
+    uentity: u32,
+    uversion: u8,
+    source_uentity: u32,
+    source_uversion: u8,
+    source_resource: u16,
+) -> Result<(), UStatus> {
+    let local_uri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
+    let source_filter = cli::build_uuri(
+        &args.source_authority,
+        source_uentity,
+        source_uversion,
+        source_resource,
+    )?;
+    let zenoh_config = zenoh_config_from_endpoint(&args.endpoint);
+
+    let payload = match (route_family, args.encoding) {
+        (RouteFamily::OwnedFrame, Encoding::Native) => {
+            let transport = Arc::new(
+                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(StableContainerWireFormat),
+            ) as Arc<dyn UOwnedTransport>;
+            println!("READY listener_registered");
+            receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
+        }
+        (RouteFamily::OwnedFrame, Encoding::Protobuf) => {
+            let transport = Arc::new(
+                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(ProtobufWire),
+            ) as Arc<dyn UOwnedTransport>;
+            println!("READY listener_registered");
+            receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
+        }
+        (RouteFamily::OwnedFrame, Encoding::Xcdrv2) => {
+            let transport = Arc::new(
+                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(XcdrV2Wire),
+            ) as Arc<dyn UOwnedTransport>;
+            println!("READY listener_registered");
+            receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
+        }
+        (RouteFamily::CopyMinimized, Encoding::Native) => {
+            let transport = Arc::new(
+                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(StableContainerWireFormat),
+            );
+            println!("READY listener_registered");
+            receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
+        }
+        (RouteFamily::CopyMinimized, Encoding::Protobuf) => {
+            let transport = Arc::new(
+                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(ProtobufWire),
+            );
+            println!("READY listener_registered");
+            receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
+        }
+        (RouteFamily::CopyMinimized, Encoding::Xcdrv2) => {
+            let transport = Arc::new(
+                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(XcdrV2Wire),
+            );
+            println!("READY listener_registered");
+            receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
+        }
+    };
+
+    println!(
+        "FLOW observed_payload_bytes={} role=subscriber",
+        payload.len()
+    );
+    Ok(())
+}
+
+fn zenoh_config_from_endpoint(endpoint: &str) -> Config {
+    let mut zenoh_config = Config::default();
+    if !endpoint.is_empty() {
+        let ipv4_endpoint = EndPoint::from_str(endpoint).expect("Unable to set endpoint");
+        zenoh_config
+            .connect
+            .endpoints
+            .set(vec![ipv4_endpoint])
+            .expect("Unable to set Zenoh Config");
+    }
+    zenoh_config
+}
+
+async fn receive_owned_payload(
+    transport: &Arc<dyn UOwnedTransport>,
+    source_filter: &UUri,
+    timeout_ms: u64,
+) -> Result<Vec<u8>, UStatus> {
+    receive_owned_frame(transport, source_filter, timeout_ms)
+        .await
+        .map(|frame| frame.payload_bytes().to_vec())
+}
+
+async fn receive_owned_frame(
+    transport: &Arc<dyn UOwnedTransport>,
+    source_filter: &UUri,
+    timeout_ms: u64,
+) -> Result<UOwnedFrame, UStatus> {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(UStatus::fail_with_code(
+                UCode::DeadlineExceeded,
+                "timed out waiting for owned frame",
+            ));
+        }
+        match tokio::time::timeout(
+            remaining.min(Duration::from_millis(100)),
+            transport.receive_owned(source_filter, None),
+        )
+        .await
+        {
+            Ok(Ok(frame)) => return Ok(frame),
+            Ok(Err(error)) if error.get_code() == UCode::NotFound => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(_) => {}
+        }
+    }
+}
+
+async fn receive_zero_copy_payload<T>(
+    transport: &Arc<T>,
+    source_filter: &UUri,
+    timeout_ms: u64,
+) -> Result<Vec<u8>, UStatus>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+    T::Rx: UZeroCopyRxLease,
+{
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(UStatus::fail_with_code(
+                UCode::DeadlineExceeded,
+                "timed out waiting for zero-copy frame",
+            ));
+        }
+        match tokio::time::timeout(
+            remaining.min(Duration::from_millis(100)),
+            transport.receive_zero_copy(source_filter, None),
+        )
+        .await
+        {
+            Ok(Ok(frame)) => return Ok(frame.try_contiguous_payload().unwrap_or(&[]).to_vec()),
+            Ok(Err(error)) if error.get_code() == UCode::NotFound => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Ok(Err(error)) => return Err(error),
+            Err(_) => {}
+        }
+    }
 }

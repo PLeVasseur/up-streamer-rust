@@ -1,0 +1,98 @@
+{
+  "serviceTypes": [
+    {
+      "serviceTypeName": "/uprotocol/TransportR004D2NativeZcZ2L",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7367,
+          "events": [
+            {
+              "eventName": "frameNativeZcZ2L",
+              "eventId": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "serviceTypeName": "/uprotocol/TransportR004D2NativeZcL2Z",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7368,
+          "events": [
+            {
+              "eventName": "frameNativeZcL2Z",
+              "eventId": 1
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "serviceInstances": [
+    {
+      "instanceSpecifier": "uprotocol/transportNativeZcZ2L",
+      "serviceTypeName": "/uprotocol/TransportR004D2NativeZcZ2L",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 1,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "frameNativeZcZ2L",
+              "numberOfSampleSlots": 16,
+              "maxSubscribers": 8,
+              "numberOfIpcTracingSlots": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "uprotocol/transportNativeZcL2Z",
+      "serviceTypeName": "/uprotocol/TransportR004D2NativeZcL2Z",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 1,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "frameNativeZcL2Z",
+              "numberOfSampleSlots": 16,
+              "maxSubscribers": 8,
+              "numberOfIpcTracingSlots": 0
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "global": {
+    "asil-level": "QM",
+    "queue-size": {
+      "QM-receiver": 16,
+      "QM-sender": 16
+    },
+    "shm-size-calc-mode": "SIMULATION"
+  }
+}

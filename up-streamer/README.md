@@ -101,8 +101,9 @@ behavior instead of inferring it from the endpoint transport type.
 
 - `UTransport` routes are compatibility routes through `UMessage` listener/send
   APIs. They do not preserve selected-wire native frame metadata.
-- Owned-frame routes are owned/copying compatibility routes. If they project
-  through `UMessage`, they are not selected-wire preservation evidence.
+- Owned-frame routes are owned/copying compatibility routes. They forward
+  `UOwnedFrame` metadata and payload bytes directly to the egress owned
+  transport, but they still make no generic no-copy forwarding claim.
 - Copy-minimized routes are feature-gated one-copy routes. They borrow receive
   payload slices and copy those bytes into an egress transmit loan, avoiding an
   intermediate owned payload allocation but still copying payload bytes once.

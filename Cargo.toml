@@ -18,6 +18,7 @@ members = [
     "example-streamer-implementations",
     "utils/criterion-guardrail",
     "utils/configurable-streamer-wire-support",
+    "utils/streamer-transport-test-orchestrator",
     "utils/transport-smoke-suite",
     "configurable-streamer",
     "up-linux-streamer-plugin",

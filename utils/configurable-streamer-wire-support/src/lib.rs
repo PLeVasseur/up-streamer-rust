@@ -16,17 +16,29 @@ use std::{fmt, str::FromStr};
 #[cfg(any(
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",
-    feature = "lola-transport"
+    feature = "lola-transport",
+    feature = "zenoh-owned-frame",
+    feature = "iceoryx2-owned-frame",
+    feature = "lola-owned-frame"
 ))]
 use std::sync::Arc;
 
 #[cfg(any(
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",
+    feature = "lola-transport",
+    feature = "zenoh-owned-frame",
+    feature = "iceoryx2-owned-frame",
+    feature = "lola-owned-frame"
+))]
+use up_rust::selected_wire_user_api::{ProtobufWire, StableContainerWireFormat};
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
     feature = "lola-transport"
 ))]
 use up_rust::selected_wire_user_api::{
-    ProtobufWire, ProtobufWireTransport, UProtocolNativeWire, UProtocolNativeWireTransport,
+    ProtobufWireTransport, StableContainerWireTransport, UNativePrefixWireTransport,
 };
 #[cfg(any(
     feature = "zenoh-zero-copy",
@@ -40,6 +52,8 @@ use up_rust::{UCode, UStatus};
     feature = "lola-transport"
 )))]
 use up_rust::{UCode, UStatus};
+#[cfg(feature = "owned-frame-transport")]
+use up_streamer::OwnedFrameEndpoint;
 #[cfg(any(
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",
@@ -48,17 +62,31 @@ use up_rust::{UCode, UStatus};
 use up_streamer::ZeroCopyFrameEndpoint;
 use up_streamer::{CopyMinimizedRouteOptions, UStreamer};
 
+#[cfg(feature = "iceoryx2-owned-frame")]
+use up_transport_iceoryx2_rust::BenchmarkOwnedIceoryx2Core;
 #[cfg(feature = "iceoryx2-zero-copy")]
 use up_transport_iceoryx2_rust::Iceoryx2PubSub;
+#[cfg(feature = "lola-owned-frame")]
+use up_transport_lola_rust::LolaOwnedCore;
 #[cfg(feature = "lola-transport")]
 use up_transport_lola_rust::LolaZeroCopyCore;
+#[cfg(feature = "zenoh-owned-frame")]
+use up_transport_zenoh::ZenohOwnedCore;
 #[cfg(feature = "zenoh-zero-copy")]
 use up_transport_zenoh::ZenohZeroCopyCore;
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport",
+    feature = "owned-frame-transport"
+))]
+use up_wire_xcdrv2::XcdrV2Wire;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum RouteWireFormat {
     Native,
     Protobuf,
+    XcdrV2,
 }
 
 impl RouteWireFormat {
@@ -70,6 +98,7 @@ impl RouteWireFormat {
         match self {
             Self::Native => "up_native",
             Self::Protobuf => "protobuf",
+            Self::XcdrV2 => "xcdrv2",
         }
     }
 
@@ -86,6 +115,8 @@ impl FromStr for RouteWireFormat {
             "up_native" | "native" => Ok(Self::Native),
             // Native-prefix protobuf metadata codec, not XCDRv2 metadata.
             "protobuf" => Ok(Self::Protobuf),
+            // External XCDRv2 payload encoding carried with native-prefix metadata.
+            "xcdrv2" | "xcdr_v2" | "xcdr-v2" => Ok(Self::XcdrV2),
             other => Err(invalid_config(format!(
                 "unsupported route wire format: {other}"
             ))),
@@ -102,17 +133,41 @@ impl fmt::Display for RouteWireFormat {
 #[derive(Clone)]
 pub enum RouteWireEndpoint {
     #[cfg(feature = "zenoh-zero-copy")]
-    ZenohNative(ZeroCopyFrameEndpoint<UProtocolNativeWireTransport<ZenohZeroCopyCore>>),
+    ZenohNative(ZeroCopyFrameEndpoint<StableContainerWireTransport<ZenohZeroCopyCore>>),
     #[cfg(feature = "zenoh-zero-copy")]
     ZenohProtobuf(ZeroCopyFrameEndpoint<ProtobufWireTransport<ZenohZeroCopyCore>>),
+    #[cfg(feature = "zenoh-zero-copy")]
+    ZenohXcdrV2(ZeroCopyFrameEndpoint<UNativePrefixWireTransport<ZenohZeroCopyCore, XcdrV2Wire>>),
     #[cfg(feature = "iceoryx2-zero-copy")]
-    Iceoryx2Native(ZeroCopyFrameEndpoint<UProtocolNativeWireTransport<Iceoryx2PubSub>>),
+    Iceoryx2Native(ZeroCopyFrameEndpoint<StableContainerWireTransport<Iceoryx2PubSub>>),
     #[cfg(feature = "iceoryx2-zero-copy")]
     Iceoryx2Protobuf(ZeroCopyFrameEndpoint<ProtobufWireTransport<Iceoryx2PubSub>>),
+    #[cfg(feature = "iceoryx2-zero-copy")]
+    Iceoryx2XcdrV2(ZeroCopyFrameEndpoint<UNativePrefixWireTransport<Iceoryx2PubSub, XcdrV2Wire>>),
     #[cfg(feature = "lola-transport")]
-    LolaNative(ZeroCopyFrameEndpoint<UProtocolNativeWireTransport<LolaZeroCopyCore>>),
+    LolaNative(ZeroCopyFrameEndpoint<StableContainerWireTransport<LolaZeroCopyCore>>),
     #[cfg(feature = "lola-transport")]
     LolaProtobuf(ZeroCopyFrameEndpoint<ProtobufWireTransport<LolaZeroCopyCore>>),
+    #[cfg(feature = "lola-transport")]
+    LolaXcdrV2(ZeroCopyFrameEndpoint<UNativePrefixWireTransport<LolaZeroCopyCore, XcdrV2Wire>>),
+}
+
+#[cfg(feature = "owned-frame-transport")]
+#[derive(Clone)]
+pub struct RouteOwnedEndpoint {
+    endpoint: OwnedFrameEndpoint,
+    route_wire_format: RouteWireFormat,
+}
+
+#[cfg(feature = "owned-frame-transport")]
+impl RouteOwnedEndpoint {
+    pub fn endpoint(&self) -> &OwnedFrameEndpoint {
+        &self.endpoint
+    }
+
+    pub fn route_wire_format(&self) -> RouteWireFormat {
+        self.route_wire_format
+    }
 }
 
 impl RouteWireEndpoint {
@@ -123,14 +178,20 @@ impl RouteWireEndpoint {
             Self::ZenohNative(_) => RouteWireFormat::Native,
             #[cfg(feature = "zenoh-zero-copy")]
             Self::ZenohProtobuf(_) => RouteWireFormat::Protobuf,
+            #[cfg(feature = "zenoh-zero-copy")]
+            Self::ZenohXcdrV2(_) => RouteWireFormat::XcdrV2,
             #[cfg(feature = "iceoryx2-zero-copy")]
             Self::Iceoryx2Native(_) => RouteWireFormat::Native,
             #[cfg(feature = "iceoryx2-zero-copy")]
             Self::Iceoryx2Protobuf(_) => RouteWireFormat::Protobuf,
+            #[cfg(feature = "iceoryx2-zero-copy")]
+            Self::Iceoryx2XcdrV2(_) => RouteWireFormat::XcdrV2,
             #[cfg(feature = "lola-transport")]
             Self::LolaNative(_) => RouteWireFormat::Native,
             #[cfg(feature = "lola-transport")]
             Self::LolaProtobuf(_) => RouteWireFormat::Protobuf,
+            #[cfg(feature = "lola-transport")]
+            Self::LolaXcdrV2(_) => RouteWireFormat::XcdrV2,
             _ => unreachable!("no route wire endpoints are available without transport features"),
         }
     }
@@ -147,12 +208,17 @@ pub fn zenoh_endpoint(
         RouteWireFormat::Native => RouteWireEndpoint::ZenohNative(ZeroCopyFrameEndpoint::new(
             name,
             authority,
-            Arc::new(core.with_selected_wire(UProtocolNativeWire)),
+            Arc::new(core.with_selected_wire(StableContainerWireFormat)),
         )),
         RouteWireFormat::Protobuf => RouteWireEndpoint::ZenohProtobuf(ZeroCopyFrameEndpoint::new(
             name,
             authority,
             Arc::new(core.with_selected_wire(ProtobufWire)),
+        )),
+        RouteWireFormat::XcdrV2 => RouteWireEndpoint::ZenohXcdrV2(ZeroCopyFrameEndpoint::new(
+            name,
+            authority,
+            Arc::new(core.with_selected_wire(XcdrV2Wire)),
         )),
     }
 }
@@ -168,7 +234,7 @@ pub fn iceoryx2_endpoint(
         RouteWireFormat::Native => RouteWireEndpoint::Iceoryx2Native(ZeroCopyFrameEndpoint::new(
             name,
             authority,
-            Arc::new(core.with_selected_wire(UProtocolNativeWire)),
+            Arc::new(core.with_selected_wire(StableContainerWireFormat)),
         )),
         RouteWireFormat::Protobuf => {
             RouteWireEndpoint::Iceoryx2Protobuf(ZeroCopyFrameEndpoint::new(
@@ -177,6 +243,11 @@ pub fn iceoryx2_endpoint(
                 Arc::new(core.with_selected_wire(ProtobufWire)),
             ))
         }
+        RouteWireFormat::XcdrV2 => RouteWireEndpoint::Iceoryx2XcdrV2(ZeroCopyFrameEndpoint::new(
+            name,
+            authority,
+            Arc::new(core.with_selected_wire(XcdrV2Wire)),
+        )),
     }
 }
 
@@ -191,13 +262,72 @@ pub fn lola_endpoint(
         RouteWireFormat::Native => RouteWireEndpoint::LolaNative(ZeroCopyFrameEndpoint::new(
             name,
             authority,
-            Arc::new(core.with_selected_wire(UProtocolNativeWire)),
+            Arc::new(core.with_selected_wire(StableContainerWireFormat)),
         )),
         RouteWireFormat::Protobuf => RouteWireEndpoint::LolaProtobuf(ZeroCopyFrameEndpoint::new(
             name,
             authority,
             Arc::new(core.with_selected_wire(ProtobufWire)),
         )),
+        RouteWireFormat::XcdrV2 => RouteWireEndpoint::LolaXcdrV2(ZeroCopyFrameEndpoint::new(
+            name,
+            authority,
+            Arc::new(core.with_selected_wire(XcdrV2Wire)),
+        )),
+    }
+}
+
+#[cfg(feature = "zenoh-owned-frame")]
+pub fn zenoh_owned_endpoint(
+    name: &str,
+    authority: &str,
+    core: ZenohOwnedCore,
+    route_wire_format: RouteWireFormat,
+) -> RouteOwnedEndpoint {
+    let transport: Arc<dyn up_rust::UOwnedTransport> = match route_wire_format {
+        RouteWireFormat::Native => Arc::new(core.with_selected_wire(StableContainerWireFormat)),
+        RouteWireFormat::Protobuf => Arc::new(core.with_selected_wire(ProtobufWire)),
+        RouteWireFormat::XcdrV2 => Arc::new(core.with_selected_wire(XcdrV2Wire)),
+    };
+    RouteOwnedEndpoint {
+        endpoint: OwnedFrameEndpoint::from_owned(name, authority, transport),
+        route_wire_format,
+    }
+}
+
+#[cfg(feature = "iceoryx2-owned-frame")]
+pub fn iceoryx2_owned_endpoint(
+    name: &str,
+    authority: &str,
+    core: BenchmarkOwnedIceoryx2Core,
+    route_wire_format: RouteWireFormat,
+) -> RouteOwnedEndpoint {
+    let transport: Arc<dyn up_rust::UOwnedTransport> = match route_wire_format {
+        RouteWireFormat::Native => Arc::new(core.with_selected_wire(StableContainerWireFormat)),
+        RouteWireFormat::Protobuf => Arc::new(core.with_selected_wire(ProtobufWire)),
+        RouteWireFormat::XcdrV2 => Arc::new(core.with_selected_wire(XcdrV2Wire)),
+    };
+    RouteOwnedEndpoint {
+        endpoint: OwnedFrameEndpoint::from_owned(name, authority, transport),
+        route_wire_format,
+    }
+}
+
+#[cfg(feature = "lola-owned-frame")]
+pub fn lola_owned_endpoint(
+    name: &str,
+    authority: &str,
+    core: LolaOwnedCore,
+    route_wire_format: RouteWireFormat,
+) -> RouteOwnedEndpoint {
+    let transport: Arc<dyn up_rust::UOwnedTransport> = match route_wire_format {
+        RouteWireFormat::Native => Arc::new(core.with_selected_wire(StableContainerWireFormat)),
+        RouteWireFormat::Protobuf => Arc::new(core.with_selected_wire(ProtobufWire)),
+        RouteWireFormat::XcdrV2 => Arc::new(core.with_selected_wire(XcdrV2Wire)),
+    };
+    RouteOwnedEndpoint {
+        endpoint: OwnedFrameEndpoint::from_owned(name, authority, transport),
+        route_wire_format,
     }
 }
 
@@ -334,10 +464,81 @@ pub async fn add_route_wire_format(
                 .add_selected_wire_copy_minimized_route_ref_with_options(left, right, options)
                 .await
         }
+        #[cfg(feature = "zenoh-zero-copy")]
+        (RouteWireEndpoint::ZenohXcdrV2(left), RouteWireEndpoint::ZenohXcdrV2(right)) => {
+            streamer
+                .add_selected_wire_copy_minimized_route_ref_with_options(left, right, options)
+                .await
+        }
+        #[cfg(all(feature = "zenoh-zero-copy", feature = "iceoryx2-zero-copy"))]
+        (RouteWireEndpoint::ZenohXcdrV2(left), RouteWireEndpoint::Iceoryx2XcdrV2(right)) => {
+            streamer
+                .add_selected_wire_copy_minimized_route_ref_with_options(left, right, options)
+                .await
+        }
+        #[cfg(all(feature = "zenoh-zero-copy", feature = "lola-transport"))]
+        (RouteWireEndpoint::ZenohXcdrV2(left), RouteWireEndpoint::LolaXcdrV2(right)) => {
+            streamer
+                .add_selected_wire_copy_minimized_route_ref_with_options(left, right, options)
+                .await
+        }
+        #[cfg(all(feature = "iceoryx2-zero-copy", feature = "zenoh-zero-copy"))]
+        (RouteWireEndpoint::Iceoryx2XcdrV2(left), RouteWireEndpoint::ZenohXcdrV2(right)) => {
+            streamer
+                .add_selected_wire_copy_minimized_route_ref_with_options(left, right, options)
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        (RouteWireEndpoint::Iceoryx2XcdrV2(left), RouteWireEndpoint::Iceoryx2XcdrV2(right)) => {
+            streamer
+                .add_selected_wire_copy_minimized_route_ref_with_options(left, right, options)
+                .await
+        }
+        #[cfg(all(feature = "iceoryx2-zero-copy", feature = "lola-transport"))]
+        (RouteWireEndpoint::Iceoryx2XcdrV2(left), RouteWireEndpoint::LolaXcdrV2(right)) => {
+            streamer
+                .add_selected_wire_copy_minimized_route_ref_with_options(left, right, options)
+                .await
+        }
+        #[cfg(all(feature = "lola-transport", feature = "zenoh-zero-copy"))]
+        (RouteWireEndpoint::LolaXcdrV2(left), RouteWireEndpoint::ZenohXcdrV2(right)) => {
+            streamer
+                .add_selected_wire_copy_minimized_route_ref_with_options(left, right, options)
+                .await
+        }
+        #[cfg(all(feature = "lola-transport", feature = "iceoryx2-zero-copy"))]
+        (RouteWireEndpoint::LolaXcdrV2(left), RouteWireEndpoint::Iceoryx2XcdrV2(right)) => {
+            streamer
+                .add_selected_wire_copy_minimized_route_ref_with_options(left, right, options)
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        (RouteWireEndpoint::LolaXcdrV2(left), RouteWireEndpoint::LolaXcdrV2(right)) => {
+            streamer
+                .add_selected_wire_copy_minimized_route_ref_with_options(left, right, options)
+                .await
+        }
         _ => Err(invalid_config(
             "copy_minimized route uses an unsupported route endpoint combination",
         )),
     }
+}
+
+#[cfg(feature = "owned-frame-transport")]
+pub async fn add_owned_route_wire_format(
+    streamer: &mut UStreamer,
+    ingress: &RouteOwnedEndpoint,
+    egress: &RouteOwnedEndpoint,
+    route_wire_format: RouteWireFormat,
+) -> Result<(), UStatus> {
+    validate_route_wire_formats(
+        ingress.route_wire_format(),
+        egress.route_wire_format(),
+        route_wire_format,
+    )?;
+    streamer
+        .add_owned_route_ref(ingress.endpoint(), egress.endpoint())
+        .await
 }
 
 pub fn validate_route_wire_formats(
@@ -395,7 +596,7 @@ mod tests {
     fn route_wire_format_parse_smoke_bound_is_tiny_for_config_reification() {
         let start = std::time::Instant::now();
         let mut parsed = 0_usize;
-        for value in ["up_native", "native", "protobuf"]
+        for value in ["up_native", "native", "protobuf", "xcdrv2"]
             .into_iter()
             .cycle()
             .take(10_000)

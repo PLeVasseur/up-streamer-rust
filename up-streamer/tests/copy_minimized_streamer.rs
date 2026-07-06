@@ -177,6 +177,13 @@ fn subscription(topic: &str, subscriber: &str) -> SubscriptionInfo {
     )
 }
 
+fn seeded_publish_subscription() -> Arc<dyn USubscription> {
+    Arc::new(StaticSubscription::new(vec![subscription(
+        "//authority-a/5BA0/1/8001",
+        "//authority-b/5678/1/1234",
+    )]))
+}
+
 fn payload_frame(payload: &'static [u8]) -> UVecRxLease {
     let message = UMessageBuilder::publish(
         UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8001).expect("topic"),
@@ -320,6 +327,7 @@ struct InstrumentedTransportState {
 #[derive(Default)]
 struct SelectedWireCoreState {
     listeners: Vec<Arc<dyn UEncodedZeroCopyListener<EncodedRxLease>>>,
+    registered_filters: Vec<(UUri, Option<UUri>)>,
     sent_payloads: Vec<Vec<u8>>,
     sent_metadata: Vec<UFrameMetadata>,
     loan_specs: Vec<(usize, usize)>,
@@ -582,6 +590,14 @@ impl SelectedWireCore {
             .loan_specs
             .clone()
     }
+
+    fn registered_filters(&self) -> Vec<(UUri, Option<UUri>)> {
+        self.state
+            .lock()
+            .expect("selected-wire core state lock poisoned")
+            .registered_filters
+            .clone()
+    }
 }
 
 #[async_trait]
@@ -640,15 +656,18 @@ impl UZeroCopyTransportCore for SelectedWireCore {
 
     async fn register_encoded_zero_copy_listener(
         &self,
-        _source_filter: &UUri,
-        _sink_filter: Option<&UUri>,
+        source_filter: &UUri,
+        sink_filter: Option<&UUri>,
         listener: Arc<dyn UEncodedZeroCopyListener<Self::Rx>>,
     ) -> Result<(), UStatus> {
-        self.state
+        let mut state = self
+            .state
             .lock()
-            .expect("selected-wire core state lock poisoned")
-            .listeners
-            .push(listener);
+            .expect("selected-wire core state lock poisoned");
+        state
+            .registered_filters
+            .push((source_filter.clone(), sink_filter.cloned()));
+        state.listeners.push(listener);
         Ok(())
     }
 
@@ -748,6 +767,10 @@ unsafe impl ByteBackedStablePayload for StableBytes {}
 
 fn stable_uri_provider(authority: &str) -> Arc<StaticUriProvider> {
     Arc::new(StaticUriProvider::new(authority, 0x5BA0, 0x01).expect("uri provider"))
+}
+
+fn authority_wildcard_filter(authority: &str) -> UUri {
+    UUri::try_from_parts(authority, 0xFFFF_FFFF, 0xFF, 0xFFFF).expect("authority wildcard filter")
 }
 
 fn instrumented_payload_frame(
@@ -1122,7 +1145,7 @@ async fn selected_wire_copy_minimized_route_accepts_same_static_wire() {
     let egress = Arc::new(egress_core.clone().into_protobuf_transport());
     let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress);
     let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
-    let mut streamer = UStreamer::new("selected-wire-route", 4, Arc::new(EmptySubscription))
+    let mut streamer = UStreamer::new("selected-wire-route", 4, seeded_publish_subscription())
         .await
         .expect("streamer");
 
@@ -1136,6 +1159,18 @@ async fn selected_wire_copy_minimized_route_accepts_same_static_wire() {
         )
         .await
         .expect("selected-wire route add");
+    let registered_filters = ingress_core.registered_filters();
+    assert!(
+        registered_filters.contains(&(
+            authority_wildcard_filter("*"),
+            Some(authority_wildcard_filter("authority-b")),
+        )),
+        "selected-wire registration must preserve sink-bearing route filters"
+    );
+    assert!(
+        registered_filters.iter().any(|(_, sink)| sink.is_none()),
+        "publish subscription should add a source-only listener filter"
+    );
 
     ingress_core
         .inject_encoded(selected_wire_payload_frame::<ProtobufWire>(&[
@@ -1167,7 +1202,7 @@ async fn zero_copy_l2_stable_publish_routes_through_streamer() {
     let mut streamer = UStreamer::new(
         "zero-copy-l2-stable-publish",
         4,
-        Arc::new(EmptySubscription),
+        seeded_publish_subscription(),
     )
     .await
     .expect("streamer");
@@ -1216,7 +1251,7 @@ async fn zero_copy_l2_stable_publish_routes_across_heterogeneous_selected_wire_c
     let mut streamer = UStreamer::new(
         "zero-copy-l2-cross-transport",
         4,
-        Arc::new(EmptySubscription),
+        seeded_publish_subscription(),
     )
     .await
     .expect("streamer");

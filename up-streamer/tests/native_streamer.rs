@@ -10,9 +10,9 @@ use up_rust::communication::{
 };
 use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
 use up_rust::{
-    try_project_umessage_to_frame_metadata, LocalUriProvider, StaticUriProvider, UAttributes,
-    UCode, UListener, UMessage, UMessageBuilder, UOwnedFrame, UOwnedListener, UOwnedTransportImpl,
-    UPayloadFormat, UStatus, UUri, ValidatedOwnedFrame,
+    try_project_umessage_to_frame_metadata, LocalUriProvider, PayloadEncoding, StaticUriProvider,
+    UAttributes, UCode, UFrameMetadata, UListener, UMessage, UMessageBuilder, UOwnedFrame,
+    UOwnedListener, UOwnedTransportImpl, UPayloadFormat, UStatus, UUri, ValidatedOwnedFrame,
 };
 use up_streamer::{OwnedFrameEndpoint, RouteCopySemantics, RouteKind, UStreamer};
 
@@ -389,6 +389,26 @@ fn owned_payload_frame() -> UOwnedFrame {
     UOwnedFrame::new(metadata, message.payload()).expect("owned frame")
 }
 
+fn custom_payload_frame() -> UOwnedFrame {
+    let message = UMessageBuilder::publish(
+        UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8002).expect("topic"),
+    )
+    .build()
+    .expect("message");
+    let metadata = UFrameMetadata::new(
+        message.attributes().clone(),
+        Some(
+            PayloadEncoding::custom(
+                "up.xcdr-v2",
+                "application/vnd.uprotocol.xcdr-v2;type=\"VehicleSignalV1\"",
+            )
+            .expect("custom encoding"),
+        ),
+    )
+    .expect("metadata");
+    UOwnedFrame::with_payload(metadata, Bytes::from_static(b"xcdrv2-fixture")).expect("owned frame")
+}
+
 #[tokio::test]
 async fn owned_route_forwards_standard_payload_as_owned_frame() {
     let ingress = Arc::new(RecordingOwnedTransport::default());
@@ -421,6 +441,33 @@ async fn owned_route_forwards_standard_payload_as_owned_frame() {
     );
 
     let frame = owned_payload_frame();
+    ingress
+        .first_listener()
+        .on_receive_owned(frame.clone())
+        .await;
+    egress.wait_for_sent_count(1).await;
+
+    let sent = egress.sent_frames();
+    assert_eq!(sent, vec![frame]);
+}
+
+#[tokio::test]
+async fn owned_route_preserves_custom_payload_encoding_metadata() {
+    let ingress = Arc::new(RecordingOwnedTransport::default());
+    let egress = Arc::new(RecordingOwnedTransport::default());
+    let ingress_endpoint =
+        OwnedFrameEndpoint::from_owned("ingress", "authority-a", ingress.clone());
+    let egress_endpoint = OwnedFrameEndpoint::from_owned("egress", "authority-b", egress.clone());
+    let mut streamer = UStreamer::new("owned-route-custom", 4, Arc::new(EmptySubscription))
+        .await
+        .expect("streamer");
+
+    streamer
+        .add_owned_route_ref(&ingress_endpoint, &egress_endpoint)
+        .await
+        .expect("owned route add");
+
+    let frame = custom_payload_frame();
     ingress
         .first_listener()
         .on_receive_owned(frame.clone())

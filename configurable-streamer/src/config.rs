@@ -96,6 +96,7 @@ pub struct LolaTransport {
 pub enum RoutingMode {
     #[default]
     Owned,
+    OwnedFrame,
     CopyMinimized,
 }
 
@@ -119,6 +120,14 @@ pub struct EndpointConfig {
     #[serde(default)]
     pub(crate) lola_event_name: Option<String>,
     #[serde(default)]
+    pub(crate) lola_response_instance_specifier: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_response_service_type: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_response_event_name: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_default_rx_channel: Option<String>,
+    #[serde(default)]
     pub(crate) lola_sample_size: Option<usize>,
     #[serde(default)]
     pub(crate) lola_sample_alignment: Option<usize>,
@@ -126,6 +135,8 @@ pub struct EndpointConfig {
     pub(crate) lola_max_samples: Option<usize>,
     #[serde(default)]
     pub(crate) lola_mw_com_config_file: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_response_mw_com_config_file: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -194,6 +205,41 @@ mod tests {
         assert_eq!(
             endpoint.forwarding_routes[0].wire_format.as_deref(),
             Some("protobuf")
+        );
+    }
+
+    #[test]
+    fn endpoint_accepts_owned_frame_routing_mode() {
+        let config: Config = json5::from_str(
+            r#"{
+                up_streamer_config: { message_queue_size: 4 },
+                streamer_uuri: { authority: "authority-streamer", ue_id: 1, ue_version_major: 1 },
+                usubscription_config: { mode: "static_file", file_path: "subscriptions.json" },
+                transports: {
+                    zenoh: {
+                        config_file: "ZENOH_CONFIG.json5",
+                        endpoints: [{
+                            authority: "authority-a",
+                            endpoint: "zenoh-owned",
+                            routing_mode: "owned_frame",
+                            forwarding_routes: [{ endpoint: "iceoryx2-owned", wire_format: "xcdrv2" }],
+                        }],
+                    },
+                    mqtt: { config_file: "MQTT_CONFIG.json5", endpoints: [] },
+                },
+            }"#,
+        )
+        .expect("config parses");
+
+        assert_eq!(
+            config.transports.zenoh.endpoints[0].routing_mode,
+            RoutingMode::OwnedFrame
+        );
+        assert_eq!(
+            config.transports.zenoh.endpoints[0].forwarding_routes[0]
+                .wire_format
+                .as_deref(),
+            Some("xcdrv2")
         );
     }
 

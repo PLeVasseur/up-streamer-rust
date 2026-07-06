@@ -63,6 +63,19 @@ The configurable streamer can expose copy-minimized routes when it is built with
 - `CONFIG_ZEROCOPY_MISMATCH_NEGATIVE_EXAMPLE.json5` documents the expected startup failure for an unsupported wire format declaration.
 - `MW_COM_CONFIG_LOLA.json` is the LoLa MW COM service/event fixture used by the LoLa examples.
 
+LoLa-backed examples use checked-in S-CORE MW COM deployment manifests such as
+`MW_COM_CONFIG_LOLA.json`. The streamer passes these paths explicitly through
+`lola_mw_com_config_file`, so no copy into `./etc/mw_com_config.json` is needed
+for these examples. A native LoLa process can initialize S-CORE with only one MW
+COM manifest, so every LoLa endpoint in a single configurable-streamer process
+must reference the same resolved manifest path. Use one complete manifest that
+contains all LoLa services/events needed by that example.
+
+On Linux, S-CORE LoLa writes runtime service-discovery and partial-restart state
+under `/tmp/mw_com_lola`. This is LoLa runtime state, not streamer config.
+Repeated local runs after crashes may require cleaning that directory, but only
+after all LoLa-backed streamer and role processes have stopped.
+
 Each copy-minimized endpoint sets `routing_mode: "copy_minimized"`. Copy-minimized forwarding uses `forwarding_routes` entries instead of the legacy `forwarding` string array so each configured route can declare the selected wire format explicitly:
 
 ```json5

@@ -1,0 +1,50 @@
+{
+  up_streamer_config: {
+    message_queue_size: 32,
+  },
+  streamer_uuri: {
+    authority: "authority-streamer",
+    ue_id: 78,
+    ue_version_major: 1,
+  },
+  usubscription_config: {
+    mode: "static_file",
+    file_path: "subscription_data.json",
+  },
+  transports: {
+    zenoh: {
+      config_file: "ZENOH_CONFIG.json5",
+      endpoints: [
+        {
+          authority: "authority-a",
+          endpoint: "zenoh-owned",
+          routing_mode: "owned_frame",
+          forwarding_routes: [
+            { endpoint: "lola-owned", wire_format: "up_native" },
+          ],
+        },
+      ],
+    },
+    mqtt: {
+      config_file: "MQTT_CONFIG.json5",
+      endpoints: [],
+    },
+    lola: {
+      endpoints: [
+        {
+          authority: "authority-b",
+          endpoint: "lola-owned",
+          routing_mode: "owned_frame",
+          lola_instance_specifier: "uprotocol/transportNativeZ2L",
+          lola_service_type: "/uprotocol/TransportR004D2NativeZ2L",
+          lola_event_name: "frameNativeZ2L",
+          lola_sample_size: 65536,
+          lola_sample_alignment: 8,
+          lola_max_samples: 16,
+          lola_mw_com_config_file: "MW_COM_CONFIG_LOLA_NATIVE_Z2L.json",
+          forwarding_routes: [],
+        },
+      ],
+    },
+  },
+}

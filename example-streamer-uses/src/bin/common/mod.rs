@@ -1,4 +1,6 @@
 pub(crate) mod cli;
+#[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
+pub(crate) mod payloads;
 
 use async_trait::async_trait;
 use hello_world_protos::{

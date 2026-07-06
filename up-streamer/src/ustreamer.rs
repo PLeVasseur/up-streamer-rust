@@ -49,12 +49,9 @@ use tracing::{debug, error, warn};
 use up_rust::core::usubscription::{SubscriptionInfo, USubscription};
 #[cfg(feature = "experimental-copy-minimized-routing")]
 use up_rust::selected_wire_user_api::USelectedWireZeroCopyTransport;
-#[cfg(feature = "owned-frame-transport")]
-use up_rust::{
-    try_project_frame_to_umessage, try_project_umessage_to_frame_metadata, UOwnedFrame,
-    UOwnedListener,
-};
 use up_rust::{UCode, UStatus, UUri};
+#[cfg(feature = "owned-frame-transport")]
+use up_rust::{UOwnedFrame, UOwnedListener};
 #[cfg(feature = "experimental-copy-minimized-routing")]
 use up_rust::{UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport};
 
@@ -665,27 +662,6 @@ impl UStreamer {
         mut rx: mpsc::Receiver<UOwnedFrame>,
     ) {
         while let Some(frame) = rx.recv().await {
-            let frame = match try_project_frame_to_umessage(
-                frame.metadata().clone(),
-                frame.payload().cloned(),
-            )
-            .and_then(|message| {
-                let metadata = try_project_umessage_to_frame_metadata(&message)?;
-                UOwnedFrame::new(metadata, message.payload())
-            }) {
-                Ok(frame) => frame,
-                Err(error) => {
-                    warn!(
-                        event = "owned_route_frame_projection_failed",
-                        component = COMPONENT,
-                        route_label = route_label.as_str(),
-                        err = %error,
-                        "dropping owned frame that cannot round-trip through UMessage compatibility"
-                    );
-                    continue;
-                }
-            };
-
             if let Err(error) = egress.transport.send_owned(frame).await {
                 warn!(
                     event = "owned_route_egress_send_failed",
@@ -1049,11 +1025,7 @@ impl UStreamer {
 
         let filters = self
             .copy_minimized_route_filters(&ingress.authority, &egress.authority)
-            .await
-            .into_iter()
-            // The selected-wire adapter re-filters decoded metadata; publish frames do not carry a sink URI.
-            .map(|(source_filter, _sink_filter)| (source_filter, None))
-            .collect::<Vec<_>>();
+            .await;
         let binding = CopyMinimizedRouteBinding::new(
             ingress,
             egress,
