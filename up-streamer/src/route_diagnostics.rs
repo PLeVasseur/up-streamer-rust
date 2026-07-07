@@ -167,4 +167,27 @@ impl RouteDiagnostic {
             copy_semantics: route_kind.copy_semantics(),
         }
     }
+
+    #[cfg(all(
+        feature = "owned-frame-transport",
+        feature = "experimental-copy-minimized-routing"
+    ))]
+    pub(crate) fn adapter_backed(
+        ingress_name: &str,
+        ingress_authority: &str,
+        egress_name: &str,
+        egress_authority: &str,
+    ) -> Self {
+        let route_kind = RouteKind::AdapterBacked;
+        Self {
+            route: DataPlaneRoute::from_parts(
+                ingress_name,
+                ingress_authority,
+                egress_name,
+                egress_authority,
+            ),
+            route_kind,
+            copy_semantics: route_kind.copy_semantics(),
+        }
+    }
 }

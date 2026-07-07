@@ -61,6 +61,9 @@ struct Args {
     /// The endpoint for Zenoh client to connect to
     #[arg(short, long, default_value = DEFAULT_ENDPOINT)]
     endpoint: String,
+    /// Optional Zenoh JSON5 configuration file. When set, this overrides --endpoint.
+    #[arg(long)]
+    zenoh_config: Option<String>,
     /// Authority for the local subscriber identity
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
@@ -124,20 +127,7 @@ async fn main() -> Result<(), UStatus> {
 
     info!("Started zenoh_subscriber");
 
-    let mut zenoh_config = Config::default();
-
-    if !args.endpoint.is_empty() {
-        // Specify the address to listen on using IPv4
-        let ipv4_endpoint =
-            EndPoint::from_str(args.endpoint.as_str()).expect("Unable to set endpoint");
-
-        // Add the IPv4 endpoint to the Zenoh configuration
-        zenoh_config
-            .connect
-            .endpoints
-            .set(vec![ipv4_endpoint])
-            .expect("Unable to set Zenoh Config");
-    }
+    let zenoh_config = zenoh_config_from_args(&args)?;
 
     let subscriber_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
     let subscriber: Arc<dyn UTransport> = Arc::new(
@@ -182,7 +172,7 @@ async fn run_selected_wire_subscriber(
         source_uversion,
         source_resource,
     )?;
-    let zenoh_config = zenoh_config_from_endpoint(&args.endpoint);
+    let zenoh_config = zenoh_config_from_args(args)?;
 
     let payload = match (route_family, args.encoding) {
         (RouteFamily::OwnedFrame, Encoding::Native) => {
@@ -259,6 +249,19 @@ fn zenoh_config_from_endpoint(endpoint: &str) -> Config {
             .expect("Unable to set Zenoh Config");
     }
     zenoh_config
+}
+
+fn zenoh_config_from_args(args: &Args) -> Result<Config, UStatus> {
+    if let Some(path) = &args.zenoh_config {
+        return Config::from_file(path).map_err(|error| {
+            invalid_config(format!("failed to load Zenoh config {path}: {error:?}"))
+        });
+    }
+    Ok(zenoh_config_from_endpoint(&args.endpoint))
+}
+
+fn invalid_config(message: impl Into<String>) -> UStatus {
+    UStatus::fail_with_code(UCode::InvalidArgument, message.into())
 }
 
 async fn receive_owned_payload(

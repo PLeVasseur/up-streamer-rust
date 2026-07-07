@@ -541,6 +541,193 @@ pub async fn add_owned_route_wire_format(
         .await
 }
 
+#[cfg(feature = "owned-frame-transport")]
+pub async fn add_owned_to_copy_minimized_route_wire_format(
+    streamer: &mut UStreamer,
+    ingress: &RouteOwnedEndpoint,
+    egress: &RouteWireEndpoint,
+    route_wire_format: RouteWireFormat,
+    options: CopyMinimizedRouteOptions,
+) -> Result<(), UStatus> {
+    validate_route_wire_formats(
+        ingress.route_wire_format(),
+        egress.route_wire_format(),
+        route_wire_format,
+    )?;
+
+    #[allow(unreachable_patterns)]
+    match egress {
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohNative(right) => {
+            streamer
+                .add_owned_to_copy_minimized_route_ref_with_options(
+                    ingress.endpoint(),
+                    right,
+                    options,
+                )
+                .await
+        }
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohProtobuf(right) => {
+            streamer
+                .add_owned_to_copy_minimized_route_ref_with_options(
+                    ingress.endpoint(),
+                    right,
+                    options,
+                )
+                .await
+        }
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohXcdrV2(right) => {
+            streamer
+                .add_owned_to_copy_minimized_route_ref_with_options(
+                    ingress.endpoint(),
+                    right,
+                    options,
+                )
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2Native(right) => {
+            streamer
+                .add_owned_to_copy_minimized_route_ref_with_options(
+                    ingress.endpoint(),
+                    right,
+                    options,
+                )
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2Protobuf(right) => {
+            streamer
+                .add_owned_to_copy_minimized_route_ref_with_options(
+                    ingress.endpoint(),
+                    right,
+                    options,
+                )
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2XcdrV2(right) => {
+            streamer
+                .add_owned_to_copy_minimized_route_ref_with_options(
+                    ingress.endpoint(),
+                    right,
+                    options,
+                )
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaNative(right) => {
+            streamer
+                .add_owned_to_copy_minimized_route_ref_with_options(
+                    ingress.endpoint(),
+                    right,
+                    options,
+                )
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaProtobuf(right) => {
+            streamer
+                .add_owned_to_copy_minimized_route_ref_with_options(
+                    ingress.endpoint(),
+                    right,
+                    options,
+                )
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaXcdrV2(right) => {
+            streamer
+                .add_owned_to_copy_minimized_route_ref_with_options(
+                    ingress.endpoint(),
+                    right,
+                    options,
+                )
+                .await
+        }
+        _ => Err(invalid_config(
+            "owned-frame to copy_minimized route uses an unsupported route endpoint combination",
+        )),
+    }
+}
+
+#[cfg(feature = "owned-frame-transport")]
+pub async fn add_copy_minimized_to_owned_route_wire_format(
+    streamer: &mut UStreamer,
+    ingress: &RouteWireEndpoint,
+    egress: &RouteOwnedEndpoint,
+    route_wire_format: RouteWireFormat,
+) -> Result<(), UStatus> {
+    validate_route_wire_formats(
+        ingress.route_wire_format(),
+        egress.route_wire_format(),
+        route_wire_format,
+    )?;
+
+    #[allow(unreachable_patterns)]
+    match ingress {
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohNative(left) => {
+            streamer
+                .add_copy_minimized_to_owned_route_ref(left, egress.endpoint())
+                .await
+        }
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohProtobuf(left) => {
+            streamer
+                .add_copy_minimized_to_owned_route_ref(left, egress.endpoint())
+                .await
+        }
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohXcdrV2(left) => {
+            streamer
+                .add_copy_minimized_to_owned_route_ref(left, egress.endpoint())
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2Native(left) => {
+            streamer
+                .add_copy_minimized_to_owned_route_ref(left, egress.endpoint())
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2Protobuf(left) => {
+            streamer
+                .add_copy_minimized_to_owned_route_ref(left, egress.endpoint())
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2XcdrV2(left) => {
+            streamer
+                .add_copy_minimized_to_owned_route_ref(left, egress.endpoint())
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaNative(left) => {
+            streamer
+                .add_copy_minimized_to_owned_route_ref(left, egress.endpoint())
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaProtobuf(left) => {
+            streamer
+                .add_copy_minimized_to_owned_route_ref(left, egress.endpoint())
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaXcdrV2(left) => {
+            streamer
+                .add_copy_minimized_to_owned_route_ref(left, egress.endpoint())
+                .await
+        }
+        _ => Err(invalid_config(
+            "copy_minimized to owned-frame route uses an unsupported route endpoint combination",
+        )),
+    }
+}
+
 pub fn validate_route_wire_formats(
     ingress: RouteWireFormat,
     egress: RouteWireFormat,

@@ -970,19 +970,22 @@ fn response_metadata(
     cli: &Cli,
     request_metadata: &UFrameMetadata,
 ) -> Result<UFrameMetadata, UStatus> {
-    let request_attributes = request_metadata
-        .try_project_to_attributes()
-        .map_err(|error| {
-            invalid_config(format!("failed to project request metadata: {error:?}"))
-        })?;
-    frame_metadata(
-        cli,
-        UMessageBuilder::response_for_request(&request_attributes)
-            .build()
-            .map_err(|error| {
-                invalid_config(format!("failed to build response metadata: {error:?}"))
-            })?,
-    )
+    let source = request_metadata
+        .sink()
+        .cloned()
+        .ok_or_else(|| invalid_config("request metadata missing sink"))?;
+    let sink = request_metadata.source().clone();
+    let mut builder = UFrameMetadata::response(source, sink, request_metadata.id().clone())
+        .with_payload_encoding(payload_encoding(cli.wire_format));
+    if let Some(priority) = request_metadata.priority() {
+        builder = builder.with_priority(priority);
+    }
+    if let Some(ttl) = request_metadata.ttl() {
+        builder = builder.with_ttl(ttl);
+    }
+    builder
+        .build()
+        .map_err(|error| invalid_config(format!("failed to build response metadata: {error:?}")))
 }
 
 fn frame_metadata(cli: &Cli, message: UMessage) -> Result<UFrameMetadata, UStatus> {

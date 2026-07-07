@@ -32,6 +32,16 @@ const METHOD_RESOURCE_ID: u16 = 0x1000;
 const ZENOH_ENDPOINT: &str = "tcp/127.0.0.1:7447";
 const READY_STREAMER: &str = "READY streamer_initialized";
 const READY_LISTENER: &str = "READY listener_registered";
+const LOLA_MAX_SAMPLES: usize = 16;
+const LOLA_SAMPLE_SLOTS: usize = 128;
+const LOLA_QUEUE_SIZE: usize = 128;
+const LOLA_MAX_SUBSCRIBERS: usize = 8;
+const LOLA_LISTENER_STABILIZATION_MS: u64 = 500;
+const LOLA_ROW_COOLDOWN_MS: u64 = 0;
+const LOLA_ROW_RETRIES: usize = 1;
+const ICEORYX2_ROOT_PATH: &str = "/tmp/up-streamer-iceoryx2";
+const NAMESPACE_TMP_SIZE: &str = "1g";
+const NAMESPACE_SHM_SIZE: &str = "2g";
 
 #[derive(Debug, Parser)]
 #[command(name = "streamer-transport-test-orchestrator")]
@@ -142,6 +152,12 @@ struct RunningProcess {
     name: String,
     log_path: PathBuf,
     child: Child,
+}
+
+impl Drop for RunningProcess {
+    fn drop(&mut self) {
+        terminate(self);
+    }
 }
 
 #[derive(Serialize)]
@@ -401,15 +417,6 @@ fn support_status(row: &MatrixRow) -> SupportStatus {
         }
         return unsupported("classic endpoint rows are visible but are not executed by this selected-wire matrix harness yet; keep using the existing classic examples/smoke coverage until a classic matrix runner is added here");
     }
-    if row.source.kind != row.sink.kind {
-        return blocked("mixed selected-wire route families are blocked by current configurable-streamer route wiring: owned-frame endpoints can route to owned-frame endpoints and copy-minimized endpoints can route to copy-minimized endpoints, but owned-frame <-> copy-minimized conversion routes are not implemented");
-    }
-    if row.role == RoleStyle::ClientServerRpc
-        && row.source.physical == PhysicalTransport::Zenoh
-        && row.sink.physical == PhysicalTransport::Lola
-    {
-        return blocked("Zenoh selected-wire client -> LoLa selected-wire server RPC is blocked by the current response return path: the LoLa server observes the request payload, but the response does not return to the Zenoh client through configurable-streamer");
-    }
     if !row.source.kind.is_selected_wire() || !row.sink.kind.is_selected_wire() {
         return unsupported("row does not resolve to selected-wire endpoint profiles");
     }
@@ -422,13 +429,6 @@ fn support_status(row: &MatrixRow) -> SupportStatus {
 fn unsupported(reason: &str) -> SupportStatus {
     SupportStatus {
         classification: RowClassification::Unsupported,
-        reason: reason.to_string(),
-    }
-}
-
-fn blocked(reason: &str) -> SupportStatus {
-    SupportStatus {
-        classification: RowClassification::Blocked,
         reason: reason.to_string(),
     }
 }
@@ -455,14 +455,48 @@ fn run_row(
     row: &MatrixRow,
     cli: &Cli,
 ) -> Result<RowResult> {
-    let row_dir = artifacts_root.join(&row.id);
+    let max_attempts = if row.uses_lola() {
+        LOLA_ROW_RETRIES + 1
+    } else {
+        1
+    };
+    let mut last_result = None;
+    for attempt in 0..max_attempts {
+        let mut result = run_row_attempt(repo_root, artifacts_root, row, cli, attempt)?;
+        if result.classification != RowClassification::Failed {
+            if attempt > 0 {
+                result.reason = format!("{} after retry {attempt}", result.reason);
+            }
+            return Ok(result);
+        }
+        last_result = Some(result);
+        if attempt + 1 < max_attempts {
+            thread::sleep(Duration::from_millis(LOLA_ROW_COOLDOWN_MS));
+        }
+    }
+    Ok(last_result.expect("at least one row attempt ran"))
+}
+
+fn run_row_attempt(
+    repo_root: &Path,
+    artifacts_root: &Path,
+    row: &MatrixRow,
+    cli: &Cli,
+    attempt: usize,
+) -> Result<RowResult> {
+    let row_dir = if attempt == 0 {
+        artifacts_root.join(&row.id)
+    } else {
+        artifacts_root.join(format!("{}-retry{attempt}", row.id))
+    };
     fs::create_dir_all(&row_dir)
         .with_context(|| format!("unable to create {}", row_dir.display()))?;
     let mut logs = BTreeMap::new();
+    let lola_run_namespace = lola_run_namespace(&row_dir, row);
 
     let lola_manifest_path = if row.uses_lola() {
         let path = row_dir.join("mw_com_config_lola.json");
-        write_lola_manifest(row, &path)?;
+        write_lola_manifest(row, &path, &lola_run_namespace)?;
         Some(path)
     } else {
         None
@@ -485,9 +519,30 @@ fn run_row(
         }
         Err(_) => None,
     };
+    let iceoryx2_root = if row.uses_iceoryx2() {
+        Some(PathBuf::from(ICEORYX2_ROOT_PATH))
+    } else {
+        None
+    };
+    let process_env = row_env(
+        row,
+        iceoryx2_root.as_deref(),
+        lola_bridge_lib_dir.as_deref(),
+    );
+    let mut namespace = start_namespace_holder(&row_dir)?;
+    logs.insert(
+        "namespace_holder".to_string(),
+        namespace.log_path.display().to_string(),
+    );
 
     let config_path = row_dir.join("configurable-streamer.json");
-    write_config(repo_root, row, &config_path, lola_manifest_path.as_deref())?;
+    write_config(
+        repo_root,
+        row,
+        &config_path,
+        lola_manifest_path.as_deref(),
+        &lola_run_namespace,
+    )?;
     let zenoh_client_config_path = row_dir.join("zenoh-client.json5");
     write_zenoh_client_config(&zenoh_client_config_path)?;
 
@@ -496,8 +551,9 @@ fn run_row(
         &target_debug_binary(repo_root, "configurable-streamer"),
         &["--config".to_string(), config_path.display().to_string()],
         &repo_root.join("configurable-streamer"),
-        &row_env(row, lola_bridge_lib_dir.as_deref()),
+        &process_env,
         &row_dir,
+        Some(&namespace),
     )?;
     logs.insert(
         "streamer".to_string(),
@@ -513,6 +569,7 @@ fn run_row(
             false,
             &zenoh_client_config_path,
             lola_manifest_path.as_deref(),
+            &lola_run_namespace,
             cli,
         )?;
         let mut passive = spawn_process(
@@ -520,20 +577,25 @@ fn run_row(
             &target_debug_binary(repo_root, &passive_spec.binary),
             &passive_spec.args,
             repo_root,
-            &row_env(row, lola_bridge_lib_dir.as_deref()),
+            &process_env,
             &row_dir,
+            Some(&namespace),
         )?;
         logs.insert(
             "passive".to_string(),
             passive.log_path.display().to_string(),
         );
         wait_for_marker(&passive.log_path, READY_LISTENER, Duration::from_secs(10))?;
+        if row.uses_lola() {
+            thread::sleep(Duration::from_millis(LOLA_LISTENER_STABILIZATION_MS));
+        }
 
         let active_spec = role_command(
             row,
             true,
             &zenoh_client_config_path,
             lola_manifest_path.as_deref(),
+            &lola_run_namespace,
             cli,
         )?;
         let mut active = spawn_process(
@@ -541,8 +603,9 @@ fn run_row(
             &target_debug_binary(repo_root, &active_spec.binary),
             &active_spec.args,
             repo_root,
-            &row_env(row, lola_bridge_lib_dir.as_deref()),
+            &process_env,
             &row_dir,
+            Some(&namespace),
         )?;
         logs.insert("active".to_string(), active.log_path.display().to_string());
 
@@ -564,6 +627,10 @@ fn run_row(
     })();
 
     terminate(&mut streamer);
+    terminate(&mut namespace);
+    if row.uses_lola() {
+        thread::sleep(Duration::from_millis(LOLA_ROW_COOLDOWN_MS));
+    }
 
     match result {
         Ok(()) => Ok(row_result(
@@ -610,7 +677,7 @@ fn build_required_binaries(repo_root: &Path) -> Result<()> {
             "example-streamer-uses",
             "--bins",
             "--features",
-            "zenoh-transport,iceoryx2-selected-wire,lola-selected-wire",
+            "zenoh-selected-wire,iceoryx2-selected-wire,lola-selected-wire",
             "--no-default-features",
         ],
         &common_args,
@@ -687,14 +754,15 @@ fn write_config(
     row: &MatrixRow,
     config_path: &Path,
     lola_manifest_path: Option<&Path>,
+    lola_run_namespace: &str,
 ) -> Result<()> {
     let zenoh_config = repo_root.join("configurable-streamer/ZENOH_CONFIG.json5");
     let mqtt_config = repo_root.join("configurable-streamer/MQTT_CONFIG.json5");
     let subscription_data = repo_root.join("configurable-streamer/subscription_data.json");
     let source_endpoint = endpoint_name(row.source, "source");
     let sink_endpoint = endpoint_name(row.sink, "sink");
-    let source_lola = lola_info(row, AUTHORITY_A, "source");
-    let sink_lola = lola_info(row, AUTHORITY_B, "sink");
+    let source_lola = lola_info(row, AUTHORITY_A, "source", lola_run_namespace);
+    let sink_lola = lola_info(row, AUTHORITY_B, "sink", lola_run_namespace);
 
     let mut zenoh_endpoints = Vec::new();
     let mut iceoryx2_endpoints = Vec::new();
@@ -705,6 +773,7 @@ fn write_config(
         &mut iceoryx2_endpoints,
         &mut lola_endpoints,
         row.source,
+        "source",
         AUTHORITY_A,
         &source_endpoint,
         &sink_endpoint,
@@ -718,6 +787,7 @@ fn write_config(
         &mut iceoryx2_endpoints,
         &mut lola_endpoints,
         row.sink,
+        "sink",
         AUTHORITY_B,
         &sink_endpoint,
         &source_endpoint,
@@ -747,6 +817,7 @@ fn push_endpoint(
     iceoryx2_endpoints: &mut Vec<serde_json::Value>,
     lola_endpoints: &mut Vec<serde_json::Value>,
     profile: EndpointProfile,
+    side: &str,
     authority: &str,
     endpoint: &str,
     forward_endpoint: &str,
@@ -770,7 +841,7 @@ fn push_endpoint(
         value["lola_event_name"] = json!(lola.event_name);
         value["lola_sample_size"] = json!(65536);
         value["lola_sample_alignment"] = json!(8);
-        value["lola_max_samples"] = json!(16);
+        value["lola_max_samples"] = json!(LOLA_MAX_SAMPLES);
         value["lola_mw_com_config_file"] = json!(lola_manifest_path
             .expect("LoLa endpoint requires generated manifest")
             .display()
@@ -785,7 +856,11 @@ fn push_endpoint(
                 .expect("LoLa endpoint requires generated manifest")
                 .display()
                 .to_string());
-            value["lola_default_rx_channel"] = json!("both");
+            value["lola_default_rx_channel"] = json!(match side {
+                "source" => "primary",
+                "sink" => "response",
+                _ => "both",
+            });
         }
     }
     match profile.physical {
@@ -796,7 +871,7 @@ fn push_endpoint(
     }
 }
 
-fn write_lola_manifest(row: &MatrixRow, path: &Path) -> Result<()> {
+fn write_lola_manifest(row: &MatrixRow, path: &Path, lola_run_namespace: &str) -> Result<()> {
     let mut service_types = Vec::new();
     let mut service_instances = Vec::new();
     let mut service_id = lola_service_id_base(row);
@@ -809,7 +884,8 @@ fn write_lola_manifest(row: &MatrixRow, path: &Path) -> Result<()> {
         if profile.physical != PhysicalTransport::Lola {
             continue;
         }
-        let info = lola_info(row, authority, side).expect("LoLa profile has LoLa info");
+        let info = lola_info(row, authority, side, lola_run_namespace)
+            .expect("LoLa profile has LoLa info");
         push_lola_manifest_entry(
             &mut service_types,
             &mut service_instances,
@@ -834,7 +910,7 @@ fn write_lola_manifest(row: &MatrixRow, path: &Path) -> Result<()> {
         "serviceInstances": service_instances,
         "global": {
             "asil-level": "QM",
-            "queue-size": { "QM-receiver": 16, "QM-sender": 16 },
+            "queue-size": { "QM-receiver": LOLA_QUEUE_SIZE, "QM-sender": LOLA_QUEUE_SIZE },
             "shm-size-calc-mode": "SIMULATION"
         }
     });
@@ -884,8 +960,8 @@ fn push_lola_manifest_entry(
             "binding": "SHM",
             "events": [{
                 "eventName": event_name,
-                "numberOfSampleSlots": 16,
-                "maxSubscribers": 8,
+                "numberOfSampleSlots": LOLA_SAMPLE_SLOTS,
+                "maxSubscribers": LOLA_MAX_SUBSCRIBERS,
                 "numberOfIpcTracingSlots": 0
             }]
         }]
@@ -894,7 +970,7 @@ fn push_lola_manifest_entry(
 }
 
 fn lola_service_id_base(row: &MatrixRow) -> u32 {
-    10_000 + (row.ordinal as u32 * 8)
+    14_000 + (row.ordinal as u32 * 4)
 }
 
 struct RoleCommand {
@@ -907,6 +983,7 @@ fn role_command(
     active: bool,
     zenoh_client_config: &Path,
     lola_manifest_path: Option<&Path>,
+    lola_run_namespace: &str,
     cli: &Cli,
 ) -> Result<RoleCommand> {
     let profile = if active { row.source } else { row.sink };
@@ -941,6 +1018,7 @@ fn role_command(
             local_authority,
             if active { "source" } else { "sink" },
             lola_manifest_path.expect("LoLa role requires generated manifest"),
+            lola_run_namespace,
         )?;
     }
     Ok(RoleCommand { binary, args })
@@ -958,6 +1036,8 @@ fn zenoh_args(
         "publisher" => vec![
             "--endpoint".into(),
             ZENOH_ENDPOINT.into(),
+            "--zenoh-config".into(),
+            zenoh_client_config.display().to_string(),
             "--uauthority".into(),
             local_authority.into(),
             "--uentity".into(),
@@ -980,6 +1060,8 @@ fn zenoh_args(
         "subscriber" => vec![
             "--endpoint".into(),
             ZENOH_ENDPOINT.into(),
+            "--zenoh-config".into(),
+            zenoh_client_config.display().to_string(),
             "--uauthority".into(),
             local_authority.into(),
             "--uentity".into(),
@@ -1006,6 +1088,8 @@ fn zenoh_args(
         "client" => vec![
             "--endpoint".into(),
             ZENOH_ENDPOINT.into(),
+            "--zenoh-config".into(),
+            zenoh_client_config.display().to_string(),
             "--uauthority".into(),
             local_authority.into(),
             "--uentity".into(),
@@ -1101,8 +1185,10 @@ fn add_lola_args(
     authority: &str,
     side: &str,
     manifest: &Path,
+    lola_run_namespace: &str,
 ) -> Result<()> {
-    let info = lola_info(row, authority, side).ok_or_else(|| anyhow!("missing LoLa info"))?;
+    let info = lola_info(row, authority, side, lola_run_namespace)
+        .ok_or_else(|| anyhow!("missing LoLa info"))?;
     args.extend([
         "--lola-mw-com-config-file".to_string(),
         manifest.display().to_string(),
@@ -1117,7 +1203,7 @@ fn add_lola_args(
         "--lola-sample-alignment".to_string(),
         "8".to_string(),
         "--lola-max-samples".to_string(),
-        "16".to_string(),
+        LOLA_MAX_SAMPLES.to_string(),
     ]);
     if row.role == RoleStyle::ClientServerRpc {
         args.extend([
@@ -1136,12 +1222,8 @@ fn add_lola_args(
     Ok(())
 }
 
-fn role_send_count(row: &MatrixRow, cli: &Cli) -> usize {
-    if row.role == RoleStyle::ClientServerRpc && row.sink.physical == PhysicalTransport::Lola {
-        cli.send_count.max(1)
-    } else {
-        cli.send_count.max(5)
-    }
+fn role_send_count(_row: &MatrixRow, cli: &Cli) -> usize {
+    cli.send_count.max(5)
 }
 
 fn binary_name(profile: EndpointProfile, role_name: &str) -> String {
@@ -1203,11 +1285,22 @@ fn spawn_process(
     workdir: &Path,
     env: &[(String, String)],
     artifact_dir: &Path,
+    namespace: Option<&RunningProcess>,
 ) -> Result<RunningProcess> {
     let log_path = artifact_dir.join(format!("{name}.log"));
     let stdout = log_file(&log_path)?;
     let stderr = stdout.try_clone()?;
-    let mut command = Command::new(executable);
+    let mut command = if let Some(namespace) = namespace {
+        let mut command = Command::new("nsenter");
+        command
+            .arg("-t")
+            .arg(namespace.child.id().to_string())
+            .args(["-U", "--preserve-credentials", "-m", "-n", "-i", "--"])
+            .arg(executable);
+        command
+    } else {
+        Command::new(executable)
+    };
     command
         .current_dir(workdir)
         .args(args)
@@ -1226,6 +1319,63 @@ fn spawn_process(
         log_path,
         child,
     })
+}
+
+fn start_namespace_holder(artifact_dir: &Path) -> Result<RunningProcess> {
+    let log_path = artifact_dir.join("namespace-holder.log");
+    let ready_path = artifact_dir.join("namespace-ready");
+    let stdout = log_file(&log_path)?;
+    let stderr = stdout.try_clone()?;
+    let script = format!(
+        "set -eu; ip link set lo up; mount -t tmpfs -o size={tmp_size} tmpfs /tmp; mount -t tmpfs -o size={shm_size} tmpfs /dev/shm; mkdir -p {iceoryx2_root}; touch \"$1\"; exec sleep infinity",
+        tmp_size = NAMESPACE_TMP_SIZE,
+        shm_size = NAMESPACE_SHM_SIZE,
+        iceoryx2_root = ICEORYX2_ROOT_PATH,
+    );
+    let mut child = Command::new("unshare")
+        .args(["-U", "--map-root-user", "-m", "-n", "-i", "sh", "-c"])
+        .arg(script)
+        .arg("sh")
+        .arg(&ready_path)
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .with_context(|| "unable to spawn namespace holder with unshare")?;
+    wait_for_path_or_exit(&ready_path, &mut child, &log_path, Duration::from_secs(10))?;
+    Ok(RunningProcess {
+        name: "namespace-holder".to_string(),
+        log_path,
+        child,
+    })
+}
+
+fn wait_for_path_or_exit(
+    path: &Path,
+    child: &mut Child,
+    log_path: &Path,
+    timeout: Duration,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if path.exists() {
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait()? {
+            return Err(anyhow!(
+                "namespace holder exited with status {status} before creating {}; log={}",
+                path.display(),
+                log_path.display()
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "timed out waiting for namespace holder marker {}; log={}",
+                path.display(),
+                log_path.display()
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn log_file(path: &Path) -> Result<File> {
@@ -1291,6 +1441,17 @@ fn terminate(process: &mut RunningProcess) {
     if matches!(process.child.try_wait(), Ok(Some(_))) {
         return;
     }
+    let _ = Command::new("kill")
+        .arg("-INT")
+        .arg(process.child.id().to_string())
+        .status();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline {
+        if matches!(process.child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
     let _ = process.child.kill();
     let _ = process.child.wait();
 }
@@ -1333,7 +1494,11 @@ fn row_result(
     }
 }
 
-fn row_env(_row: &MatrixRow, lola_bridge_lib_dir: Option<&Path>) -> Vec<(String, String)> {
+fn row_env(
+    row: &MatrixRow,
+    iceoryx2_root: Option<&Path>,
+    lola_bridge_lib_dir: Option<&Path>,
+) -> Vec<(String, String)> {
     let mut env = vec![
         (
             "RUST_LOG".to_string(),
@@ -1341,6 +1506,16 @@ fn row_env(_row: &MatrixRow, lola_bridge_lib_dir: Option<&Path>) -> Vec<(String,
         ),
         ("CARGO_NET_GIT_FETCH_WITH_CLI".to_string(), "true".to_string()),
     ];
+    if let Some(root) = iceoryx2_root {
+        env.push((
+            "UP_ICEORYX2_ROOT_PATH".to_string(),
+            root.display().to_string(),
+        ));
+        env.push((
+            "UP_ICEORYX2_PREFIX".to_string(),
+            format!("u{:08x}_", stable_hash(&row.id)),
+        ));
+    }
     if let Some(lib_dir) = lola_bridge_lib_dir {
         let existing = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
         let value = if existing.is_empty() {
@@ -1399,7 +1574,12 @@ fn endpoint_name(profile: EndpointProfile, side: &str) -> String {
     format!("{}-{side}", profile.id)
 }
 
-fn lola_info(row: &MatrixRow, authority: &str, side: &str) -> Option<LolaEndpointInfo> {
+fn lola_info(
+    row: &MatrixRow,
+    authority: &str,
+    side: &str,
+    lola_run_namespace: &str,
+) -> Option<LolaEndpointInfo> {
     let profile = if side == "source" {
         row.source
     } else {
@@ -1408,24 +1588,42 @@ fn lola_info(row: &MatrixRow, authority: &str, side: &str) -> Option<LolaEndpoin
     if profile.physical != PhysicalTransport::Lola {
         return None;
     }
-    let safe_row = sanitize(&row.id);
+    let safe_namespace = sanitize(lola_run_namespace);
     let safe_authority = sanitize(authority);
     let safe_side = sanitize(side);
     Some(LolaEndpointInfo {
         instance_specifier: format!(
-            "uprotocol/streamerTransportTest/{safe_row}/{safe_side}/primary"
+            "uprotocol/streamerTransportTest/{safe_namespace}/{safe_side}/primary"
         ),
         service_type: format!(
-            "/uprotocol/StreamerTransportTest/{safe_row}/{safe_authority}/{safe_side}/Primary"
+            "/uprotocol/StreamerTransportTest/{safe_namespace}/{safe_authority}/{safe_side}/Primary"
         ),
-        event_name: format!("frame{safe_authority}{safe_side}Primary"),
+        event_name: format!("frame{safe_namespace}{safe_authority}{safe_side}Primary"),
         response_instance_specifier: Some(format!(
-            "uprotocol/streamerTransportTest/{safe_row}/{safe_side}/response"
+            "uprotocol/streamerTransportTest/{safe_namespace}/{safe_side}/response"
         )),
         response_service_type: Some(format!(
-            "/uprotocol/StreamerTransportTest/{safe_row}/{safe_authority}/{safe_side}/Response"
+            "/uprotocol/StreamerTransportTest/{safe_namespace}/{safe_authority}/{safe_side}/Response"
         )),
-        response_event_name: Some(format!("frame{safe_authority}{safe_side}Response")),
+        response_event_name: Some(format!("frame{safe_namespace}{safe_authority}{safe_side}Response")),
+    })
+}
+
+fn lola_run_namespace(artifacts_root: &Path, row: &MatrixRow) -> String {
+    let seed = format!(
+        "{}:{}:{}:{}:{}",
+        artifacts_root.display(),
+        row.id,
+        row.ordinal,
+        std::process::id(),
+        Utc::now().timestamp_micros()
+    );
+    format!("r{:08x}", stable_hash(&seed))
+}
+
+fn stable_hash(value: &str) -> u32 {
+    value.bytes().fold(0x811C_9DC5, |hash, byte| {
+        hash.wrapping_mul(0x0100_0193) ^ u32::from(byte)
     })
 }
 
@@ -1494,5 +1692,10 @@ impl MatrixRow {
     fn uses_lola(&self) -> bool {
         self.source.physical == PhysicalTransport::Lola
             || self.sink.physical == PhysicalTransport::Lola
+    }
+
+    fn uses_iceoryx2(&self) -> bool {
+        self.source.physical == PhysicalTransport::Iceoryx2
+            || self.sink.physical == PhysicalTransport::Iceoryx2
     }
 }
