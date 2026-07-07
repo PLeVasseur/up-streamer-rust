@@ -5797,7 +5797,7 @@ dependencies = [
 [[package]]
 name = "up-rust"
 version = "0.10.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-rust.git?rev=e60a43987ee23d3da7d6e75bd9c6f92264823cbd#e60a43987ee23d3da7d6e75bd9c6f92264823cbd"
+source = "git+https://github.com/PLeVasseur/up-rust.git?rev=4ea97325e6a7e45d31ef392343035a849e717bdf#4ea97325e6a7e45d31ef392343035a849e717bdf"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5819,7 +5819,7 @@ dependencies = [
 [[package]]
 name = "up-rust-macros"
 version = "0.10.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-rust.git?rev=e60a43987ee23d3da7d6e75bd9c6f92264823cbd#e60a43987ee23d3da7d6e75bd9c6f92264823cbd"
+source = "git+https://github.com/PLeVasseur/up-rust.git?rev=4ea97325e6a7e45d31ef392343035a849e717bdf#4ea97325e6a7e45d31ef392343035a849e717bdf"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5851,7 +5851,7 @@ dependencies = [
 [[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=2737786b9978ec4330f15863c9c6fbd8f92982f1#2737786b9978ec4330f15863c9c6fbd8f92982f1"
+source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=942f2324125c0e0640ce94bad9b7c9bae8aff174#942f2324125c0e0640ce94bad9b7c9bae8aff174"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5866,7 +5866,7 @@ dependencies = [
 [[package]]
 name = "up-transport-lola-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=aae654727b49ec4a0aad1eae9ee6c8a9e18630e5#aae654727b49ec4a0aad1eae9ee6c8a9e18630e5"
+source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=dc7179763085091c0beea17643779d0ff3d8381d#dc7179763085091c0beea17643779d0ff3d8381d"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5878,7 +5878,7 @@ dependencies = [
 [[package]]
 name = "up-transport-mqtt5"
 version = "0.4.0"
-source = "git+https://github.com/PLeVasseur/up-client-mqtt5-rust.git?rev=44cf9bdeaf32b6bd31db5fba46f80249268e206c#44cf9bdeaf32b6bd31db5fba46f80249268e206c"
+source = "git+https://github.com/PLeVasseur/up-client-mqtt5-rust.git?rev=19f6ae78151ad407ff0165a891d290a8ddf01a86#19f6ae78151ad407ff0165a891d290a8ddf01a86"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -5899,7 +5899,7 @@ dependencies = [
 [[package]]
 name = "up-transport-vsomeip"
 version = "0.4.1"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=0511253d13c3fb2fa680ee2f4354f5a7dc8fd219#0511253d13c3fb2fa680ee2f4354f5a7dc8fd219"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=8b82e80df036b61331c770d8d3e72d2f1d696909#8b82e80df036b61331c770d8d3e72d2f1d696909"
 dependencies = [
  "async-trait",
  "bimap",
@@ -5923,7 +5923,7 @@ dependencies = [
 [[package]]
 name = "up-transport-zenoh"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=4e4b6bfc40c587dcf79dedede14a1c8f20499fda#4e4b6bfc40c587dcf79dedede14a1c8f20499fda"
+source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=cae85adf83a8f5a82c92b6530560e13b24027638#cae85adf83a8f5a82c92b6530560e13b24027638"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5946,7 +5946,7 @@ dependencies = [
 [[package]]
 name = "up-wire-xcdrv2"
 version = "0.0.0"
-source = "git+ssh://git@github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=27b6a910d7fdb76562ed859939663ed8e8fd1cd4#27b6a910d7fdb76562ed859939663ed8e8fd1cd4"
+source = "git+ssh://git@github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=3aa96b68317e6d90d718c2267b53bccfab9a57ec#3aa96b68317e6d90d718c2267b53bccfab9a57ec"
 dependencies = [
  "up-rust",
  "up-wire-xcdrv2-macros",
@@ -5955,7 +5955,7 @@ dependencies = [
 [[package]]
 name = "up-wire-xcdrv2-macros"
 version = "0.0.0"
-source = "git+ssh://git@github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=27b6a910d7fdb76562ed859939663ed8e8fd1cd4#27b6a910d7fdb76562ed859939663ed8e8fd1cd4"
+source = "git+ssh://git@github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=3aa96b68317e6d90d718c2267b53bccfab9a57ec#3aa96b68317e6d90d718c2267b53bccfab9a57ec"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6125,7 +6125,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 [[package]]
 name = "vsomeip-proc-macro"
 version = "0.4.1"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=0511253d13c3fb2fa680ee2f4354f5a7dc8fd219#0511253d13c3fb2fa680ee2f4354f5a7dc8fd219"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=8b82e80df036b61331c770d8d3e72d2f1d696909#8b82e80df036b61331c770d8d3e72d2f1d696909"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6136,7 +6136,7 @@ dependencies = [
 [[package]]
 name = "vsomeip-sys"
 version = "0.4.1"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=0511253d13c3fb2fa680ee2f4354f5a7dc8fd219#0511253d13c3fb2fa680ee2f4354f5a7dc8fd219"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=8b82e80df036b61331c770d8d3e72d2f1d696909#8b82e80df036b61331c770d8d3e72d2f1d696909"
 dependencies = [
  "autocxx",
  "autocxx-build",
