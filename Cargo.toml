@@ -55,11 +55,11 @@ tokio = { version = "1.44", default-features = false, features = [
     "macros",
 ] }
 protobuf = { version = "3.7.2", features = ["with-bytes"] }
-up-rust = { git = "ssh://git@github.com/PLeVasseur/up-rust.git", rev = "45263b6f97857f29e2d61815643d67051171e98e", default-features = false }
-up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "cf783a2b85d919977c7aaa578b969ba9bf00040c" }
-up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "1b086b37599b07ecea0c8f39ead22a1bb7412b64" }
-up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "f0c72af45a5f5030a71fcef2ae0e551ca0d7cec8", default-features = false }
-up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "cbd8774999b7216519da9c2f9e8135ab17c9a501" }
+up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "e60a43987ee23d3da7d6e75bd9c6f92264823cbd", default-features = false }
+up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "dfe257d6c4654e2a3fa99b2834e0fe162e84d460" }
+up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "1f3e22dedda5f07b2e954aeb8cd8c70965c9bcde" }
+up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "0511253d13c3fb2fa680ee2f4354f5a7dc8fd219", default-features = false }
+up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "44cf9bdeaf32b6bd31db5fba46f80249268e206c" }
 zenoh = { version = "1.2.1", features = [
     "default",
     "plugins",
@@ -71,8 +71,8 @@ zenoh-plugin-trait = { version = "1.2.1" }
 zenoh-result = { version = "1.2.1" }
 zenoh-util = { version = "1.2.1" }
 
-[patch."https://github.com/PLeVasseur/up-rust"]
-up-rust = { git = "ssh://git@github.com/PLeVasseur/up-rust.git", rev = "45263b6f97857f29e2d61815643d67051171e98e" }
+[patch."ssh://git@github.com/PLeVasseur/up-rust.git"]
+up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "e60a43987ee23d3da7d6e75bd9c6f92264823cbd" }
 
 [profile.dev]
 debug = true
