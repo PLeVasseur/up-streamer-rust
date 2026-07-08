@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (c) 2024 Contributors to the Eclipse Foundation
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
  * information regarding copyright ownership.
@@ -13,8 +13,7 @@
 
 mod common;
 
-use chrono::Local;
-use chrono::Timelike;
+use chrono::{Local, Timelike};
 use clap::{Parser, ValueEnum};
 use common::cli;
 use common::{native_message_payload_parts, protobuf_payload, xcdrv2_message_payload_parts};
@@ -30,8 +29,10 @@ const DEFAULT_UAUTHORITY: &str = "authority-a";
 const DEFAULT_UENTITY: &str = "0x5BA0";
 const DEFAULT_UVERSION: &str = "0x1";
 const DEFAULT_RESOURCE: &str = "0x8001";
+const DEFAULT_SINK_AUTHORITY: &str = "authority-b";
+const DEFAULT_SINK_UENTITY: &str = "0x5BA0";
 const DEFAULT_BROKER_URI: &str = "localhost:1883";
-const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"MPUB");
+const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"MNTF");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum Encoding {
@@ -43,49 +44,40 @@ enum Encoding {
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Authority for the local publisher identity and publish source URI
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
-    /// UEntity ID for publish source URI (decimal or 0x-prefixed hex)
     #[arg(long, default_value = DEFAULT_UENTITY)]
     uentity: String,
-    /// UEntity major version for publish source URI (decimal or 0x-prefixed hex)
     #[arg(long, default_value = DEFAULT_UVERSION)]
     uversion: String,
-    /// Resource ID for publish source URI (decimal or 0x-prefixed hex)
     #[arg(long, default_value = DEFAULT_RESOURCE)]
     resource: String,
-    /// MQTT broker URI in host:port format
+    #[arg(long, default_value = DEFAULT_SINK_AUTHORITY)]
+    sink_authority: String,
+    #[arg(long, default_value = DEFAULT_SINK_UENTITY)]
+    sink_uentity: String,
     #[arg(long, default_value = DEFAULT_BROKER_URI)]
     broker_uri: String,
-    /// Number of publish messages to send before exiting (0 means run forever)
     #[arg(long, default_value_t = 0)]
     send_count: u64,
-    /// Milliseconds to wait between publish sends
     #[arg(long, default_value_t = 1000)]
     send_interval_ms: u64,
-    /// Payload encoding for the classic UMessage payload.
     #[arg(long, value_enum, default_value = "protobuf")]
     encoding: Encoding,
-    /// Text payload used by native/XCDRv2 matrix rows.
-    #[arg(long, default_value = "mqtt-publisher")]
+    #[arg(long, default_value = "mqtt-notifier")]
     payload: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
-
     let args = Args::parse();
-
-    info!("Started mqtt_publisher.");
+    info!("Started mqtt_notifier.");
 
     let uentity = cli::parse_u32_status("--uentity", &args.uentity)?;
     let uversion = cli::parse_u8_status("--uversion", &args.uversion)?;
     let resource = cli::parse_u16_status("--resource", &args.resource)?;
-
-    // This is the URI of the publisher entity
-    let source = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
+    let sink_uentity = cli::parse_u32_status("--sink-uentity", &args.sink_uentity)?;
 
     let mqtt_client_options = MqttClientOptions {
         broker_uri: args.broker_uri.clone(),
@@ -98,33 +90,29 @@ async fn main() -> Result<(), UStatus> {
     let mqtt5_transport =
         Mqtt5Transport::new(mqtt_transport_options, args.uauthority.to_string()).await?;
     mqtt5_transport.connect().await?;
+    let notifier: Arc<dyn UTransport> = Arc::new(mqtt5_transport);
 
-    let publisher: Arc<dyn UTransport> = Arc::new(mqtt5_transport);
-
-    let mut sent_count: u64 = 0;
+    let source = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
+    let sink = cli::build_uuri(&args.sink_authority, sink_uentity, uversion, 0)?;
+    let mut sent_count = 0_u64;
     loop {
         if args.send_count > 0 && sent_count >= args.send_count {
-            info!("Completed bounded send run: sent_count={sent_count}");
+            info!("Completed bounded notify run: sent_count={sent_count}");
             break;
         }
-
         tokio::time::sleep(Duration::from_millis(args.send_interval_ms)).await;
-
         let now = Local::now();
-
-        let time_of_day = TimeOfDay {
-            hours: now.hour() as i32,
-            minutes: now.minute() as i32,
-            seconds: now.second() as i32,
-            nanos: now.nanosecond() as i32,
-            ..Default::default()
-        };
-
-        // Publish messages signed with the source URI
-        let mut builder = UMessageBuilder::publish(source.clone());
-        let publish_msg = if args.encoding == Encoding::Protobuf {
+        let mut builder = UMessageBuilder::notification(source.clone(), sink.clone());
+        let notification = if args.encoding == Encoding::Protobuf {
             let timer_message = Timer {
-                time: Some(time_of_day).into(),
+                time: Some(TimeOfDay {
+                    hours: now.hour() as i32,
+                    minutes: now.minute() as i32,
+                    seconds: now.second() as i32,
+                    nanos: now.nanosecond() as i32,
+                    ..Default::default()
+                })
+                .into(),
                 ..Default::default()
             };
             builder
@@ -135,19 +123,16 @@ async fn main() -> Result<(), UStatus> {
             builder
                 .build_with_payload_encoding(payload, encoding)
                 .map_err(|error| {
-                    invalid_config(format!("failed to build publish message: {error:?}"))
+                    invalid_config(format!("failed to build notification message: {error:?}"))
                 })?
         };
-        info!("Sending Publish message:\n{publish_msg:?}");
-
-        publisher.send(publish_msg).await?;
+        info!("Sending Notification message:\n{notification:?}");
+        notifier.send(notification).await?;
         sent_count += 1;
     }
-
     if args.send_count > 0 {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-
     Ok(())
 }
 

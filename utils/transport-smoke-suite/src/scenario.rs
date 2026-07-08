@@ -346,12 +346,12 @@ struct DependencySourceArtifact {
 const BUILD_MQTT_RR_ZENOH_CLIENT: &[&str] = &[
     "cargo build -p configurable-streamer",
     "cargo build -p example-streamer-uses --bin zenoh_client --features zenoh-transport",
-    "cargo build -p example-streamer-uses --bin mqtt_service --features mqtt-transport",
+    "cargo build -p example-streamer-uses --bin mqtt_server --features mqtt-transport",
 ];
 const BUILD_MQTT_RR_MQTT_CLIENT: &[&str] = &[
     "cargo build -p configurable-streamer",
     "cargo build -p example-streamer-uses --bin mqtt_client --features mqtt-transport",
-    "cargo build -p example-streamer-uses --bin zenoh_service --features zenoh-transport",
+    "cargo build -p example-streamer-uses --bin zenoh_server --features zenoh-transport",
 ];
 const BUILD_MQTT_PS_ZENOH_PUBLISHER: &[&str] = &[
     "cargo build -p configurable-streamer",
@@ -366,12 +366,12 @@ const BUILD_MQTT_PS_MQTT_PUBLISHER: &[&str] = &[
 const BUILD_SOMEIP_RR_ZENOH_CLIENT: &[&str] = &[
     "cargo build -p up-linux-streamer --bin zenoh_someip --features zenoh-transport,vsomeip-transport,bundled-vsomeip",
     "cargo build -p example-streamer-uses --bin zenoh_client --features zenoh-transport",
-    "cargo build -p example-streamer-uses --bin someip_service --features vsomeip-transport,bundled-vsomeip",
+    "cargo build -p example-streamer-uses --bin someip_server --features vsomeip-transport,bundled-vsomeip",
 ];
 const BUILD_SOMEIP_RR_SOMEIP_CLIENT: &[&str] = &[
     "cargo build -p up-linux-streamer --bin zenoh_someip --features zenoh-transport,vsomeip-transport,bundled-vsomeip",
     "cargo build -p example-streamer-uses --bin someip_client --features vsomeip-transport,bundled-vsomeip",
-    "cargo build -p example-streamer-uses --bin zenoh_service --features zenoh-transport",
+    "cargo build -p example-streamer-uses --bin zenoh_server --features zenoh-transport",
 ];
 const BUILD_SOMEIP_PS_ZENOH_PUBLISHER: &[&str] = &[
     "cargo build -p up-linux-streamer --bin zenoh_someip --features zenoh-transport,vsomeip-transport,bundled-vsomeip",
@@ -393,7 +393,7 @@ const REQUIRED_SOMEIP_PATHS: &[&str] = &[
     "example-streamer-implementations/DEFAULT_CONFIG.json5",
     "example-streamer-uses/vsomeip-configs/someip_client.json",
     "example-streamer-uses/vsomeip-configs/someip_publisher.json",
-    "example-streamer-uses/vsomeip-configs/someip_service.json",
+    "example-streamer-uses/vsomeip-configs/someip_server.json",
     "example-streamer-uses/vsomeip-configs/someip_subscriber.json",
 ];
 
@@ -591,7 +591,7 @@ const SCENARIO_MQTT_RR_ZENOH_CLIENT_MQTT_SERVICE: ScenarioTemplate = ScenarioTem
     transport_family: TransportFamily::Mqtt,
     build_commands: BUILD_MQTT_RR_ZENOH_CLIENT,
     required_paths: REQUIRED_MQTT_PATHS,
-    stale_process_signatures: &["configurable-streamer", "mqtt_service", "zenoh_client"],
+    stale_process_signatures: &["configurable-streamer", "mqtt_server", "zenoh_client"],
     requires_mqtt_broker: true,
     requires_vsomeip_runtime: false,
     streamer: ProcessTemplate {
@@ -608,7 +608,7 @@ const SCENARIO_MQTT_RR_ZENOH_CLIENT_MQTT_SERVICE: ScenarioTemplate = ScenarioTem
     passive: ProcessTemplate {
         name: "service",
         workdir: ".",
-        binary: "mqtt_service",
+        binary: "mqtt_server",
         args: &["--broker-uri", "localhost:1883"],
         env: PASSIVE_INFO_ENV,
         log_file: "service.log",
@@ -635,7 +635,7 @@ const SCENARIO_MQTT_RR_MQTT_CLIENT_ZENOH_SERVICE: ScenarioTemplate = ScenarioTem
     transport_family: TransportFamily::Mqtt,
     build_commands: BUILD_MQTT_RR_MQTT_CLIENT,
     required_paths: REQUIRED_MQTT_PATHS,
-    stale_process_signatures: &["configurable-streamer", "zenoh_service", "mqtt_client"],
+    stale_process_signatures: &["configurable-streamer", "zenoh_server", "mqtt_client"],
     requires_mqtt_broker: true,
     requires_vsomeip_runtime: false,
     streamer: ProcessTemplate {
@@ -652,7 +652,7 @@ const SCENARIO_MQTT_RR_MQTT_CLIENT_ZENOH_SERVICE: ScenarioTemplate = ScenarioTem
     passive: ProcessTemplate {
         name: "service",
         workdir: ".",
-        binary: "zenoh_service",
+        binary: "zenoh_server",
         args: NO_ARGS,
         env: PASSIVE_INFO_ENV,
         log_file: "service.log",
@@ -775,7 +775,7 @@ const SCENARIO_SOMEIP_RR_ZENOH_CLIENT_SOMEIP_SERVICE: ScenarioTemplate = Scenari
     transport_family: TransportFamily::Someip,
     build_commands: BUILD_SOMEIP_RR_ZENOH_CLIENT,
     required_paths: REQUIRED_SOMEIP_PATHS,
-    stale_process_signatures: &["zenoh_someip", "someip_service", "zenoh_client"],
+    stale_process_signatures: &["zenoh_someip", "someip_server", "zenoh_client"],
     requires_mqtt_broker: false,
     requires_vsomeip_runtime: true,
     streamer: ProcessTemplate {
@@ -792,7 +792,7 @@ const SCENARIO_SOMEIP_RR_ZENOH_CLIENT_SOMEIP_SERVICE: ScenarioTemplate = Scenari
     passive: ProcessTemplate {
         name: "service",
         workdir: ".",
-        binary: "someip_service",
+        binary: "someip_server",
         args: NO_ARGS,
         env: PASSIVE_INFO_ENV,
         log_file: "service.log",
@@ -819,7 +819,7 @@ const SCENARIO_SOMEIP_RR_SOMEIP_CLIENT_ZENOH_SERVICE: ScenarioTemplate = Scenari
     transport_family: TransportFamily::Someip,
     build_commands: BUILD_SOMEIP_RR_SOMEIP_CLIENT,
     required_paths: REQUIRED_SOMEIP_PATHS,
-    stale_process_signatures: &["zenoh_someip", "zenoh_service", "someip_client"],
+    stale_process_signatures: &["zenoh_someip", "zenoh_server", "someip_client"],
     requires_mqtt_broker: false,
     requires_vsomeip_runtime: true,
     streamer: ProcessTemplate {
@@ -836,7 +836,7 @@ const SCENARIO_SOMEIP_RR_SOMEIP_CLIENT_ZENOH_SERVICE: ScenarioTemplate = Scenari
     passive: ProcessTemplate {
         name: "service",
         workdir: ".",
-        binary: "zenoh_service",
+        binary: "zenoh_server",
         args: PASSIVE_ZENOH_SERVICE_ARGS_B_FROM_SOMEIP,
         env: PASSIVE_INFO_ENV,
         log_file: "service.log",

@@ -1133,6 +1133,7 @@ fn stable_payload_init_error(error: up_rust::UWireError) -> UStatus {
     ))
 }
 
+#[cfg(any(feature = "zenoh-zero-copy", feature = "zenoh-owned-frame"))]
 fn local_uri(cli: &Cli) -> Result<UUri, UStatus> {
     UUri::try_from_parts(&cli.local_authority, cli.ue_id, cli.ue_version_major, 0)
         .map_err(|error| invalid_config(format!("invalid local URI: {error:?}")))

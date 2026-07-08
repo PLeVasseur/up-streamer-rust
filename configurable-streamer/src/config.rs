@@ -61,6 +61,21 @@ pub struct Transports {
     pub(crate) iceoryx2: Option<Iceoryx2Transport>,
     #[serde(default)]
     pub(crate) lola: Option<LolaTransport>,
+    /// R3A: classic vSomeIP endpoints (Tier 1 of the vSomeIP plan).
+    #[serde(default)]
+    pub(crate) vsomeip: Option<VsomeipTransport>,
+}
+
+/// R3A: classic vSomeIP transport section. `config_file` is the vsomeip JSON
+/// (applications/services/routing) the orchestrator generates per row;
+/// `remote_authority` names the peer authority per the SOME/IP binding.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct VsomeipTransport {
+    pub(crate) config_file: String,
+    pub(crate) remote_authority: String,
+    #[serde(default)]
+    pub(crate) endpoints: Vec<EndpointConfig>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -114,6 +129,10 @@ pub struct EndpointConfig {
     #[serde(default)]
     pub(crate) copy_minimized_payload_alignment: Option<usize>,
     #[serde(default)]
+    pub(crate) zenoh_config_file: Option<String>,
+    #[serde(default)]
+    pub(crate) zenoh_client_config_file: Option<String>,
+    #[serde(default)]
     pub(crate) lola_instance_specifier: Option<String>,
     #[serde(default)]
     pub(crate) lola_service_type: Option<String>,
@@ -137,6 +156,15 @@ pub struct EndpointConfig {
     pub(crate) lola_mw_com_config_file: Option<String>,
     #[serde(default)]
     pub(crate) lola_response_mw_com_config_file: Option<String>,
+    /// R3A: per-topic payload-encoding convention for classic transports
+    /// whose wire has no payload-format side-channel (SOME/IP). Applied via
+    /// the `AssumedEncodingTransport` decorator: receive stamps, send
+    /// validates loudly. Literal registry id, e.g. "up.xcdr-v2".
+    #[serde(default)]
+    pub(crate) assumed_payload_encoding: Option<String>,
+    /// Media type accompanying `assumed_payload_encoding` (optional).
+    #[serde(default)]
+    pub(crate) assumed_payload_content_type: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

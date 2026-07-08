@@ -184,9 +184,21 @@ async fn main() -> Result<(), UStatus> {
         };
         i += 1;
 
-        let request_msg = UMessageBuilder::request(sink.clone(), source.clone(), REQUEST_TTL)
-            .build_with_payload(protobuf_payload(&hello_request), UPayloadFormat::Protobuf)
-            .unwrap();
+        let mut builder = UMessageBuilder::request(sink.clone(), source.clone(), REQUEST_TTL);
+        let request_msg = if args.encoding == Encoding::Protobuf {
+            builder
+                .build_with_payload(protobuf_payload(&hello_request), UPayloadFormat::Protobuf)
+                .unwrap()
+        } else {
+            builder
+                .build_with_payload_encoding(
+                    selected_payload_bytes(&args, sent_count as u32 + 1)?,
+                    selected_payload_encoding(args.encoding),
+                )
+                .map_err(|error| {
+                    invalid_config(format!("failed to build request message: {error:?}"))
+                })?
+        };
         debug!("Invoking URI {} with response URI {}", &sink, &source);
         info!("Sending Request message:\n{:?}", &request_msg);
 

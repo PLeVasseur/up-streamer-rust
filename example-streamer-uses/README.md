@@ -127,3 +127,5 @@ Invalid formats (for example underscores in numeric values) are rejected with de
 ### SOME/IP caveat
 
 SOME/IP binaries accept URI overrides, but runtime compatibility can still depend on application/service IDs configured in the selected `--vsomeip-config` file. If `--uentity` is overridden, the binaries emit a startup warning when that override may conflict with vsomeip config expectations.
+
+The current vSomeIP transport does not implement uProtocol `Notification` (`UMESSAGE_TYPE_NOTIFICATION`). SOME/IP `MT_NOTIFICATION` traffic is mapped to uProtocol `Publish`; uProtocol `Notification` would require a separate `REQUEST_NO_RETURN` mapping that is not implemented. `someip_notifier` and `someip_notifyee` binaries are intentionally absent until that transport mapping is designed and implemented.

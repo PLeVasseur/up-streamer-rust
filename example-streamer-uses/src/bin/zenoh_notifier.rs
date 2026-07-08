@@ -13,17 +13,21 @@
 
 mod common;
 
+use chrono::{Local, Timelike};
 use clap::{Parser, ValueEnum};
 use common::payloads::{
     native_payload_alignment, native_payload_bytes, xcdrv2_payload_bytes, SelectedWireNativePayload,
 };
+use common::protobuf_payload;
+use hello_world_protos::hello_world_topics::Timer;
+use hello_world_protos::timeofday::TimeOfDay;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use up_rust::selected_wire_user_api::{ProtobufWire, StableContainerWireFormat};
 use up_rust::{
     PayloadEncoding, PayloadFormat, StableContainerPayload, UCode, UFrameMetadata, UFrameView,
-    UMessage, UMessageBuilder, UOwnedFrame, UOwnedTransport, UStatus, UTxBuffer, UTxLoanSpec, UUri,
-    UZeroCopyRxLease, UZeroCopyTransport,
+    UMessage, UMessageBuilder, UOwnedFrame, UOwnedTransport, UPayloadFormat, UStatus, UTransport,
+    UTxBuffer, UTxLoanSpec, UUri, UZeroCopyRxLease, UZeroCopyTransport,
 };
 #[cfg(feature = "iceoryx2-owned-frame")]
 use up_transport_iceoryx2_rust::BenchmarkOwnedIceoryx2Core;
@@ -33,8 +37,18 @@ use up_transport_iceoryx2_rust::Iceoryx2PubSub;
 use up_transport_lola_rust::LolaOwnedCore;
 #[cfg(any(feature = "lola-transport", feature = "lola-owned-frame"))]
 use up_transport_lola_rust::{LolaDefaultRxChannel, LolaTransportConfig, UTransportLola};
-#[cfg(any(feature = "zenoh-zero-copy", feature = "zenoh-owned-frame"))]
+#[cfg(any(
+    feature = "zenoh-transport",
+    feature = "zenoh-zero-copy",
+    feature = "zenoh-owned-frame"
+))]
 use up_transport_zenoh::zenoh_config::Config as ZenohConfig;
+#[cfg(any(
+    feature = "zenoh-transport",
+    feature = "zenoh-zero-copy",
+    feature = "zenoh-owned-frame"
+))]
+use up_transport_zenoh::UPTransportZenoh;
 #[cfg(feature = "zenoh-owned-frame")]
 use up_transport_zenoh::ZenohOwnedCore;
 #[cfg(feature = "zenoh-zero-copy")]
@@ -84,8 +98,8 @@ const NATIVE_FLOW_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"UPNF");
 #[derive(Parser)]
 #[command()]
 struct Cli {
-    #[arg(long = "route-family", value_enum, default_value = "owned-frame")]
-    mode: FlowMode,
+    #[arg(long = "route-family", value_enum)]
+    mode: Option<FlowMode>,
     #[arg(long, value_enum, default_value = "zenoh", hide = true)]
     transport: FlowTransport,
     #[arg(long = "encoding", value_enum, default_value = "protobuf")]
@@ -148,9 +162,64 @@ struct Cli {
 async fn main() -> Result<(), UStatus> {
     let cli = Cli::parse();
     match cli.mode {
-        FlowMode::OwnedFrame => run_owned(&cli).await,
-        FlowMode::CopyMinimized => run_zero_copy(&cli).await,
+        Some(FlowMode::OwnedFrame) => run_owned(&cli).await,
+        Some(FlowMode::CopyMinimized) => run_zero_copy(&cli).await,
+        None => run_classic_zenoh_notifier(&cli).await,
     }
+}
+
+async fn run_classic_zenoh_notifier(cli: &Cli) -> Result<(), UStatus> {
+    let transport: Arc<dyn UTransport> = Arc::new(
+        UPTransportZenoh::new(classic_zenoh_config(cli)?, local_uri(cli)?.to_string())
+            .await
+            .map_err(|error| UStatus::fail_with_code(UCode::Internal, error.to_string()))?,
+    );
+    let source = topic_uri(cli.local_authority.as_str(), cli.topic_resource_id)?;
+    let sink = endpoint_uri(cli.peer_authority.as_str())?;
+    let mut sent_count = 0_usize;
+    loop {
+        if sent_count >= cli.send_count.max(1) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(cli.send_interval_ms)).await;
+        let now = Local::now();
+        let mut builder = UMessageBuilder::notification(source.clone(), sink.clone());
+        let message = if cli.wire_format == FlowWireFormat::Protobuf {
+            let payload = protobuf_payload(&Timer {
+                time: Some(TimeOfDay {
+                    hours: now.hour() as i32,
+                    minutes: now.minute() as i32,
+                    seconds: now.second() as i32,
+                    nanos: now.nanosecond() as i32,
+                    ..Default::default()
+                })
+                .into(),
+                ..Default::default()
+            });
+            builder
+                .build_with_payload(payload, UPayloadFormat::Protobuf)
+                .map_err(|error| UStatus::fail_with_code(UCode::Internal, error.to_string()))?
+        } else {
+            builder
+                .build_with_payload_encoding(payload_bytes(cli)?, payload_encoding(cli.wire_format))
+                .map_err(|error| {
+                    invalid_config(format!("failed to build notification message: {error:?}"))
+                })?
+        };
+        transport.send(message).await?;
+        sent_count += 1;
+    }
+    println!("FLOW sent_payload_bytes=protobuf role=classic_notify_sender");
+    Ok(())
+}
+
+fn classic_zenoh_config(cli: &Cli) -> Result<ZenohConfig, UStatus> {
+    ZenohConfig::from_file(&cli.zenoh_config).map_err(|error| {
+        UStatus::fail_with_code(
+            UCode::InvalidArgument,
+            format!("failed to load zenoh config {}: {error}", cli.zenoh_config),
+        )
+    })
 }
 
 async fn run_owned(cli: &Cli) -> Result<(), UStatus> {

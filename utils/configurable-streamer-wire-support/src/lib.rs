@@ -60,6 +60,8 @@ use up_streamer::OwnedFrameEndpoint;
     feature = "lola-transport"
 ))]
 use up_streamer::ZeroCopyFrameEndpoint;
+#[cfg(feature = "owned-frame-transport")]
+use up_streamer::Endpoint;
 use up_streamer::{CopyMinimizedRouteOptions, UStreamer};
 
 #[cfg(feature = "iceoryx2-owned-frame")]
@@ -538,6 +540,198 @@ pub async fn add_owned_route_wire_format(
     )?;
     streamer
         .add_owned_route_ref(ingress.endpoint(), egress.endpoint())
+        .await
+}
+
+/// R3A: pairs a classic `UTransport` endpoint with a copy-minimized endpoint
+/// (the classic<->LoLa / classic<->iceoryx2 route kind). The wire format
+/// applies to the selected leg only.
+#[cfg(feature = "owned-frame-transport")]
+pub async fn add_classic_to_copy_minimized_route_wire_format(
+    streamer: &mut UStreamer,
+    ingress: &Endpoint,
+    egress: &RouteWireEndpoint,
+    route_wire_format: RouteWireFormat,
+    options: CopyMinimizedRouteOptions,
+) -> Result<(), UStatus> {
+    validate_route_wire_formats(
+        egress.route_wire_format(),
+        egress.route_wire_format(),
+        route_wire_format,
+    )?;
+    #[allow(unreachable_patterns)]
+    match egress {
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohNative(right) => {
+            streamer
+                .add_classic_to_copy_minimized_route_ref(ingress, right, options)
+                .await
+        }
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohProtobuf(right) => {
+            streamer
+                .add_classic_to_copy_minimized_route_ref(ingress, right, options)
+                .await
+        }
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohXcdrV2(right) => {
+            streamer
+                .add_classic_to_copy_minimized_route_ref(ingress, right, options)
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2Native(right) => {
+            streamer
+                .add_classic_to_copy_minimized_route_ref(ingress, right, options)
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2Protobuf(right) => {
+            streamer
+                .add_classic_to_copy_minimized_route_ref(ingress, right, options)
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2XcdrV2(right) => {
+            streamer
+                .add_classic_to_copy_minimized_route_ref(ingress, right, options)
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaNative(right) => {
+            streamer
+                .add_classic_to_copy_minimized_route_ref(ingress, right, options)
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaProtobuf(right) => {
+            streamer
+                .add_classic_to_copy_minimized_route_ref(ingress, right, options)
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaXcdrV2(right) => {
+            streamer
+                .add_classic_to_copy_minimized_route_ref(ingress, right, options)
+                .await
+        }
+        _ => Err(invalid_config(
+            "owned-frame to copy_minimized route uses an unsupported route endpoint combination",
+        )),
+    }
+}
+
+/// R3A: pairs a copy-minimized endpoint with a classic `UTransport` endpoint.
+#[cfg(feature = "owned-frame-transport")]
+pub async fn add_copy_minimized_to_classic_route_wire_format(
+    streamer: &mut UStreamer,
+    ingress: &RouteWireEndpoint,
+    egress: &Endpoint,
+    route_wire_format: RouteWireFormat,
+) -> Result<(), UStatus> {
+    validate_route_wire_formats(
+        ingress.route_wire_format(),
+        ingress.route_wire_format(),
+        route_wire_format,
+    )?;
+    #[allow(unreachable_patterns)]
+    match ingress {
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohNative(right) => {
+            streamer
+                .add_copy_minimized_to_classic_route_ref(right, egress)
+                .await
+        }
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohProtobuf(right) => {
+            streamer
+                .add_copy_minimized_to_classic_route_ref(right, egress)
+                .await
+        }
+        #[cfg(feature = "zenoh-zero-copy")]
+        RouteWireEndpoint::ZenohXcdrV2(right) => {
+            streamer
+                .add_copy_minimized_to_classic_route_ref(right, egress)
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2Native(right) => {
+            streamer
+                .add_copy_minimized_to_classic_route_ref(right, egress)
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2Protobuf(right) => {
+            streamer
+                .add_copy_minimized_to_classic_route_ref(right, egress)
+                .await
+        }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        RouteWireEndpoint::Iceoryx2XcdrV2(right) => {
+            streamer
+                .add_copy_minimized_to_classic_route_ref(right, egress)
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaNative(right) => {
+            streamer
+                .add_copy_minimized_to_classic_route_ref(right, egress)
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaProtobuf(right) => {
+            streamer
+                .add_copy_minimized_to_classic_route_ref(right, egress)
+                .await
+        }
+        #[cfg(feature = "lola-transport")]
+        RouteWireEndpoint::LolaXcdrV2(right) => {
+            streamer
+                .add_copy_minimized_to_classic_route_ref(right, egress)
+                .await
+        }
+        _ => Err(invalid_config(
+            "owned-frame to copy_minimized route uses an unsupported route endpoint combination",
+        )),
+    }
+}
+
+/// R3A: pairs a classic `UTransport` endpoint with an owned-frame endpoint.
+/// The classic leg has no wire format; `route_wire_format` applies to the
+/// selected leg only and must match the owned endpoint's declared format.
+#[cfg(feature = "owned-frame-transport")]
+pub async fn add_classic_to_owned_route_wire_format(
+    streamer: &mut UStreamer,
+    ingress: &Endpoint,
+    egress: &RouteOwnedEndpoint,
+    route_wire_format: RouteWireFormat,
+) -> Result<(), UStatus> {
+    validate_route_wire_formats(
+        egress.route_wire_format(),
+        egress.route_wire_format(),
+        route_wire_format,
+    )?;
+    streamer
+        .add_classic_to_owned_route_ref(ingress, egress.endpoint())
+        .await
+}
+
+/// R3A: pairs an owned-frame endpoint with a classic `UTransport` endpoint.
+/// See [`add_classic_to_owned_route_wire_format`] for the wire-format rule.
+#[cfg(feature = "owned-frame-transport")]
+pub async fn add_owned_to_classic_route_wire_format(
+    streamer: &mut UStreamer,
+    ingress: &RouteOwnedEndpoint,
+    egress: &Endpoint,
+    route_wire_format: RouteWireFormat,
+) -> Result<(), UStatus> {
+    validate_route_wire_formats(
+        ingress.route_wire_format(),
+        ingress.route_wire_format(),
+        route_wire_format,
+    )?;
+    streamer
+        .add_owned_to_classic_route_ref(ingress.endpoint(), egress)
         .await
 }
 

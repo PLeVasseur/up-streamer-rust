@@ -28,7 +28,7 @@ name = "someip_publisher"
 required-features = ["vsomeip-transport"]
 
 [[bin]]
-name = "someip_service"
+name = "someip_server"
 required-features = ["vsomeip-transport"]
 
 [[bin]]
@@ -44,20 +44,16 @@ name = "zenoh_publisher"
 required-features = ["zenoh-transport"]
 
 [[bin]]
-name = "zenoh_service"
+name = "zenoh_server"
 required-features = ["zenoh-transport"]
 
 [[bin]]
-name = "zenoh_server"
-required-features = ["zenoh-selected-wire"]
-
-[[bin]]
 name = "zenoh_notifier"
-required-features = ["zenoh-selected-wire"]
+required-features = ["zenoh-transport"]
 
 [[bin]]
 name = "zenoh_notifyee"
-required-features = ["zenoh-selected-wire"]
+required-features = ["zenoh-transport"]
 
 [[bin]]
 name = "iceoryx2_publisher"
@@ -120,7 +116,15 @@ name = "mqtt_publisher"
 required-features = ["mqtt-transport"]
 
 [[bin]]
-name = "mqtt_service"
+name = "mqtt_notifier"
+required-features = ["mqtt-transport"]
+
+[[bin]]
+name = "mqtt_notifyee"
+required-features = ["mqtt-transport"]
+
+[[bin]]
+name = "mqtt_server"
 required-features = ["mqtt-transport"]
 
 [[bin]]

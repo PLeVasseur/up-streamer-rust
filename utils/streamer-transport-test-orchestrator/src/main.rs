@@ -30,6 +30,8 @@ const UE_VERSION_MAJOR: u8 = 1;
 const TOPIC_RESOURCE_ID: u16 = 0x8001;
 const METHOD_RESOURCE_ID: u16 = 0x1000;
 const ZENOH_ENDPOINT: &str = "tcp/127.0.0.1:7447";
+const ZENOH_SOURCE_PORT: u16 = 7447;
+const ZENOH_SINK_PORT: u16 = 7448;
 const READY_STREAMER: &str = "READY streamer_initialized";
 const READY_LISTENER: &str = "READY listener_registered";
 const LOLA_MAX_SAMPLES: usize = 16;
@@ -37,11 +39,17 @@ const LOLA_SAMPLE_SLOTS: usize = 128;
 const LOLA_QUEUE_SIZE: usize = 128;
 const LOLA_MAX_SUBSCRIBERS: usize = 8;
 const LOLA_LISTENER_STABILIZATION_MS: u64 = 500;
-const LOLA_ROW_COOLDOWN_MS: u64 = 0;
+const LOLA_ROW_COOLDOWN_MS: u64 = 500;
 const LOLA_ROW_RETRIES: usize = 1;
 const ICEORYX2_ROOT_PATH: &str = "/tmp/up-streamer-iceoryx2";
 const NAMESPACE_TMP_SIZE: &str = "1g";
 const NAMESPACE_SHM_SIZE: &str = "2g";
+const MQTT_BROKER_PORT: u16 = 1883;
+const ZENOH_LISTENER_STABILIZATION_MS: u64 = 1_000;
+const VSOMEIP_LISTENER_STABILIZATION_MS: u64 = 1_000;
+const VSOMEIP_DUMMY_SERVICE_ID: u16 = 0x7ffe;
+const VSOMEIP_DUMMY_INSTANCE_ID: u16 = 0x0001;
+const UNSUPPORTED_VSOMEIP_NOTIFICATION_REASON: &str = "vSomeIP transport does not implement uProtocol Notification; SOME/IP MT_NOTIFICATION is mapped only to uProtocol Publish";
 
 #[derive(Debug, Parser)]
 #[command(name = "streamer-transport-test-orchestrator")]
@@ -154,6 +162,72 @@ struct RunningProcess {
     child: Child,
 }
 
+struct ZenohConfigPaths {
+    source_router: PathBuf,
+    source_client: PathBuf,
+    sink_router: PathBuf,
+    sink_client: PathBuf,
+}
+
+struct VsomeipConfigPaths {
+    streamer: PathBuf,
+    source: PathBuf,
+    sink: PathBuf,
+}
+
+impl VsomeipConfigPaths {
+    fn new(row_dir: &Path) -> Self {
+        Self {
+            streamer: row_dir.join("vsomeip-streamer.json"),
+            source: row_dir.join("vsomeip-source.json"),
+            sink: row_dir.join("vsomeip-sink.json"),
+        }
+    }
+
+    fn role_config(&self, active: bool) -> &Path {
+        if active {
+            &self.source
+        } else {
+            &self.sink
+        }
+    }
+}
+
+impl ZenohConfigPaths {
+    fn new(row_dir: &Path) -> Self {
+        Self {
+            source_router: row_dir.join("zenoh-source-router.json5"),
+            source_client: row_dir.join("zenoh-source-client.json5"),
+            sink_router: row_dir.join("zenoh-sink-router.json5"),
+            sink_client: row_dir.join("zenoh-sink-client.json5"),
+        }
+    }
+
+    fn router_for_side(&self, side: &str) -> &Path {
+        match side {
+            "source" => &self.source_router,
+            "sink" => &self.sink_router,
+            _ => unreachable!("unknown side"),
+        }
+    }
+
+    fn client_for_active(&self, active: bool) -> &Path {
+        if active {
+            &self.source_client
+        } else {
+            &self.sink_client
+        }
+    }
+
+    fn client_for_side(&self, side: &str) -> &Path {
+        match side {
+            "source" => &self.source_client,
+            "sink" => &self.sink_client,
+            _ => unreachable!("unknown side"),
+        }
+    }
+}
+
 impl Drop for RunningProcess {
     fn drop(&mut self) {
         terminate(self);
@@ -219,7 +293,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("unable to create {}", artifacts_root.display()))?;
 
     if !cli.skip_build {
-        build_required_binaries(&repo_root)?;
+        build_required_binaries(&repo_root, &selected_rows)?;
     }
 
     let mut results = Vec::new();
@@ -403,19 +477,19 @@ fn support_status(row: &MatrixRow) -> SupportStatus {
             "source and sink endpoint profiles are identical; no bridge boundary is under test",
         );
     }
-    if row.source.physical == PhysicalTransport::Vsomeip
-        || row.sink.physical == PhysicalTransport::Vsomeip
+    if row.role == RoleStyle::NotifierNotifyee
+        && (row.source.physical == PhysicalTransport::Vsomeip
+            || row.sink.physical == PhysicalTransport::Vsomeip)
     {
-        return unsupported("configurable-streamer has no vSomeIP endpoint in its config schema");
+        return unsupported(UNSUPPORTED_VSOMEIP_NOTIFICATION_REASON);
     }
     if row.source.kind == EndpointKind::Classic || row.sink.kind == EndpointKind::Classic {
-        if row.encoding != WireEncoding::Protobuf {
-            return unsupported("classic UTransport examples in this repo carry protobuf UMessages, not native selected-wire or XCDRv2 frames");
-        }
-        if row.role == RoleStyle::NotifierNotifyee {
-            return unsupported("classic MQTT5/Zenoh/vSomeIP example surface has publisher/subscriber and client/server roles, but no notifier/notifyee binaries");
-        }
-        return unsupported("classic endpoint rows are visible but are not executed by this selected-wire matrix harness yet; keep using the existing classic examples/smoke coverage until a classic matrix runner is added here");
+        return SupportStatus {
+            classification: RowClassification::Pass,
+            reason:
+                "classic row has configurable-streamer bridge route and stand-alone role binaries"
+                    .to_string(),
+        };
     }
     if !row.source.kind.is_selected_wire() || !row.sink.kind.is_selected_wire() {
         return unsupported("row does not resolve to selected-wire endpoint profiles");
@@ -519,6 +593,24 @@ fn run_row_attempt(
         }
         Err(_) => None,
     };
+    let vsomeip_lib_dir = match detect_vsomeip_lib_dir(repo_root) {
+        Ok(path) => Some(path),
+        Err(error) if row.uses_vsomeip() => {
+            return Ok(row_result(
+                row,
+                RowClassification::Blocked,
+                format!(
+                    "vSomeIP row {} requires libvsomeip3.so.3 on LD_LIBRARY_PATH: {error:#}",
+                    row.id
+                ),
+                Some(row_dir),
+                None,
+                lola_manifest_path,
+                logs,
+            ));
+        }
+        Err(_) => None,
+    };
     let iceoryx2_root = if row.uses_iceoryx2() {
         Some(PathBuf::from(ICEORYX2_ROOT_PATH))
     } else {
@@ -528,6 +620,7 @@ fn run_row_attempt(
         row,
         iceoryx2_root.as_deref(),
         lola_bridge_lib_dir.as_deref(),
+        vsomeip_lib_dir.as_deref(),
     );
     let mut namespace = start_namespace_holder(&row_dir)?;
     logs.insert(
@@ -535,16 +628,36 @@ fn run_row_attempt(
         namespace.log_path.display().to_string(),
     );
 
+    let mut mqtt_broker = if row.uses_mqtt5() {
+        let broker = start_mqtt_broker(&row_dir, &process_env, &namespace)?;
+        logs.insert(
+            "mqtt_broker".to_string(),
+            broker.log_path.display().to_string(),
+        );
+        Some(broker)
+    } else {
+        None
+    };
+
     let config_path = row_dir.join("configurable-streamer.json");
+    let zenoh_config_paths = ZenohConfigPaths::new(&row_dir);
+    let vsomeip_config_paths = VsomeipConfigPaths::new(&row_dir);
+    write_zenoh_router_config(&zenoh_config_paths.source_router, ZENOH_SOURCE_PORT)?;
+    write_zenoh_router_config(&zenoh_config_paths.sink_router, ZENOH_SINK_PORT)?;
+    write_zenoh_client_config(&zenoh_config_paths.source_client, ZENOH_SOURCE_PORT)?;
+    write_zenoh_client_config(&zenoh_config_paths.sink_client, ZENOH_SINK_PORT)?;
+    if row.uses_vsomeip() {
+        write_vsomeip_configs(row, &vsomeip_config_paths)?;
+    }
     write_config(
         repo_root,
         row,
         &config_path,
+        &zenoh_config_paths,
+        &vsomeip_config_paths,
         lola_manifest_path.as_deref(),
         &lola_run_namespace,
     )?;
-    let zenoh_client_config_path = row_dir.join("zenoh-client.json5");
-    write_zenoh_client_config(&zenoh_client_config_path)?;
 
     let mut streamer = spawn_process(
         "streamer",
@@ -567,7 +680,8 @@ fn run_row_attempt(
         let passive_spec = role_command(
             row,
             false,
-            &zenoh_client_config_path,
+            &zenoh_config_paths,
+            &vsomeip_config_paths,
             lola_manifest_path.as_deref(),
             &lola_run_namespace,
             cli,
@@ -589,11 +703,18 @@ fn run_row_attempt(
         if row.uses_lola() {
             thread::sleep(Duration::from_millis(LOLA_LISTENER_STABILIZATION_MS));
         }
+        if row.sink.physical == PhysicalTransport::Zenoh {
+            thread::sleep(Duration::from_millis(ZENOH_LISTENER_STABILIZATION_MS));
+        }
+        if row.sink.physical == PhysicalTransport::Vsomeip {
+            thread::sleep(Duration::from_millis(VSOMEIP_LISTENER_STABILIZATION_MS));
+        }
 
         let active_spec = role_command(
             row,
             true,
-            &zenoh_client_config_path,
+            &zenoh_config_paths,
+            &vsomeip_config_paths,
             lola_manifest_path.as_deref(),
             &lola_run_namespace,
             cli,
@@ -614,11 +735,23 @@ fn run_row_attempt(
             remaining_timeout(started, cli.scenario_timeout_secs, "active")?,
         )?;
         assert_success(&mut active)?;
-        wait_for_exit(
-            &mut passive,
-            remaining_timeout(started, cli.scenario_timeout_secs, "passive")?,
-        )?;
-        assert_success(&mut passive)?;
+        if !row.uses_classic() {
+            wait_for_exit(
+                &mut passive,
+                remaining_timeout(started, cli.scenario_timeout_secs, "passive")?,
+            )?;
+            assert_success(&mut passive)?;
+        } else {
+            wait_for_any_marker(
+                &passive.log_path,
+                passive_observation_markers(row),
+                remaining_timeout(
+                    started,
+                    cli.scenario_timeout_secs,
+                    "classic passive observation",
+                )?,
+            )?;
+        }
 
         validate_flow_logs(row, &active.log_path, &passive.log_path)?;
         terminate(&mut passive);
@@ -627,6 +760,9 @@ fn run_row_attempt(
     })();
 
     terminate(&mut streamer);
+    if let Some(broker) = &mut mqtt_broker {
+        terminate(broker);
+    }
     terminate(&mut namespace);
     if row.uses_lola() {
         thread::sleep(Duration::from_millis(LOLA_ROW_COOLDOWN_MS));
@@ -655,8 +791,10 @@ fn run_row_attempt(
     }
 }
 
-fn build_required_binaries(repo_root: &Path) -> Result<()> {
+fn build_required_binaries(repo_root: &Path, rows: &[MatrixRow]) -> Result<()> {
     let common_args = cargo_patch_args(repo_root);
+    let configurable_features = configurable_streamer_features(rows).join(",");
+    let example_features = example_streamer_features(rows).join(",");
     run_cargo(
         repo_root,
         [
@@ -664,7 +802,7 @@ fn build_required_binaries(repo_root: &Path) -> Result<()> {
             "-p",
             "configurable-streamer",
             "--features",
-            "experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy,lola-transport,zenoh-owned-frame,iceoryx2-owned-frame,lola-owned-frame",
+            &configurable_features,
             "--no-default-features",
         ],
         &common_args,
@@ -677,12 +815,45 @@ fn build_required_binaries(repo_root: &Path) -> Result<()> {
             "example-streamer-uses",
             "--bins",
             "--features",
-            "zenoh-selected-wire,iceoryx2-selected-wire,lola-selected-wire",
+            &example_features,
             "--no-default-features",
         ],
         &common_args,
     )?;
     Ok(())
+}
+
+fn configurable_streamer_features(rows: &[MatrixRow]) -> Vec<&'static str> {
+    let mut features = vec![
+        "experimental-copy-minimized-routing",
+        "zenoh-zero-copy",
+        "iceoryx2-zero-copy",
+        "zenoh-owned-frame",
+        "iceoryx2-owned-frame",
+    ];
+    if rows.iter().any(MatrixRow::uses_lola) {
+        features.extend(["lola-transport", "lola-owned-frame"]);
+    }
+    if rows.iter().any(MatrixRow::uses_vsomeip) {
+        features.extend(["vsomeip-transport", "bundled-vsomeip"]);
+    }
+    features
+}
+
+fn example_streamer_features(rows: &[MatrixRow]) -> Vec<&'static str> {
+    let mut features = vec![
+        "zenoh-transport",
+        "zenoh-selected-wire",
+        "iceoryx2-selected-wire",
+        "mqtt-transport",
+    ];
+    if rows.iter().any(MatrixRow::uses_lola) {
+        features.push("lola-selected-wire");
+    }
+    if rows.iter().any(MatrixRow::uses_vsomeip) {
+        features.extend(["vsomeip-transport", "bundled-vsomeip"]);
+    }
+    features
 }
 
 fn run_cargo<const N: usize>(
@@ -738,6 +909,21 @@ fn cargo_patch_args(repo_root: &Path) -> Vec<String> {
             "up-transport-iceoryx2-rust",
             "../up-transport-iceoryx2-rust",
         ),
+        (
+            "https://github.com/PLeVasseur/up-client-vsomeip-rust.git",
+            "up-transport-vsomeip",
+            "../up-transport-vsomeip-rust/up-transport-vsomeip",
+        ),
+        (
+            "https://github.com/PLeVasseur/up-client-vsomeip-rust.git",
+            "vsomeip-proc-macro",
+            "../up-transport-vsomeip-rust/vsomeip-proc-macro",
+        ),
+        (
+            "https://github.com/PLeVasseur/up-client-vsomeip-rust.git",
+            "vsomeip-sys",
+            "../up-transport-vsomeip-rust/vsomeip-sys",
+        ),
     ];
     let mut args = Vec::new();
     for (source, package, path) in siblings {
@@ -753,6 +939,8 @@ fn write_config(
     repo_root: &Path,
     row: &MatrixRow,
     config_path: &Path,
+    zenoh_config_paths: &ZenohConfigPaths,
+    vsomeip_config_paths: &VsomeipConfigPaths,
     lola_manifest_path: Option<&Path>,
     lola_run_namespace: &str,
 ) -> Result<()> {
@@ -765,63 +953,99 @@ fn write_config(
     let sink_lola = lola_info(row, AUTHORITY_B, "sink", lola_run_namespace);
 
     let mut zenoh_endpoints = Vec::new();
+    let mut mqtt_endpoints = Vec::new();
     let mut iceoryx2_endpoints = Vec::new();
     let mut lola_endpoints = Vec::new();
+    let mut vsomeip_endpoints = Vec::new();
 
     push_endpoint(
         &mut zenoh_endpoints,
+        &mut mqtt_endpoints,
         &mut iceoryx2_endpoints,
         &mut lola_endpoints,
+        &mut vsomeip_endpoints,
         row.source,
         "source",
         AUTHORITY_A,
         &source_endpoint,
         &sink_endpoint,
         row.encoding,
+        zenoh_config_paths,
         source_lola.as_ref(),
         lola_manifest_path,
         row.role,
     );
     push_endpoint(
         &mut zenoh_endpoints,
+        &mut mqtt_endpoints,
         &mut iceoryx2_endpoints,
         &mut lola_endpoints,
+        &mut vsomeip_endpoints,
         row.sink,
         "sink",
         AUTHORITY_B,
         &sink_endpoint,
         &source_endpoint,
         row.encoding,
+        zenoh_config_paths,
         sink_lola.as_ref(),
         lola_manifest_path,
         row.role,
     );
 
+    let mut transports = json!({
+        "zenoh": { "config_file": zenoh_config, "endpoints": zenoh_endpoints },
+        "mqtt": { "config_file": mqtt_config, "endpoints": mqtt_endpoints },
+    });
+    if !iceoryx2_endpoints.is_empty() {
+        transports["iceoryx2"] = json!({ "endpoints": iceoryx2_endpoints });
+    }
+    if !lola_endpoints.is_empty() {
+        transports["lola"] = json!({ "endpoints": lola_endpoints });
+    }
+    if !vsomeip_endpoints.is_empty() {
+        transports["vsomeip"] = json!({
+            "config_file": vsomeip_config_paths.streamer,
+            "remote_authority": vsomeip_remote_authority(row),
+            "endpoints": vsomeip_endpoints
+        });
+    }
+
+    let streamer_uuri = streamer_uuri_config(row);
     let config = json!({
         "up_streamer_config": { "message_queue_size": 32 },
-        "streamer_uuri": { "authority": "authority-streamer", "ue_id": 78, "ue_version_major": 1 },
+        "streamer_uuri": streamer_uuri,
         "usubscription_config": { "mode": "static_file", "file_path": subscription_data },
-        "transports": {
-            "zenoh": { "config_file": zenoh_config, "endpoints": zenoh_endpoints },
-            "mqtt": { "config_file": mqtt_config, "endpoints": [] },
-            "iceoryx2": { "endpoints": iceoryx2_endpoints },
-            "lola": { "endpoints": lola_endpoints },
-        }
+        "transports": transports
     });
     fs::write(config_path, serde_json::to_string_pretty(&config)?)
         .with_context(|| format!("unable to write {}", config_path.display()))
 }
 
+fn streamer_uuri_config(row: &MatrixRow) -> serde_json::Value {
+    if row.role == RoleStyle::ClientServerRpc && row.source.physical == PhysicalTransport::Vsomeip {
+        return json!({
+            "authority": AUTHORITY_B,
+            "ue_id": UE_ID,
+            "ue_version_major": UE_VERSION_MAJOR,
+        });
+    }
+    json!({ "authority": "authority-streamer", "ue_id": 78, "ue_version_major": 1 })
+}
+
 fn push_endpoint(
     zenoh_endpoints: &mut Vec<serde_json::Value>,
+    mqtt_endpoints: &mut Vec<serde_json::Value>,
     iceoryx2_endpoints: &mut Vec<serde_json::Value>,
     lola_endpoints: &mut Vec<serde_json::Value>,
+    vsomeip_endpoints: &mut Vec<serde_json::Value>,
     profile: EndpointProfile,
     side: &str,
     authority: &str,
     endpoint: &str,
     forward_endpoint: &str,
     encoding: WireEncoding,
+    zenoh_config_paths: &ZenohConfigPaths,
     lola: Option<&LolaEndpointInfo>,
     lola_manifest_path: Option<&Path>,
     role: RoleStyle,
@@ -834,6 +1058,16 @@ fn push_endpoint(
     });
     if profile.kind == EndpointKind::CopyMinimized {
         value["copy_minimized_payload_alignment"] = json!(8);
+    }
+    if profile.physical == PhysicalTransport::Zenoh {
+        value["zenoh_config_file"] = json!(zenoh_config_paths
+            .router_for_side(side)
+            .display()
+            .to_string());
+        value["zenoh_client_config_file"] = json!(zenoh_config_paths
+            .client_for_side(side)
+            .display()
+            .to_string());
     }
     if let Some(lola) = lola {
         value["lola_instance_specifier"] = json!(lola.instance_specifier);
@@ -863,12 +1097,86 @@ fn push_endpoint(
             });
         }
     }
+    if profile.physical == PhysicalTransport::Vsomeip {
+        value["assumed_payload_encoding"] = json!(encoding.payload_encoding_literal());
+        value["assumed_payload_content_type"] = json!(encoding.payload_encoding_content_type());
+    }
     match profile.physical {
         PhysicalTransport::Zenoh => zenoh_endpoints.push(value),
+        PhysicalTransport::Mqtt5 => mqtt_endpoints.push(value),
         PhysicalTransport::Iceoryx2 => iceoryx2_endpoints.push(value),
         PhysicalTransport::Lola => lola_endpoints.push(value),
-        PhysicalTransport::Mqtt5 | PhysicalTransport::Vsomeip => {}
+        PhysicalTransport::Vsomeip => vsomeip_endpoints.push(value),
     }
+}
+
+fn vsomeip_remote_authority(row: &MatrixRow) -> &'static str {
+    if row.source.physical == PhysicalTransport::Vsomeip {
+        AUTHORITY_A
+    } else if row.sink.physical == PhysicalTransport::Vsomeip {
+        AUTHORITY_B
+    } else {
+        AUTHORITY_B
+    }
+}
+
+fn write_vsomeip_configs(row: &MatrixRow, paths: &VsomeipConfigPaths) -> Result<()> {
+    let network = format!("up_vs_{:08x}", stable_hash(&row.id));
+    let base = 0x1000_u16 + ((row.ordinal as u16) * 3);
+    let (service_id, instance_id) = vsomeip_config_service(row);
+    write_vsomeip_config(
+        &paths.streamer,
+        &network,
+        "streamer_app",
+        base,
+        service_id,
+        instance_id,
+    )?;
+    write_vsomeip_config(
+        &paths.source,
+        &network,
+        "source_app",
+        base + 1,
+        service_id,
+        instance_id,
+    )?;
+    write_vsomeip_config(
+        &paths.sink,
+        &network,
+        "sink_app",
+        base + 2,
+        service_id,
+        instance_id,
+    )?;
+    Ok(())
+}
+
+fn vsomeip_config_service(row: &MatrixRow) -> (u16, u16) {
+    let service_id = (UE_ID & 0xffff) as u16;
+    let instance_id = ((UE_ID >> 16) as u16).max(1);
+    if row.role == RoleStyle::ClientServerRpc && row.source.physical == PhysicalTransport::Vsomeip {
+        (service_id, instance_id)
+    } else {
+        (VSOMEIP_DUMMY_SERVICE_ID, VSOMEIP_DUMMY_INSTANCE_ID)
+    }
+}
+
+fn write_vsomeip_config(
+    path: &Path,
+    network: &str,
+    app_name: &str,
+    app_id: u16,
+    service_id: u16,
+    instance_id: u16,
+) -> Result<()> {
+    let config = json!({
+        "unicast": "127.0.0.1",
+        "network": network,
+        "applications": [{ "name": app_name, "id": format!("0x{app_id:04x}") }],
+        "services": [{ "service": format!("0x{service_id:04x}"), "instance": format!("0x{instance_id:04x}") }]
+    });
+    fs::write(path, serde_json::to_string_pretty(&config)?)
+        .with_context(|| format!("unable to write {}", path.display()))
 }
 
 fn write_lola_manifest(row: &MatrixRow, path: &Path, lola_run_namespace: &str) -> Result<()> {
@@ -918,22 +1226,45 @@ fn write_lola_manifest(row: &MatrixRow, path: &Path, lola_run_namespace: &str) -
         .with_context(|| format!("unable to write {}", path.display()))
 }
 
-fn write_zenoh_client_config(path: &Path) -> Result<()> {
-    let config = r#"{
-  mode: "client",
-  connect: {
-    endpoints: ["tcp/127.0.0.1:7447"],
-  },
-  scouting: {
-    multicast: {
+fn write_zenoh_router_config(path: &Path, port: u16) -> Result<()> {
+    let config = format!(
+        r#"{{
+  mode: "router",
+  listen: {{
+    endpoints: ["tcp/0.0.0.0:{port}"],
+  }},
+  scouting: {{
+    multicast: {{
       enabled: false,
-    },
-    gossip: {
+    }},
+    gossip: {{
       enabled: false,
-    },
-  },
+    }},
+  }},
+}}
+"#
+    );
+    fs::write(path, config).with_context(|| format!("unable to write {}", path.display()))
 }
-"#;
+
+fn write_zenoh_client_config(path: &Path, port: u16) -> Result<()> {
+    let config = format!(
+        r#"{{
+  mode: "client",
+  connect: {{
+    endpoints: ["tcp/127.0.0.1:{port}"],
+  }},
+  scouting: {{
+    multicast: {{
+      enabled: false,
+    }},
+    gossip: {{
+      enabled: false,
+    }},
+  }},
+}}
+"#
+    );
     fs::write(path, config).with_context(|| format!("unable to write {}", path.display()))
 }
 
@@ -981,7 +1312,8 @@ struct RoleCommand {
 fn role_command(
     row: &MatrixRow,
     active: bool,
-    zenoh_client_config: &Path,
+    zenoh_config_paths: &ZenohConfigPaths,
+    vsomeip_config_paths: &VsomeipConfigPaths,
     lola_manifest_path: Option<&Path>,
     lola_run_namespace: &str,
     cli: &Cli,
@@ -991,7 +1323,19 @@ fn role_command(
     let peer_authority = if active { AUTHORITY_B } else { AUTHORITY_A };
     let role_name = role_binary_suffix(row.role, active);
     let binary = binary_name(profile, role_name);
-    let mut args = if profile.physical == PhysicalTransport::Zenoh {
+    let zenoh_client_config = zenoh_config_paths.client_for_active(active);
+    let mut args = if profile.kind == EndpointKind::Classic {
+        classic_args(
+            row,
+            profile,
+            role_name,
+            local_authority,
+            peer_authority,
+            zenoh_client_config,
+            vsomeip_config_paths.role_config(active),
+            cli,
+        )
+    } else if profile.physical == PhysicalTransport::Zenoh {
         zenoh_args(
             row,
             role_name,
@@ -1022,6 +1366,391 @@ fn role_command(
         )?;
     }
     Ok(RoleCommand { binary, args })
+}
+
+fn classic_args(
+    row: &MatrixRow,
+    profile: EndpointProfile,
+    role_name: &str,
+    local_authority: &str,
+    peer_authority: &str,
+    zenoh_client_config: &Path,
+    vsomeip_config: &Path,
+    cli: &Cli,
+) -> Vec<String> {
+    match profile.physical {
+        PhysicalTransport::Zenoh => classic_zenoh_args(
+            row,
+            role_name,
+            local_authority,
+            peer_authority,
+            zenoh_client_config,
+            cli,
+        ),
+        PhysicalTransport::Mqtt5 => {
+            classic_mqtt_args(row, role_name, local_authority, peer_authority, cli)
+        }
+        PhysicalTransport::Vsomeip => classic_vsomeip_args(
+            row,
+            role_name,
+            local_authority,
+            peer_authority,
+            vsomeip_config,
+            cli,
+        ),
+        PhysicalTransport::Iceoryx2 | PhysicalTransport::Lola => {
+            unreachable!("iceoryx2/lola profiles are selected-wire only in this matrix")
+        }
+    }
+}
+
+fn classic_vsomeip_args(
+    row: &MatrixRow,
+    role_name: &str,
+    local_authority: &str,
+    peer_authority: &str,
+    vsomeip_config: &Path,
+    cli: &Cli,
+) -> Vec<String> {
+    let common_identity = [
+        "--uauthority".to_string(),
+        local_authority.to_string(),
+        "--uentity".to_string(),
+        format!("0x{UE_ID:X}"),
+        "--uversion".to_string(),
+        format!("0x{UE_VERSION_MAJOR:X}"),
+    ];
+    let common_transport = [
+        "--remote-authority".to_string(),
+        peer_authority.to_string(),
+        "--vsomeip-config".to_string(),
+        vsomeip_config.display().to_string(),
+        "--encoding".to_string(),
+        row.encoding.cli_value().to_string(),
+    ];
+
+    match role_name {
+        "publisher" => common_identity
+            .into_iter()
+            .chain(["--resource".to_string(), format!("0x{TOPIC_RESOURCE_ID:X}")])
+            .chain(common_transport)
+            .chain([
+                "--send-count".to_string(),
+                role_send_count(row, cli).to_string(),
+                "--send-interval-ms".to_string(),
+                cli.send_interval_ms.to_string(),
+                "--payload".to_string(),
+                row.id.clone(),
+            ])
+            .collect(),
+        "subscriber" => common_identity
+            .into_iter()
+            .chain(["--resource".to_string(), "0x0".to_string()])
+            .chain(common_transport)
+            .chain([
+                "--source-authority".to_string(),
+                peer_authority.to_string(),
+                "--source-uentity".to_string(),
+                format!("0x{UE_ID:X}"),
+                "--source-uversion".to_string(),
+                format!("0x{UE_VERSION_MAJOR:X}"),
+                "--source-resource".to_string(),
+                format!("0x{TOPIC_RESOURCE_ID:X}"),
+            ])
+            .collect(),
+        "client" => common_identity
+            .into_iter()
+            .chain(["--resource".to_string(), "0x0".to_string()])
+            .chain(common_transport)
+            .chain([
+                "--target-authority".to_string(),
+                peer_authority.to_string(),
+                "--target-uentity".to_string(),
+                format!("0x{UE_ID:X}"),
+                "--target-uversion".to_string(),
+                format!("0x{UE_VERSION_MAJOR:X}"),
+                "--target-resource".to_string(),
+                format!("0x{METHOD_RESOURCE_ID:X}"),
+                "--send-count".to_string(),
+                role_send_count(row, cli).to_string(),
+                "--send-interval-ms".to_string(),
+                cli.send_interval_ms.to_string(),
+                "--payload".to_string(),
+                row.id.clone(),
+            ])
+            .collect(),
+        "server" => common_identity
+            .into_iter()
+            .chain([
+                "--resource".to_string(),
+                format!("0x{METHOD_RESOURCE_ID:X}"),
+            ])
+            .chain(common_transport)
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn classic_zenoh_args(
+    row: &MatrixRow,
+    role_name: &str,
+    local_authority: &str,
+    peer_authority: &str,
+    zenoh_client_config: &Path,
+    cli: &Cli,
+) -> Vec<String> {
+    match role_name {
+        "publisher" => vec![
+            "--zenoh-config".into(),
+            zenoh_client_config.display().to_string(),
+            "--uauthority".into(),
+            local_authority.into(),
+            "--uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--resource".into(),
+            format!("0x{TOPIC_RESOURCE_ID:X}"),
+            "--send-count".into(),
+            role_send_count(row, cli).to_string(),
+            "--send-interval-ms".into(),
+            cli.send_interval_ms.to_string(),
+            "--encoding".into(),
+            row.encoding.cli_value().into(),
+            "--payload".into(),
+            row.id.clone(),
+        ],
+        "subscriber" => vec![
+            "--zenoh-config".into(),
+            zenoh_client_config.display().to_string(),
+            "--uauthority".into(),
+            local_authority.into(),
+            "--uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--resource".into(),
+            "0x0".into(),
+            "--source-authority".into(),
+            peer_authority.into(),
+            "--source-uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--source-uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--source-resource".into(),
+            format!("0x{TOPIC_RESOURCE_ID:X}"),
+            "--encoding".into(),
+            row.encoding.cli_value().into(),
+        ],
+        "client" => vec![
+            "--zenoh-config".into(),
+            zenoh_client_config.display().to_string(),
+            "--uauthority".into(),
+            local_authority.into(),
+            "--uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--resource".into(),
+            "0x0".into(),
+            "--target-authority".into(),
+            peer_authority.into(),
+            "--target-uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--target-uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--target-resource".into(),
+            format!("0x{METHOD_RESOURCE_ID:X}"),
+            "--send-count".into(),
+            role_send_count(row, cli).to_string(),
+            "--send-interval-ms".into(),
+            cli.send_interval_ms.to_string(),
+            "--encoding".into(),
+            row.encoding.cli_value().into(),
+            "--payload".into(),
+            row.id.clone(),
+        ],
+        "server" | "notifier" | "notifyee" => classic_generic_flow_args(
+            row,
+            local_authority,
+            peer_authority,
+            zenoh_client_config,
+            cli,
+        ),
+        _ => Vec::new(),
+    }
+}
+
+fn classic_generic_flow_args(
+    row: &MatrixRow,
+    local_authority: &str,
+    peer_authority: &str,
+    zenoh_client_config: &Path,
+    cli: &Cli,
+) -> Vec<String> {
+    vec![
+        "--local-authority".into(),
+        local_authority.into(),
+        "--peer-authority".into(),
+        peer_authority.into(),
+        "--ue-id".into(),
+        UE_ID.to_string(),
+        "--ue-version-major".into(),
+        UE_VERSION_MAJOR.to_string(),
+        "--topic-resource-id".into(),
+        TOPIC_RESOURCE_ID.to_string(),
+        "--method-resource-id".into(),
+        METHOD_RESOURCE_ID.to_string(),
+        "--send-count".into(),
+        role_send_count(row, cli).to_string(),
+        "--send-interval-ms".into(),
+        cli.send_interval_ms.to_string(),
+        "--timeout-ms".into(),
+        cli.timeout_ms.to_string(),
+        "--payload".into(),
+        row.id.clone(),
+        "--encoding".into(),
+        row.encoding.cli_value().into(),
+        "--zenoh-config".into(),
+        zenoh_client_config.display().to_string(),
+    ]
+}
+
+fn classic_mqtt_args(
+    row: &MatrixRow,
+    role_name: &str,
+    local_authority: &str,
+    peer_authority: &str,
+    cli: &Cli,
+) -> Vec<String> {
+    let broker_uri = format!("localhost:{MQTT_BROKER_PORT}");
+    match role_name {
+        "publisher" => vec![
+            "--uauthority".into(),
+            local_authority.into(),
+            "--uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--resource".into(),
+            format!("0x{TOPIC_RESOURCE_ID:X}"),
+            "--broker-uri".into(),
+            broker_uri,
+            "--send-count".into(),
+            role_send_count(row, cli).to_string(),
+            "--send-interval-ms".into(),
+            cli.send_interval_ms.to_string(),
+            "--encoding".into(),
+            row.encoding.cli_value().into(),
+            "--payload".into(),
+            row.id.clone(),
+        ],
+        "subscriber" => vec![
+            "--uauthority".into(),
+            local_authority.into(),
+            "--uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--resource".into(),
+            "0x0".into(),
+            "--source-authority".into(),
+            peer_authority.into(),
+            "--source-uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--source-uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--source-resource".into(),
+            format!("0x{TOPIC_RESOURCE_ID:X}"),
+            "--broker-uri".into(),
+            broker_uri,
+        ],
+        "client" => vec![
+            "--uauthority".into(),
+            local_authority.into(),
+            "--uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--resource".into(),
+            "0x0".into(),
+            "--target-authority".into(),
+            peer_authority.into(),
+            "--target-uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--target-uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--target-resource".into(),
+            format!("0x{METHOD_RESOURCE_ID:X}"),
+            "--broker-uri".into(),
+            broker_uri,
+            "--send-count".into(),
+            role_send_count(row, cli).to_string(),
+            "--send-interval-ms".into(),
+            cli.send_interval_ms.to_string(),
+            "--encoding".into(),
+            row.encoding.cli_value().into(),
+            "--payload".into(),
+            row.id.clone(),
+        ],
+        "server" => vec![
+            "--uauthority".into(),
+            local_authority.into(),
+            "--uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--resource".into(),
+            format!("0x{METHOD_RESOURCE_ID:X}"),
+            "--broker-uri".into(),
+            broker_uri,
+        ],
+        "notifier" => vec![
+            "--uauthority".into(),
+            local_authority.into(),
+            "--uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--resource".into(),
+            format!("0x{TOPIC_RESOURCE_ID:X}"),
+            "--sink-authority".into(),
+            peer_authority.into(),
+            "--sink-uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--broker-uri".into(),
+            broker_uri,
+            "--send-count".into(),
+            role_send_count(row, cli).to_string(),
+            "--send-interval-ms".into(),
+            cli.send_interval_ms.to_string(),
+            "--encoding".into(),
+            row.encoding.cli_value().into(),
+            "--payload".into(),
+            row.id.clone(),
+        ],
+        "notifyee" => vec![
+            "--uauthority".into(),
+            local_authority.into(),
+            "--uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--resource".into(),
+            "0x0".into(),
+            "--source-authority".into(),
+            peer_authority.into(),
+            "--source-uentity".into(),
+            format!("0x{UE_ID:X}"),
+            "--source-uversion".into(),
+            format!("0x{UE_VERSION_MAJOR:X}"),
+            "--source-resource".into(),
+            format!("0x{TOPIC_RESOURCE_ID:X}"),
+            "--broker-uri".into(),
+            broker_uri,
+        ],
+        _ => Vec::new(),
+    }
 }
 
 fn zenoh_args(
@@ -1250,6 +1979,9 @@ fn role_binary_suffix(role: RoleStyle, active: bool) -> &'static str {
 fn validate_flow_logs(row: &MatrixRow, active_log: &Path, passive_log: &Path) -> Result<()> {
     let active = fs::read_to_string(active_log).unwrap_or_default();
     let passive = fs::read_to_string(passive_log).unwrap_or_default();
+    if row.uses_classic() {
+        return validate_classic_aware_logs(row, &active, active_log, &passive, passive_log);
+    }
     match row.role {
         RoleStyle::PublisherSubscriber => {
             require_log(&active, "FLOW sent_payload_bytes", active_log)?;
@@ -1267,6 +1999,63 @@ fn validate_flow_logs(row: &MatrixRow, active_log: &Path, passive_log: &Path) ->
     Ok(())
 }
 
+fn validate_classic_aware_logs(
+    row: &MatrixRow,
+    active: &str,
+    active_log: &Path,
+    passive: &str,
+    passive_log: &Path,
+) -> Result<()> {
+    match row.role {
+        RoleStyle::PublisherSubscriber => {
+            require_any_log(
+                active,
+                &["Sending Publish message", "FLOW sent_payload_bytes"],
+                active_log,
+            )?;
+            require_any_log(
+                passive,
+                &[
+                    "PublishReceiver: Received a message",
+                    "FLOW observed_payload_bytes",
+                ],
+                passive_log,
+            )?;
+        }
+        RoleStyle::NotifierNotifyee => {
+            require_any_log(
+                active,
+                &["Sending Notification message", "FLOW sent_payload_bytes"],
+                active_log,
+            )?;
+            require_any_log(
+                passive,
+                &[
+                    "PublishReceiver: Received a message",
+                    "FLOW observed_payload_bytes",
+                ],
+                passive_log,
+            )?;
+        }
+        RoleStyle::ClientServerRpc => {
+            require_any_log(
+                active,
+                &[
+                    "ServiceResponseListener: Received a message",
+                    "FLOW observed_payload_bytes",
+                ],
+                active_log,
+            )?;
+            require_any_log(
+                passive,
+                &["Sending Response message", "FLOW observed_payload_bytes"],
+                passive_log,
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn require_log(contents: &str, marker: &str, path: &Path) -> Result<()> {
     if contents.contains(marker) {
         Ok(())
@@ -1274,6 +2063,18 @@ fn require_log(contents: &str, marker: &str, path: &Path) -> Result<()> {
         Err(anyhow!(
             "log {} did not contain marker {marker}",
             path.display()
+        ))
+    }
+}
+
+fn require_any_log(contents: &str, markers: &[&str], path: &Path) -> Result<()> {
+    if markers.iter().any(|marker| contents.contains(marker)) {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "log {} did not contain any marker from {:?}",
+            path.display(),
+            markers
         ))
     }
 }
@@ -1349,6 +2150,32 @@ fn start_namespace_holder(artifact_dir: &Path) -> Result<RunningProcess> {
     })
 }
 
+fn start_mqtt_broker(
+    artifact_dir: &Path,
+    env: &[(String, String)],
+    namespace: &RunningProcess,
+) -> Result<RunningProcess> {
+    let config_path = artifact_dir.join("mosquitto.conf");
+    fs::write(
+        &config_path,
+        format!(
+            "listener {MQTT_BROKER_PORT} 127.0.0.1\nallow_anonymous true\npersistence false\nlog_dest stdout\nuser root\n"
+        ),
+    )
+    .with_context(|| format!("unable to write {}", config_path.display()))?;
+    let broker = spawn_process(
+        "mqtt-broker",
+        Path::new("mosquitto"),
+        &["-c".to_string(), config_path.display().to_string()],
+        artifact_dir,
+        env,
+        artifact_dir,
+        Some(namespace),
+    )?;
+    thread::sleep(Duration::from_millis(250));
+    Ok(broker)
+}
+
 fn wait_for_path_or_exit(
     path: &Path,
     child: &mut Child,
@@ -1401,6 +2228,34 @@ fn wait_for_marker(path: &Path, marker: &str, timeout: Duration) -> Result<()> {
             ));
         }
         thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_any_marker(path: &Path, markers: &[&str], timeout: Duration) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let contents = fs::read_to_string(path).unwrap_or_default();
+        if markers.iter().any(|marker| contents.contains(marker)) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(anyhow!(
+                "timed out waiting for any marker from {:?} in {}",
+                markers,
+                path.display()
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn passive_observation_markers(row: &MatrixRow) -> &'static [&'static str] {
+    match row.role {
+        RoleStyle::PublisherSubscriber | RoleStyle::NotifierNotifyee => &[
+            "PublishReceiver: Received a message",
+            "FLOW observed_payload_bytes",
+        ],
+        RoleStyle::ClientServerRpc => &["Sending Response message", "FLOW observed_payload_bytes"],
     }
 }
 
@@ -1498,6 +2353,7 @@ fn row_env(
     row: &MatrixRow,
     iceoryx2_root: Option<&Path>,
     lola_bridge_lib_dir: Option<&Path>,
+    vsomeip_lib_dir: Option<&Path>,
 ) -> Vec<(String, String)> {
     let mut env = vec![
         (
@@ -1516,16 +2372,54 @@ fn row_env(
             format!("u{:08x}_", stable_hash(&row.id)),
         ));
     }
+    let mut ld_library_paths = Vec::new();
     if let Some(lib_dir) = lola_bridge_lib_dir {
+        ld_library_paths.push(lib_dir.display().to_string());
+    }
+    if let Some(lib_dir) = vsomeip_lib_dir {
+        ld_library_paths.push(lib_dir.display().to_string());
+        if let Some(install_path) = lib_dir.parent() {
+            env.push((
+                "VSOMEIP_INSTALL_PATH".to_string(),
+                install_path.display().to_string(),
+            ));
+        }
+    }
+    if !ld_library_paths.is_empty() {
         let existing = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+        let prefix = ld_library_paths.join(":");
         let value = if existing.is_empty() {
-            lib_dir.display().to_string()
+            prefix
         } else {
-            format!("{}:{existing}", lib_dir.display())
+            format!("{prefix}:{existing}")
         };
         env.push(("LD_LIBRARY_PATH".to_string(), value));
     }
     env
+}
+
+fn detect_vsomeip_lib_dir(repo_root: &Path) -> Result<PathBuf> {
+    if let Ok(ld_library_path) = std::env::var("LD_LIBRARY_PATH") {
+        for path in ld_library_path.split(':') {
+            let candidate = Path::new(path).join("libvsomeip3.so.3");
+            if candidate.is_file() {
+                return Ok(PathBuf::from(path));
+            }
+        }
+    }
+    let build_root = repo_root.join("target/debug/build");
+    for entry in fs::read_dir(&build_root)
+        .with_context(|| format!("unable to read {}", build_root.display()))?
+    {
+        let entry = entry?;
+        let path = entry.path().join("out/vsomeip/vsomeip-install/lib");
+        if path.join("libvsomeip3.so.3").is_file() {
+            return Ok(path);
+        }
+    }
+    Err(anyhow!(
+        "libvsomeip3.so.3 not found under LD_LIBRARY_PATH or target/debug/build"
+    ))
 }
 
 fn detect_lola_bridge_lib_dir(repo_root: &Path) -> Result<PathBuf> {
@@ -1686,16 +2580,46 @@ impl WireEncoding {
             Self::Xcdrv2 => "xcdrv2",
         }
     }
+
+    fn payload_encoding_literal(self) -> &'static str {
+        match self {
+            Self::Native => "up.stable-container",
+            Self::Protobuf => "up.protobuf",
+            Self::Xcdrv2 => "up.xcdr-v2",
+        }
+    }
+
+    fn payload_encoding_content_type(self) -> &'static str {
+        match self {
+            Self::Native => "application/vnd.uprotocol.stable-container;type=\"org.eclipse.uprotocol.examples.SelectedWireNativePayloadV1\";variant=fixed;size=272;align=4",
+            Self::Protobuf => "application/protobuf",
+            Self::Xcdrv2 => "application/vnd.uprotocol.xcdr-v2;endianness=little;version=2",
+        }
+    }
 }
 
 impl MatrixRow {
+    fn uses_classic(&self) -> bool {
+        self.source.kind == EndpointKind::Classic || self.sink.kind == EndpointKind::Classic
+    }
+
     fn uses_lola(&self) -> bool {
         self.source.physical == PhysicalTransport::Lola
             || self.sink.physical == PhysicalTransport::Lola
     }
 
+    fn uses_mqtt5(&self) -> bool {
+        self.source.physical == PhysicalTransport::Mqtt5
+            || self.sink.physical == PhysicalTransport::Mqtt5
+    }
+
     fn uses_iceoryx2(&self) -> bool {
         self.source.physical == PhysicalTransport::Iceoryx2
             || self.sink.physical == PhysicalTransport::Iceoryx2
+    }
+
+    fn uses_vsomeip(&self) -> bool {
+        self.source.physical == PhysicalTransport::Vsomeip
+            || self.sink.physical == PhysicalTransport::Vsomeip
     }
 }

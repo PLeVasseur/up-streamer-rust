@@ -13,14 +13,17 @@
 
 mod common;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use common::cli;
-use common::{protobuf_payload, ServiceResponseListener};
+use common::{
+    native_message_payload_parts, protobuf_payload, xcdrv2_message_payload_parts,
+    ServiceResponseListener,
+};
 use hello_world_protos::hello_world_service::HelloRequest;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
-use up_rust::{UListener, UMessageBuilder, UPayloadFormat, UStatus, UTransport};
+use up_rust::{UCode, UListener, UMessageBuilder, UPayloadFormat, UStatus, UTransport};
 use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions, MqttClientOptions};
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
@@ -36,6 +39,14 @@ const DEFAULT_TARGET_RESOURCE: &str = "0x0421";
 const DEFAULT_BROKER_URI: &str = "localhost:1883";
 
 const REQUEST_TTL: u32 = 1000;
+const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"MCLI");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum Encoding {
+    Native,
+    Protobuf,
+    Xcdrv2,
+}
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
@@ -73,6 +84,12 @@ struct Args {
     /// Milliseconds to wait between request sends
     #[arg(long, default_value_t = 1000)]
     send_interval_ms: u64,
+    /// Payload encoding for the classic UMessage request payload.
+    #[arg(long, value_enum, default_value = "protobuf")]
+    encoding: Encoding,
+    /// Text payload used by native/XCDRv2 matrix rows.
+    #[arg(long, default_value = "mqtt-client")]
+    payload: String,
 }
 
 #[tokio::main]
@@ -101,7 +118,7 @@ async fn main() -> Result<(), UStatus> {
     )?;
 
     let mqtt_client_options = MqttClientOptions {
-        broker_uri: args.broker_uri,
+        broker_uri: args.broker_uri.clone(),
         ..Default::default()
     };
     let mqtt_transport_options = Mqtt5TransportOptions {
@@ -139,9 +156,19 @@ async fn main() -> Result<(), UStatus> {
         };
         i += 1;
 
-        let request_msg = UMessageBuilder::request(sink.clone(), source.clone(), REQUEST_TTL)
-            .build_with_payload(protobuf_payload(&hello_request), UPayloadFormat::Protobuf)
-            .unwrap();
+        let mut builder = UMessageBuilder::request(sink.clone(), source.clone(), REQUEST_TTL);
+        let request_msg = if args.encoding == Encoding::Protobuf {
+            builder
+                .build_with_payload(protobuf_payload(&hello_request), UPayloadFormat::Protobuf)
+                .unwrap()
+        } else {
+            let (payload, encoding) = selected_payload_parts(&args, sent_count as u32 + 1)?;
+            builder
+                .build_with_payload_encoding(payload, encoding)
+                .map_err(|error| {
+                    invalid_config(format!("failed to build request message: {error:?}"))
+                })?
+        };
         info!("Sending Request message:\n{request_msg:?}");
 
         client.send(request_msg).await?;
@@ -153,4 +180,23 @@ async fn main() -> Result<(), UStatus> {
     }
 
     Ok(())
+}
+
+fn selected_payload_parts(
+    args: &Args,
+    sequence: u32,
+) -> Result<(Vec<u8>, up_rust::PayloadEncoding), UStatus> {
+    match args.encoding {
+        Encoding::Native => {
+            native_message_payload_parts(NATIVE_PAYLOAD_MAGIC, sequence, &args.payload)
+        }
+        Encoding::Protobuf => unreachable!("protobuf is handled by the classic protobuf path"),
+        Encoding::Xcdrv2 => {
+            xcdrv2_message_payload_parts(sequence, args.uauthority.clone(), &args.payload)
+        }
+    }
+}
+
+fn invalid_config(message: impl Into<String>) -> UStatus {
+    UStatus::fail_with_code(UCode::InvalidArgument, message.into())
 }

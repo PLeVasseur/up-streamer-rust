@@ -17,13 +17,15 @@ use clap::{Parser, ValueEnum};
 use common::payloads::{
     native_payload_alignment, native_payload_bytes, xcdrv2_payload_bytes, SelectedWireNativePayload,
 };
+use common::PublishReceiver;
 use std::sync::Arc;
+use std::thread;
 use std::time::{Duration, Instant};
 use up_rust::selected_wire_user_api::{ProtobufWire, StableContainerWireFormat};
 use up_rust::{
     PayloadEncoding, PayloadFormat, StableContainerPayload, UCode, UFrameMetadata, UFrameView,
-    UMessage, UMessageBuilder, UOwnedFrame, UOwnedTransport, UStatus, UTxBuffer, UTxLoanSpec, UUri,
-    UZeroCopyRxLease, UZeroCopyTransport,
+    UListener, UMessage, UMessageBuilder, UOwnedFrame, UOwnedTransport, UStatus, UTransport,
+    UTxBuffer, UTxLoanSpec, UUri, UZeroCopyRxLease, UZeroCopyTransport,
 };
 #[cfg(feature = "iceoryx2-owned-frame")]
 use up_transport_iceoryx2_rust::BenchmarkOwnedIceoryx2Core;
@@ -33,8 +35,18 @@ use up_transport_iceoryx2_rust::Iceoryx2PubSub;
 use up_transport_lola_rust::LolaOwnedCore;
 #[cfg(any(feature = "lola-transport", feature = "lola-owned-frame"))]
 use up_transport_lola_rust::{LolaDefaultRxChannel, LolaTransportConfig, UTransportLola};
-#[cfg(any(feature = "zenoh-zero-copy", feature = "zenoh-owned-frame"))]
+#[cfg(any(
+    feature = "zenoh-transport",
+    feature = "zenoh-zero-copy",
+    feature = "zenoh-owned-frame"
+))]
 use up_transport_zenoh::zenoh_config::Config as ZenohConfig;
+#[cfg(any(
+    feature = "zenoh-transport",
+    feature = "zenoh-zero-copy",
+    feature = "zenoh-owned-frame"
+))]
+use up_transport_zenoh::UPTransportZenoh;
 #[cfg(feature = "zenoh-owned-frame")]
 use up_transport_zenoh::ZenohOwnedCore;
 #[cfg(feature = "zenoh-zero-copy")]
@@ -84,8 +96,8 @@ const NATIVE_FLOW_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"UPNF");
 #[derive(Parser)]
 #[command()]
 struct Cli {
-    #[arg(long = "route-family", value_enum, default_value = "owned-frame")]
-    mode: FlowMode,
+    #[arg(long = "route-family", value_enum)]
+    mode: Option<FlowMode>,
     #[arg(long, value_enum, default_value = "zenoh", hide = true)]
     transport: FlowTransport,
     #[arg(long = "encoding", value_enum, default_value = "protobuf")]
@@ -146,11 +158,40 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
+    let _ = tracing_subscriber::fmt::try_init();
+
     let cli = Cli::parse();
     match cli.mode {
-        FlowMode::OwnedFrame => run_owned(&cli).await,
-        FlowMode::CopyMinimized => run_zero_copy(&cli).await,
+        Some(FlowMode::OwnedFrame) => run_owned(&cli).await,
+        Some(FlowMode::CopyMinimized) => run_zero_copy(&cli).await,
+        None => run_classic_zenoh_notifyee(&cli).await,
     }
+}
+
+async fn run_classic_zenoh_notifyee(cli: &Cli) -> Result<(), UStatus> {
+    let transport: Arc<dyn UTransport> = Arc::new(
+        UPTransportZenoh::new(classic_zenoh_config(cli)?, local_uri(cli)?.to_string())
+            .await
+            .map_err(|error| UStatus::fail_with_code(UCode::Internal, error.to_string()))?,
+    );
+    let source_filter = topic_uri(cli.peer_authority.as_str(), cli.topic_resource_id)?;
+    let sink_filter = endpoint_uri(cli.local_authority.as_str())?;
+    let listener: Arc<dyn UListener> = Arc::new(PublishReceiver);
+    transport
+        .register_listener(&source_filter, Some(&sink_filter), listener)
+        .await?;
+    println!("READY listener_registered");
+    thread::park();
+    Ok(())
+}
+
+fn classic_zenoh_config(cli: &Cli) -> Result<ZenohConfig, UStatus> {
+    ZenohConfig::from_file(&cli.zenoh_config).map_err(|error| {
+        UStatus::fail_with_code(
+            UCode::InvalidArgument,
+            format!("failed to load zenoh config {}: {error}", cli.zenoh_config),
+        )
+    })
 }
 
 async fn run_owned(cli: &Cli) -> Result<(), UStatus> {

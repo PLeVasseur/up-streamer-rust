@@ -168,34 +168,62 @@ fn required_route_wire_format(
 }
 
 #[cfg(any(feature = "zenoh-zero-copy", feature = "zenoh-owned-frame"))]
-fn zenoh_selected_wire_config(
-    config_file: &str,
-    use_client_config: bool,
-) -> Result<ZenohConfig, UStatus> {
-    if use_client_config {
-        let mut config = ZenohConfig::default();
-        let endpoint =
-            ZenohEndPoint::from_str(ZENOH_SELECTED_WIRE_CLIENT_ENDPOINT).map_err(|e| {
-                UStatus::fail_with_code(
-                    UCode::InvalidArgument,
-                    format!("Unable to parse Zenoh selected-wire client endpoint: {e:?}"),
-                )
-            })?;
-        config.connect.endpoints.set(vec![endpoint]).map_err(|e| {
-            UStatus::fail_with_code(
-                UCode::InvalidArgument,
-                format!("Unable to configure Zenoh selected-wire client endpoint: {e:?}"),
-            )
-        })?;
-        return Ok(config);
-    }
+fn zenoh_config_file_for_endpoint<'a>(
+    endpoint_config: &'a EndpointConfig,
+    default_config_file: &'a str,
+) -> &'a str {
+    endpoint_config
+        .zenoh_config_file
+        .as_deref()
+        .unwrap_or(default_config_file)
+}
 
+#[cfg(any(feature = "zenoh-zero-copy", feature = "zenoh-owned-frame"))]
+fn load_zenoh_config_file(config_file: &str, purpose: &str) -> Result<ZenohConfig, UStatus> {
     ZenohConfig::from_file(config_file).map_err(|e| {
         UStatus::fail_with_code(
             UCode::InvalidArgument,
-            format!("Unable to load Zenoh config file for selected-wire endpoint: {e:?}"),
+            format!("Unable to load Zenoh config file for {purpose}: {e:?}"),
         )
     })
+}
+
+#[cfg(any(feature = "zenoh-zero-copy", feature = "zenoh-owned-frame"))]
+fn default_zenoh_client_config() -> Result<ZenohConfig, UStatus> {
+    let mut config = ZenohConfig::default();
+    let endpoint = ZenohEndPoint::from_str(ZENOH_SELECTED_WIRE_CLIENT_ENDPOINT).map_err(|e| {
+        UStatus::fail_with_code(
+            UCode::InvalidArgument,
+            format!("Unable to parse Zenoh selected-wire client endpoint: {e:?}"),
+        )
+    })?;
+    config.connect.endpoints.set(vec![endpoint]).map_err(|e| {
+        UStatus::fail_with_code(
+            UCode::InvalidArgument,
+            format!("Unable to configure Zenoh selected-wire client endpoint: {e:?}"),
+        )
+    })?;
+    Ok(config)
+}
+
+#[cfg(any(feature = "zenoh-zero-copy", feature = "zenoh-owned-frame"))]
+fn zenoh_selected_wire_config(
+    endpoint_config: &EndpointConfig,
+    default_config_file: &str,
+    opened_router_configs: &mut HashSet<String>,
+) -> Result<ZenohConfig, UStatus> {
+    let config_file = zenoh_config_file_for_endpoint(endpoint_config, default_config_file);
+    let use_client_config = !opened_router_configs.insert(config_file.to_string());
+    if use_client_config {
+        return match endpoint_config.zenoh_client_config_file.as_deref() {
+            Some(client_config_file) => {
+                load_zenoh_config_file(client_config_file, "selected-wire client endpoint")
+            }
+            None => default_zenoh_client_config(),
+        };
+    }
+
+    load_zenoh_config_file(config_file, "selected-wire endpoint")
 }
 
 #[cfg(any(
@@ -232,6 +260,98 @@ fn collect_route_wire_formats(
         }
     }
     Ok(route_wire_formats)
+}
+
+/// R3A: resolves an endpoint's configured per-topic payload-encoding
+/// convention. Note: registered literals resolve through `from_parts` here;
+/// once the R3A-U normalization guard lands, this call site inherits the
+/// canonical-triple hydration for free.
+fn resolve_assumed_payload_encoding(
+    endpoint_config: &EndpointConfig,
+) -> Result<Option<up_rust::PayloadEncoding>, UStatus> {
+    match (
+        &endpoint_config.assumed_payload_encoding,
+        &endpoint_config.assumed_payload_content_type,
+    ) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err(invalid_config(format!(
+            "endpoint {} sets assumed_payload_content_type without assumed_payload_encoding",
+            endpoint_config.endpoint
+        ))),
+        (Some(literal), content_type) => {
+            up_rust::PayloadEncoding::from_parts(None, Some(literal.clone()), content_type.clone())
+                .map(Some)
+                .map_err(|e| {
+                    invalid_config(format!(
+                        "endpoint {}: invalid assumed payload encoding: {e}",
+                        endpoint_config.endpoint
+                    ))
+                })
+        }
+    }
+}
+
+fn resolve_vsomeip_payload_encoding(
+    endpoint_configs: &[EndpointConfig],
+) -> Result<up_rust::PayloadEncoding, UStatus> {
+    let mut resolved: Option<up_rust::PayloadEncoding> = None;
+    for endpoint_config in endpoint_configs {
+        let Some(encoding) = resolve_assumed_payload_encoding(endpoint_config)? else {
+            return Err(invalid_config(format!(
+                "vSomeIP endpoint {} requires assumed_payload_encoding: the \
+                 SOME/IP wire carries no payload-encoding metadata, so the \
+                 per-topic convention must be declared explicitly",
+                endpoint_config.endpoint
+            )));
+        };
+
+        if let Some(existing) = &resolved {
+            if existing != &encoding {
+                return Err(invalid_config(format!(
+                    "all vSomeIP endpoints in one streamer process must use the same \
+                     assumed_payload_encoding; endpoint {} uses `{}` but earlier \
+                     vSomeIP endpoints use `{}`",
+                    endpoint_config.endpoint,
+                    encoding.describe(),
+                    existing.describe()
+                )));
+            }
+        } else {
+            resolved = Some(encoding);
+        }
+    }
+
+    resolved.ok_or_else(|| invalid_config("vSomeIP transport has no endpoints".to_string()))
+}
+
+/// R3A: wraps a classic transport in the assumed-encoding decorator when the
+/// endpoint declares a per-topic convention. Do not use this for vSomeIP: that
+/// transport reconstructs and validates its configured convention directly.
+#[cfg(feature = "owned-frame-transport")]
+fn classic_transport_for(
+    transport: Arc<dyn UTransport>,
+    endpoint_config: &EndpointConfig,
+) -> Result<Arc<dyn UTransport>, UStatus> {
+    Ok(match resolve_assumed_payload_encoding(endpoint_config)? {
+        Some(encoding) => Arc::new(up_streamer::AssumedEncodingTransport::new(
+            transport, encoding,
+        )),
+        None => transport,
+    })
+}
+
+#[cfg(not(feature = "owned-frame-transport"))]
+fn classic_transport_for(
+    transport: Arc<dyn UTransport>,
+    endpoint_config: &EndpointConfig,
+) -> Result<Arc<dyn UTransport>, UStatus> {
+    if endpoint_config.assumed_payload_encoding.is_some() {
+        return Err(invalid_config(format!(
+            "endpoint {} sets assumed_payload_encoding, which requires the owned-frame-transport feature",
+            endpoint_config.endpoint
+        )));
+    }
+    Ok(transport)
 }
 
 fn standard_endpoint<'a>(
@@ -332,15 +452,14 @@ async fn zenoh_route_wire_endpoints(
     config_file: &str,
     streamer_uri: &str,
     route_wire_formats: Option<&HashSet<RouteWireFormat>>,
-    selected_wire_core_count: &mut usize,
+    opened_router_configs: &mut HashSet<String>,
 ) -> Result<HashMap<RouteWireFormat, RouteWireEndpoint>, UStatus> {
     let mut endpoints = HashMap::new();
     if let Some(route_wire_formats) = route_wire_formats {
         for route_wire_format in route_wire_formats {
             let zenoh_config =
-                zenoh_selected_wire_config(config_file, *selected_wire_core_count > 0)?;
+                zenoh_selected_wire_config(endpoint_config, config_file, opened_router_configs)?;
             let core = ZenohZeroCopyCore::new(zenoh_config, streamer_uri.to_string()).await?;
-            *selected_wire_core_count += 1;
             endpoints.insert(
                 *route_wire_format,
                 configurable_streamer_wire_support::zenoh_endpoint(
@@ -364,7 +483,7 @@ async fn zenoh_route_wire_endpoints(
     _config_file: &str,
     _streamer_uri: &str,
     route_wire_formats: Option<&HashSet<RouteWireFormat>>,
-    _selected_wire_core_count: &mut usize,
+    _opened_router_configs: &mut HashSet<String>,
 ) -> Result<HashMap<RouteWireFormat, RouteWireEndpoint>, UStatus> {
     if route_wire_formats.is_some_and(|formats| !formats.is_empty()) {
         return Err(invalid_config(
@@ -381,7 +500,7 @@ async fn zenoh_owned_frame_endpoints(
     streamer_uri: &str,
     route_wire_formats: Option<&HashSet<RouteWireFormat>>,
     owned_cores: &mut HashMap<RouteWireFormat, ZenohOwnedCore>,
-    selected_wire_core_count: &mut usize,
+    opened_router_configs: &mut HashSet<String>,
 ) -> Result<HashMap<RouteWireFormat, RouteOwnedEndpoint>, UStatus> {
     let mut endpoints = HashMap::new();
     if let Some(route_wire_formats) = route_wire_formats {
@@ -389,10 +508,12 @@ async fn zenoh_owned_frame_endpoints(
             let core = if let Some(core) = owned_cores.get(route_wire_format) {
                 core.clone()
             } else {
-                let zenoh_config =
-                    zenoh_selected_wire_config(config_file, *selected_wire_core_count > 0)?;
+                let zenoh_config = zenoh_selected_wire_config(
+                    endpoint_config,
+                    config_file,
+                    opened_router_configs,
+                )?;
                 let core = ZenohOwnedCore::new(zenoh_config, streamer_uri.to_string()).await?;
-                *selected_wire_core_count += 1;
                 owned_cores.insert(*route_wire_format, core.clone());
                 core
             };
@@ -416,7 +537,7 @@ async fn zenoh_owned_frame_endpoints(
     _config_file: &str,
     _streamer_uri: &str,
     route_wire_formats: Option<&HashSet<RouteWireFormat>>,
-    _selected_wire_core_count: &mut usize,
+    _opened_router_configs: &mut HashSet<String>,
 ) -> Result<HashMap<RouteWireFormat, RouteOwnedEndpoint>, UStatus> {
     if route_wire_formats.is_some_and(|formats| !formats.is_empty()) {
         return Err(invalid_config(
@@ -451,19 +572,51 @@ async fn register_zenoh_endpoints(
         feature = "experimental-copy-minimized-routing",
         feature = "owned-frame-transport"
     ))]
-    let mut zenoh_selected_wire_core_count = 0_usize;
+    let mut opened_router_configs: HashSet<String> = {
+        let mut configs = HashSet::new();
+        if transport.is_some() {
+            configs.insert(config_file.to_string());
+        }
+        configs
+    };
 
     for endpoint_config in endpoint_configs {
         let standard = if endpoint_config.routing_mode != RoutingMode::Owned {
             None
         } else {
-            let transport = transport.as_ref().ok_or_else(|| {
-                invalid_config(format!(
-                    "Zenoh endpoint {} requires regular UTransport routing but no Zenoh UTransport was initialized",
-                    endpoint_config.endpoint
-                ))
-            })?;
-            let standard_transport: Arc<dyn UTransport> = transport.clone();
+            let standard_transport: Arc<dyn UTransport> = if let Some(endpoint_config_file) =
+                endpoint_config.zenoh_config_file.as_deref()
+            {
+                let zenoh_config = ZenohConfig::from_file(endpoint_config_file).map_err(|e| {
+                    UStatus::fail_with_code(
+                        UCode::InvalidArgument,
+                        format!("Unable to load Zenoh config file: {e:?}"),
+                    )
+                })?;
+                #[cfg(any(
+                    feature = "experimental-copy-minimized-routing",
+                    feature = "owned-frame-transport"
+                ))]
+                opened_router_configs.insert(endpoint_config_file.to_string());
+                Arc::new(
+                    UPTransportZenoh::new(zenoh_config, streamer_uri.to_string())
+                        .await
+                        .map_err(|e| {
+                            UStatus::fail_with_code(
+                                UCode::Internal,
+                                format!("Unable to initialize Zenoh UTransport: {e:?}"),
+                            )
+                        })?,
+                )
+            } else {
+                let transport = transport.as_ref().ok_or_else(|| {
+                        invalid_config(format!(
+                            "Zenoh endpoint {} requires regular UTransport routing but no Zenoh UTransport was initialized",
+                            endpoint_config.endpoint
+                        ))
+                    })?;
+                transport.clone()
+            };
             Some(Endpoint::new(
                 &endpoint_config.endpoint,
                 &endpoint_config.authority,
@@ -499,7 +652,7 @@ async fn register_zenoh_endpoints(
                 config_file,
                 streamer_uri,
                 copy_minimized_route_wire_formats,
-                &mut zenoh_selected_wire_core_count,
+                &mut opened_router_configs,
             )
             .await?,
             #[cfg(feature = "owned-frame-transport")]
@@ -512,7 +665,7 @@ async fn register_zenoh_endpoints(
                         streamer_uri,
                         owned_frame_route_wire_formats,
                         &mut zenoh_owned_cores,
-                        &mut zenoh_selected_wire_core_count,
+                        &mut opened_router_configs,
                     )
                     .await?
                 }
@@ -523,7 +676,7 @@ async fn register_zenoh_endpoints(
                         config_file,
                         streamer_uri,
                         owned_frame_route_wire_formats,
-                        &mut zenoh_selected_wire_core_count,
+                        &mut opened_router_configs,
                     )
                     .await?
                 }
@@ -536,6 +689,59 @@ async fn register_zenoh_endpoints(
             ensure_owned_frame_endpoint(&endpoint, &endpoint_config.endpoint)?;
         }
         insert_configured_endpoint(endpoints, endpoint_config, endpoint)?;
+    }
+
+    Ok(())
+}
+
+/// R3A Tier 1: classic vSomeIP endpoints. `routing_mode` must be `owned`
+/// (selected-wire over SOME/IP is the registered Tier-3 decision,
+/// `vsomeip.uframe.native.v1`). The assumed-encoding convention is REQUIRED:
+/// the SOME/IP wire carries no payload-encoding metadata (binding spec:
+/// "fixed per topic"), so the convention must be declared to be auditable.
+#[cfg(feature = "vsomeip-transport")]
+fn register_vsomeip_endpoints(
+    endpoints: &mut HashMap<String, ConfiguredEndpoint>,
+    endpoint_configs: &[EndpointConfig],
+    transport: Arc<dyn UTransport>,
+) -> Result<(), UStatus> {
+    for endpoint_config in endpoint_configs {
+        match endpoint_config.routing_mode {
+            RoutingMode::Owned => {}
+            RoutingMode::CopyMinimized | RoutingMode::OwnedFrame => {
+                return Err(invalid_config(format!(
+                    "vSomeIP endpoint {} supports classic (owned) routing only; \
+                     selected-wire over SOME/IP is the registered \
+                     vsomeip.uframe.native.v1 decision (Tier 3)",
+                    endpoint_config.endpoint
+                )));
+            }
+        }
+        if endpoint_config.assumed_payload_encoding.is_none() {
+            return Err(invalid_config(format!(
+                "vSomeIP endpoint {} requires assumed_payload_encoding: the \
+                 SOME/IP wire carries no payload-encoding metadata, so the \
+                 per-topic convention must be declared explicitly",
+                endpoint_config.endpoint
+            )));
+        }
+        insert_configured_endpoint(
+            endpoints,
+            endpoint_config,
+            ConfiguredEndpoint {
+                routing_mode: endpoint_config.routing_mode,
+                copy_minimized_payload_alignment: endpoint_config.copy_minimized_payload_alignment,
+                standard: Some(Endpoint::new(
+                    &endpoint_config.endpoint,
+                    &endpoint_config.authority,
+                    transport.clone(),
+                )),
+                #[cfg(feature = "experimental-copy-minimized-routing")]
+                route_wire_endpoints: HashMap::new(),
+                #[cfg(feature = "owned-frame-transport")]
+                owned_frame_endpoints: HashMap::new(),
+            },
+        )?;
     }
 
     Ok(())
@@ -571,7 +777,7 @@ fn register_mqtt_endpoints(
                 standard: Some(Endpoint::new(
                     &endpoint_config.endpoint,
                     &endpoint_config.authority,
-                    transport.clone(),
+                    classic_transport_for(transport.clone(), endpoint_config)?,
                 )),
                 #[cfg(feature = "experimental-copy-minimized-routing")]
                 route_wire_endpoints: HashMap::new(),
@@ -1154,12 +1360,53 @@ async fn wire_forwarding_rules(
                     )
                     .await?;
                 }
-                (RoutingMode::Owned, RoutingMode::OwnedFrame | RoutingMode::CopyMinimized)
-                | (RoutingMode::OwnedFrame | RoutingMode::CopyMinimized, RoutingMode::Owned) => {
-                    return Err(invalid_config(format!(
-                        "regular UTransport endpoint {} cannot be mixed with selected-wire endpoint {forwarding_target}",
-                        endpoint_config.endpoint
-                    )));
+                // R3A: classic <-> owned-frame pairs route through the
+                // classic bridge adapters. The wire format applies to the
+                // selected leg only; the classic leg is classically framed.
+                (RoutingMode::Owned, RoutingMode::OwnedFrame) => {
+                    wire_classic_to_owned_route(
+                        streamer,
+                        left_endpoint,
+                        right_endpoint,
+                        &endpoint_config.endpoint,
+                        forwarding_target,
+                        route.wire_format,
+                    )
+                    .await?;
+                }
+                (RoutingMode::OwnedFrame, RoutingMode::Owned) => {
+                    wire_owned_to_classic_route(
+                        streamer,
+                        left_endpoint,
+                        right_endpoint,
+                        &endpoint_config.endpoint,
+                        forwarding_target,
+                        route.wire_format,
+                    )
+                    .await?;
+                }
+                (RoutingMode::Owned, RoutingMode::CopyMinimized) => {
+                    wire_classic_to_copy_minimized_route(
+                        streamer,
+                        left_endpoint,
+                        right_endpoint,
+                        &endpoint_config.endpoint,
+                        forwarding_target,
+                        right_endpoint.copy_minimized_payload_alignment,
+                        route.wire_format,
+                    )
+                    .await?;
+                }
+                (RoutingMode::CopyMinimized, RoutingMode::Owned) => {
+                    wire_copy_minimized_to_classic_route(
+                        streamer,
+                        left_endpoint,
+                        right_endpoint,
+                        &endpoint_config.endpoint,
+                        forwarding_target,
+                        route.wire_format,
+                    )
+                    .await?;
                 }
             }
         }
@@ -1185,6 +1432,187 @@ async fn wire_owned_frame_route(
         route_wire_format,
     )
     .await
+}
+
+#[cfg(feature = "owned-frame-transport")]
+async fn wire_classic_to_owned_route(
+    streamer: &mut UStreamer,
+    left_endpoint: &ConfiguredEndpoint,
+    right_endpoint: &ConfiguredEndpoint,
+    left_name: &str,
+    right_name: &str,
+    route_wire_format: Option<RouteWireFormat>,
+) -> Result<(), UStatus> {
+    let route_wire_format = required_route_wire_format(left_name, right_name, route_wire_format)?;
+    configurable_streamer_wire_support::add_classic_to_owned_route_wire_format(
+        streamer,
+        standard_endpoint(left_endpoint, left_name)?,
+        owned_frame_endpoint(right_endpoint, right_name, route_wire_format)?,
+        route_wire_format,
+    )
+    .await
+}
+
+#[cfg(feature = "owned-frame-transport")]
+async fn wire_owned_to_classic_route(
+    streamer: &mut UStreamer,
+    left_endpoint: &ConfiguredEndpoint,
+    right_endpoint: &ConfiguredEndpoint,
+    left_name: &str,
+    right_name: &str,
+    route_wire_format: Option<RouteWireFormat>,
+) -> Result<(), UStatus> {
+    let route_wire_format = required_route_wire_format(left_name, right_name, route_wire_format)?;
+    configurable_streamer_wire_support::add_owned_to_classic_route_wire_format(
+        streamer,
+        owned_frame_endpoint(left_endpoint, left_name, route_wire_format)?,
+        standard_endpoint(right_endpoint, right_name)?,
+        route_wire_format,
+    )
+    .await
+}
+
+#[cfg(all(
+    feature = "owned-frame-transport",
+    feature = "experimental-copy-minimized-routing"
+))]
+async fn wire_classic_to_copy_minimized_route(
+    streamer: &mut UStreamer,
+    left_endpoint: &ConfiguredEndpoint,
+    right_endpoint: &ConfiguredEndpoint,
+    left_name: &str,
+    right_name: &str,
+    payload_alignment: Option<usize>,
+    route_wire_format: Option<RouteWireFormat>,
+) -> Result<(), UStatus> {
+    let options = CopyMinimizedRouteOptions {
+        payload_alignment: payload_alignment.unwrap_or(1),
+    };
+    let route_wire_format = required_route_wire_format(left_name, right_name, route_wire_format)?;
+    let right_route_endpoint = route_wire_endpoint(right_endpoint, right_name, route_wire_format)?;
+    configurable_streamer_wire_support::add_classic_to_copy_minimized_route_wire_format(
+        streamer,
+        standard_endpoint(left_endpoint, left_name)?,
+        &right_route_endpoint,
+        route_wire_format,
+        options,
+    )
+    .await
+}
+
+#[cfg(all(
+    feature = "owned-frame-transport",
+    feature = "experimental-copy-minimized-routing"
+))]
+async fn wire_copy_minimized_to_classic_route(
+    streamer: &mut UStreamer,
+    left_endpoint: &ConfiguredEndpoint,
+    right_endpoint: &ConfiguredEndpoint,
+    left_name: &str,
+    right_name: &str,
+    route_wire_format: Option<RouteWireFormat>,
+) -> Result<(), UStatus> {
+    let route_wire_format = required_route_wire_format(left_name, right_name, route_wire_format)?;
+    let left_route_endpoint = route_wire_endpoint(left_endpoint, left_name, route_wire_format)?;
+    configurable_streamer_wire_support::add_copy_minimized_to_classic_route_wire_format(
+        streamer,
+        &left_route_endpoint,
+        standard_endpoint(right_endpoint, right_name)?,
+        route_wire_format,
+    )
+    .await
+}
+
+#[cfg(all(
+    feature = "owned-frame-transport",
+    not(feature = "experimental-copy-minimized-routing")
+))]
+async fn wire_classic_to_copy_minimized_route(
+    _streamer: &mut UStreamer,
+    _left_endpoint: &ConfiguredEndpoint,
+    _right_endpoint: &ConfiguredEndpoint,
+    left_name: &str,
+    right_name: &str,
+    _payload_alignment: Option<usize>,
+    _route_wire_format: Option<RouteWireFormat>,
+) -> Result<(), UStatus> {
+    Err(invalid_config(format!(
+        "classic to copy-minimized route {left_name} -> {right_name} requires the experimental-copy-minimized-routing feature"
+    )))
+}
+
+#[cfg(all(
+    feature = "owned-frame-transport",
+    not(feature = "experimental-copy-minimized-routing")
+))]
+async fn wire_copy_minimized_to_classic_route(
+    _streamer: &mut UStreamer,
+    _left_endpoint: &ConfiguredEndpoint,
+    _right_endpoint: &ConfiguredEndpoint,
+    left_name: &str,
+    right_name: &str,
+    _route_wire_format: Option<RouteWireFormat>,
+) -> Result<(), UStatus> {
+    Err(invalid_config(format!(
+        "copy-minimized to classic route {left_name} -> {right_name} requires the experimental-copy-minimized-routing feature"
+    )))
+}
+
+#[cfg(not(feature = "owned-frame-transport"))]
+async fn wire_classic_to_copy_minimized_route(
+    _streamer: &mut UStreamer,
+    _left_endpoint: &ConfiguredEndpoint,
+    _right_endpoint: &ConfiguredEndpoint,
+    left_name: &str,
+    right_name: &str,
+    _payload_alignment: Option<usize>,
+    _route_wire_format: Option<RouteWireFormat>,
+) -> Result<(), UStatus> {
+    Err(invalid_config(format!(
+        "classic to copy-minimized route {left_name} -> {right_name} requires the owned-frame-transport feature"
+    )))
+}
+
+#[cfg(not(feature = "owned-frame-transport"))]
+async fn wire_copy_minimized_to_classic_route(
+    _streamer: &mut UStreamer,
+    _left_endpoint: &ConfiguredEndpoint,
+    _right_endpoint: &ConfiguredEndpoint,
+    left_name: &str,
+    right_name: &str,
+    _route_wire_format: Option<RouteWireFormat>,
+) -> Result<(), UStatus> {
+    Err(invalid_config(format!(
+        "copy-minimized to classic route {left_name} -> {right_name} requires the owned-frame-transport feature"
+    )))
+}
+
+#[cfg(not(feature = "owned-frame-transport"))]
+async fn wire_classic_to_owned_route(
+    _streamer: &mut UStreamer,
+    _left_endpoint: &ConfiguredEndpoint,
+    _right_endpoint: &ConfiguredEndpoint,
+    left_name: &str,
+    right_name: &str,
+    _route_wire_format: Option<RouteWireFormat>,
+) -> Result<(), UStatus> {
+    Err(invalid_config(format!(
+        "classic to owned-frame route {left_name} -> {right_name} requires the owned-frame-transport feature"
+    )))
+}
+
+#[cfg(not(feature = "owned-frame-transport"))]
+async fn wire_owned_to_classic_route(
+    _streamer: &mut UStreamer,
+    _left_endpoint: &ConfiguredEndpoint,
+    _right_endpoint: &ConfiguredEndpoint,
+    left_name: &str,
+    right_name: &str,
+    _route_wire_format: Option<RouteWireFormat>,
+) -> Result<(), UStatus> {
+    Err(invalid_config(format!(
+        "owned-frame to classic route {left_name} -> {right_name} requires the owned-frame-transport feature"
+    )))
 }
 
 #[cfg(not(feature = "owned-frame-transport"))]
@@ -1451,13 +1879,9 @@ async fn main() -> Result<(), UStatus> {
     // Build regular Zenoh UTransport only for non-copy-minimized endpoints. Copy-minimized
     // Zenoh endpoints open their own wire core from the same config and cannot share a router
     // listen port with an unused regular transport session.
-    let zenoh_transport = if config
-        .transports
-        .zenoh
-        .endpoints
-        .iter()
-        .any(|endpoint| endpoint.routing_mode == RoutingMode::Owned)
-    {
+    let zenoh_transport = if config.transports.zenoh.endpoints.iter().any(|endpoint| {
+        endpoint.routing_mode == RoutingMode::Owned && endpoint.zenoh_config_file.is_none()
+    }) {
         let zenoh_config = ZenohConfig::from_file(config.transports.zenoh.config_file.clone())
             .map_err(|e| {
                 UStatus::fail_with_code(
@@ -1478,6 +1902,44 @@ async fn main() -> Result<(), UStatus> {
     } else {
         None
     };
+
+    // R3A: build the classic vSomeIP transport when its section is present.
+    #[cfg(feature = "vsomeip-transport")]
+    let vsomeip_transport: Option<Arc<dyn UTransport>> = match &config.transports.vsomeip {
+        None => None,
+        Some(vsomeip) if vsomeip.endpoints.is_empty() => None,
+        Some(vsomeip) => {
+            let assumed_payload_encoding = resolve_vsomeip_payload_encoding(&vsomeip.endpoints)?;
+            Some(Arc::new(
+                up_transport_vsomeip::UPTransportVsomeip::new_with_config_and_transport_config(
+                    streamer_uuri.clone(),
+                    &vsomeip.remote_authority,
+                    std::path::Path::new(&vsomeip.config_file),
+                    None,
+                    up_transport_vsomeip::TransportConfig::new(assumed_payload_encoding),
+                )
+                .map_err(|e| {
+                    UStatus::fail_with_code(
+                        UCode::Internal,
+                        format!("Unable to initialize vSomeIP UTransport: {e:?}"),
+                    )
+                })?,
+            ))
+        }
+    };
+    #[cfg(not(feature = "vsomeip-transport"))]
+    if config
+        .transports
+        .vsomeip
+        .as_ref()
+        .is_some_and(|vsomeip| !vsomeip.endpoints.is_empty())
+    {
+        return Err(invalid_config(
+            "config declares vSomeIP endpoints but this build lacks the \
+             vsomeip-transport feature"
+                .to_string(),
+        ));
+    }
 
     // build the mqtt5 transport only when the selected config uses MQTT endpoints
     let mqtt5_transport: Option<Arc<dyn UTransport>> =
@@ -1526,6 +1988,11 @@ async fn main() -> Result<(), UStatus> {
             &config.transports.mqtt.endpoints,
             mqtt5_transport,
         )?;
+    }
+
+    #[cfg(feature = "vsomeip-transport")]
+    if let (Some(vsomeip), Some(transport)) = (&config.transports.vsomeip, &vsomeip_transport) {
+        register_vsomeip_endpoints(&mut endpoints, &vsomeip.endpoints, transport.clone())?;
     }
     if let Some(iceoryx2_config) = &config.transports.iceoryx2 {
         #[cfg(any(
@@ -1601,6 +2068,10 @@ async fn main() -> Result<(), UStatus> {
     }
     if let Some(lola_config) = &config.transports.lola {
         wire_forwarding_rules(&mut streamer, &endpoints, &lola_config.endpoints).await?;
+    }
+    #[cfg(feature = "vsomeip-transport")]
+    if let Some(vsomeip_config) = &config.transports.vsomeip {
+        wire_forwarding_rules(&mut streamer, &endpoints, &vsomeip_config.endpoints).await?;
     }
 
     println!("READY streamer_initialized");

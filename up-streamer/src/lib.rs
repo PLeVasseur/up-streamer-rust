@@ -174,10 +174,15 @@
 //! subscriber. Binaries/plugins/tests are responsible for one-time
 //! `tracing_subscriber` initialization at process boundaries.
 
+#[cfg(feature = "owned-frame-transport")]
+mod assumed_encoding;
 mod control_plane;
 #[cfg(feature = "experimental-copy-minimized-routing")]
 mod copy_minimized;
 mod data_plane;
+#[cfg(feature = "owned-frame-transport")]
+pub use assumed_encoding::AssumedEncodingTransport;
+
 mod endpoint;
 #[cfg(feature = "experimental-copy-minimized-routing")]
 pub use copy_minimized::CopyMinimizedRouteOptions;

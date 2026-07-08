@@ -148,14 +148,25 @@ async fn main() -> Result<(), UStatus> {
             ..Default::default()
         };
 
-        let timer_message = Timer {
-            time: Some(time_of_day).into(),
-            ..Default::default()
+        let mut builder = UMessageBuilder::publish(source.clone());
+        let publish_msg = if args.encoding == Encoding::Protobuf {
+            let timer_message = Timer {
+                time: Some(time_of_day).into(),
+                ..Default::default()
+            };
+            builder
+                .build_with_payload(protobuf_payload(&timer_message), UPayloadFormat::Protobuf)
+                .unwrap()
+        } else {
+            builder
+                .build_with_payload_encoding(
+                    selected_payload_bytes(&args)?,
+                    selected_payload_encoding(args.encoding),
+                )
+                .map_err(|error| {
+                    invalid_config(format!("failed to build publish message: {error:?}"))
+                })?
         };
-
-        let publish_msg = UMessageBuilder::publish(source.clone())
-            .build_with_payload(protobuf_payload(&timer_message), UPayloadFormat::Protobuf)
-            .unwrap();
         println!("Sending Publish message:\n{publish_msg:?}");
 
         publisher.send(publish_msg).await?;
