@@ -336,11 +336,11 @@ impl UListener for ClassicIngressForwarder {
 /// R3A adapter route bookkeeping: classic -> owned.
 #[cfg(feature = "owned-frame-transport")]
 struct ClassicToOwnedRouteBinding {
-    ingress: Endpoint,
+    _ingress: Endpoint,
     _tx: mpsc::Sender<UMessage>,
-    listener: Arc<ClassicIngressForwarder>,
-    registered_filters: Vec<(UUri, Option<UUri>)>,
-    dispatch_task: tokio::task::JoinHandle<()>,
+    _listener: Arc<ClassicIngressForwarder>,
+    _registered_filters: Vec<(UUri, Option<UUri>)>,
+    _dispatch_task: tokio::task::JoinHandle<()>,
 }
 
 /// R3A adapter route bookkeeping: classic -> copy-minimized. Generic over the
@@ -350,12 +350,12 @@ struct ClassicToOwnedRouteBinding {
     feature = "experimental-copy-minimized-routing"
 ))]
 struct ClassicToCopyMinimizedRouteBinding {
-    ingress: Endpoint,
+    _ingress: Endpoint,
     _tx: mpsc::Sender<UMessage>,
-    listener: Arc<ClassicIngressForwarder>,
-    registered_filters: Vec<(UUri, Option<UUri>)>,
-    projection_task: tokio::task::JoinHandle<()>,
-    dispatch_task: tokio::task::JoinHandle<()>,
+    _listener: Arc<ClassicIngressForwarder>,
+    _registered_filters: Vec<(UUri, Option<UUri>)>,
+    _projection_task: tokio::task::JoinHandle<()>,
+    _dispatch_task: tokio::task::JoinHandle<()>,
 }
 
 /// R3A adapter route bookkeeping: copy-minimized -> classic.
@@ -368,11 +368,11 @@ where
     I: UZeroCopyTransport + Send + Sync + 'static,
     I::Rx: UZeroCopyRxLease + Send + 'static,
 {
-    ingress: ZeroCopyFrameEndpoint<I>,
+    _ingress: ZeroCopyFrameEndpoint<I>,
     _tx: mpsc::Sender<I::Rx>,
-    listener: Arc<ZeroCopyIngressForwarder<I::Rx>>,
-    registered_filters: Vec<ZeroCopyListenerFilter>,
-    dispatch_task: tokio::task::JoinHandle<()>,
+    _listener: Arc<ZeroCopyIngressForwarder<I::Rx>>,
+    _registered_filters: Vec<ZeroCopyListenerFilter>,
+    _dispatch_task: tokio::task::JoinHandle<()>,
 }
 
 #[cfg(all(
@@ -395,11 +395,11 @@ where
 /// R3A adapter route bookkeeping: owned -> classic.
 #[cfg(feature = "owned-frame-transport")]
 struct OwnedToClassicRouteBinding {
-    ingress: OwnedFrameEndpoint,
+    _ingress: OwnedFrameEndpoint,
     _tx: mpsc::Sender<UOwnedFrame>,
-    listener: Arc<OwnedIngressForwarder>,
-    registered_filters: Vec<(UUri, Option<UUri>)>,
-    dispatch_task: tokio::task::JoinHandle<()>,
+    _listener: Arc<OwnedIngressForwarder>,
+    _registered_filters: Vec<(UUri, Option<UUri>)>,
+    _dispatch_task: tokio::task::JoinHandle<()>,
 }
 
 #[cfg(feature = "experimental-copy-minimized-routing")]
@@ -1288,11 +1288,11 @@ impl UStreamer {
         self.classic_to_owned_routes.insert(
             route_key,
             ClassicToOwnedRouteBinding {
-                ingress: ingress.clone(),
+                _ingress: ingress.clone(),
                 _tx: tx,
-                listener,
-                registered_filters,
-                dispatch_task,
+                _listener: listener,
+                _registered_filters: registered_filters,
+                _dispatch_task: dispatch_task,
             },
         );
         Ok(())
@@ -1355,11 +1355,11 @@ impl UStreamer {
         self.owned_to_classic_routes.insert(
             route_key,
             OwnedToClassicRouteBinding {
-                ingress: ingress.clone(),
+                _ingress: ingress.clone(),
                 _tx: tx,
-                listener,
-                registered_filters,
-                dispatch_task,
+                _listener: listener,
+                _registered_filters: registered_filters,
+                _dispatch_task: dispatch_task,
             },
         );
         Ok(())
@@ -1445,12 +1445,12 @@ impl UStreamer {
         self.classic_to_copy_minimized_routes.insert(
             route_key,
             ClassicToCopyMinimizedRouteBinding {
-                ingress: ingress.clone(),
+                _ingress: ingress.clone(),
                 _tx: tx,
-                listener,
-                registered_filters,
-                projection_task,
-                dispatch_task,
+                _listener: listener,
+                _registered_filters: registered_filters,
+                _projection_task: projection_task,
+                _dispatch_task: dispatch_task,
             },
         );
         Ok(())
@@ -1523,11 +1523,11 @@ impl UStreamer {
             rx,
         ));
         let binding = CopyMinimizedToClassicRouteBinding {
-            ingress: ingress.clone(),
+            _ingress: ingress.clone(),
             _tx: tx,
-            listener,
-            registered_filters,
-            dispatch_task,
+            _listener: listener,
+            _registered_filters: registered_filters,
+            _dispatch_task: dispatch_task,
         };
         self.copy_minimized_to_classic_routes
             .insert(route_key, Box::new(binding));

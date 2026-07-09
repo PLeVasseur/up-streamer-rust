@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 #[cfg(feature = "vsomeip-transport")]
 use std::fs::canonicalize;
 #[cfg(feature = "vsomeip-transport")]

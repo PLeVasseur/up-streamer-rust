@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::mem::{self, MaybeUninit};
 
 use up_rust::{StablePayloadInit, UCode, UStatus};

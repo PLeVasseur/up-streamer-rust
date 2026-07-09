@@ -94,6 +94,7 @@ impl UListener for ServiceRequestResponder {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn native_message_payload_parts(
     magic: u32,
     sequence: u32,
@@ -103,6 +104,7 @@ pub(crate) fn native_message_payload_parts(
 }
 
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
+#[allow(dead_code)]
 fn native_message_payload_parts_impl(
     magic: u32,
     sequence: u32,
@@ -117,6 +119,7 @@ fn native_message_payload_parts_impl(
 }
 
 #[cfg(not(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2")))]
+#[allow(dead_code)]
 fn native_message_payload_parts_impl(
     _magic: u32,
     _sequence: u32,
@@ -127,6 +130,7 @@ fn native_message_payload_parts_impl(
     ))
 }
 
+#[allow(dead_code)]
 pub(crate) fn xcdrv2_message_payload_parts(
     sequence: u32,
     source: String,
@@ -136,6 +140,7 @@ pub(crate) fn xcdrv2_message_payload_parts(
 }
 
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
+#[allow(dead_code)]
 fn xcdrv2_message_payload_parts_impl(
     sequence: u32,
     source: String,
@@ -150,6 +155,7 @@ fn xcdrv2_message_payload_parts_impl(
 }
 
 #[cfg(not(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2")))]
+#[allow(dead_code)]
 fn xcdrv2_message_payload_parts_impl(
     _sequence: u32,
     _source: String,
