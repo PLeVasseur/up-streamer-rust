@@ -169,9 +169,9 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "dc7179763085091c0beea17643779d0ff3d8381d", optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "a64a391d3cf9150187ab231664d87ea77e231258", optional = true }
 up-transport-zenoh = { workspace = true, optional = true }
 up-transport-vsomeip = { workspace = true, optional = true }
 up-transport-mqtt5 = { workspace = true, optional = true }
-up-wire-xcdrv2 = { git = "ssh://git@github.com/PLeVasseur/up-wire-xcdrv2-rust.git", rev = "3aa96b68317e6d90d718c2267b53bccfab9a57ec", optional = true }
+up-wire-xcdrv2 = { git = "ssh://git@github.com/PLeVasseur/up-wire-xcdrv2-rust.git", rev = "da0646716705c18b6e72875c008414c4159d1cd0", optional = true }
 zenoh = { workspace = true, optional = true }

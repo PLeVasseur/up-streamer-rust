@@ -53,6 +53,8 @@ use up_rust::{UCode, UStatus};
 )))]
 use up_rust::{UCode, UStatus};
 #[cfg(feature = "owned-frame-transport")]
+use up_streamer::Endpoint;
+#[cfg(feature = "owned-frame-transport")]
 use up_streamer::OwnedFrameEndpoint;
 #[cfg(any(
     feature = "zenoh-zero-copy",
@@ -60,8 +62,6 @@ use up_streamer::OwnedFrameEndpoint;
     feature = "lola-transport"
 ))]
 use up_streamer::ZeroCopyFrameEndpoint;
-#[cfg(feature = "owned-frame-transport")]
-use up_streamer::Endpoint;
 use up_streamer::{CopyMinimizedRouteOptions, UStreamer};
 
 #[cfg(feature = "iceoryx2-owned-frame")]
