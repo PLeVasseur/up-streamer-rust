@@ -41,6 +41,8 @@ const LOLA_MAX_SUBSCRIBERS: usize = 8;
 const LOLA_LISTENER_STABILIZATION_MS: u64 = 500;
 const LOLA_ROW_COOLDOWN_MS: u64 = 500;
 const LOLA_ROW_RETRIES: usize = 1;
+const ZENOH_ROW_COOLDOWN_MS: u64 = 500;
+const ZENOH_ROW_RETRIES: usize = 1;
 const ICEORYX2_ROOT_PATH: &str = "/tmp/up-streamer-iceoryx2";
 const NAMESPACE_TMP_SIZE: &str = "1g";
 const NAMESPACE_SHM_SIZE: &str = "2g";
@@ -526,11 +528,14 @@ fn run_row(
     row: &MatrixRow,
     cli: &Cli,
 ) -> Result<RowResult> {
-    let max_attempts = if row.uses_lola() {
-        LOLA_ROW_RETRIES + 1
+    let retries = if row.uses_lola() {
+        LOLA_ROW_RETRIES
+    } else if row.uses_zenoh() {
+        ZENOH_ROW_RETRIES
     } else {
-        1
+        0
     };
+    let max_attempts = retries + 1;
     let mut last_result = None;
     for attempt in 0..max_attempts {
         let mut result = run_row_attempt(repo_root, artifacts_root, row, cli, attempt)?;
@@ -542,7 +547,12 @@ fn run_row(
         }
         last_result = Some(result);
         if attempt + 1 < max_attempts {
-            thread::sleep(Duration::from_millis(LOLA_ROW_COOLDOWN_MS));
+            let cooldown_ms = if row.uses_lola() {
+                LOLA_ROW_COOLDOWN_MS
+            } else {
+                ZENOH_ROW_COOLDOWN_MS
+            };
+            thread::sleep(Duration::from_millis(cooldown_ms));
         }
     }
     Ok(last_result.expect("at least one row attempt ran"))
@@ -2717,6 +2727,11 @@ impl MatrixRow {
     fn uses_lola(&self) -> bool {
         self.source.physical == PhysicalTransport::Lola
             || self.sink.physical == PhysicalTransport::Lola
+    }
+
+    fn uses_zenoh(&self) -> bool {
+        self.source.physical == PhysicalTransport::Zenoh
+            || self.sink.physical == PhysicalTransport::Zenoh
     }
 
     fn uses_mqtt5(&self) -> bool {
