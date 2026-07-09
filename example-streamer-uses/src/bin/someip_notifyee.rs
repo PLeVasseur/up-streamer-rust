@@ -1,5 +1,5 @@
 /********************************************************************************
- * Copyright (c) 2024 Contributors to the Eclipse Foundation
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
  * information regarding copyright ownership.
@@ -15,24 +15,28 @@ mod common;
 
 use clap::{Parser, ValueEnum};
 use common::cli;
-use common::{native_message_payload_parts, xcdrv2_message_payload_parts, ServiceRequestResponder};
+use common::{native_message_payload_parts, xcdrv2_message_payload_parts, PublishReceiver};
 use std::sync::Arc;
 use std::thread;
 use tracing::{info, trace, warn};
-use up_rust::{PayloadEncoding, UListener, UStatus, UTransport, UUri};
+use up_rust::{PayloadEncoding, UListener, UStatus, UTransport};
 use up_transport_vsomeip::{TransportConfig, UPTransportVsomeip};
 
-const DEFAULT_UAUTHORITY: &str = "authority-a";
-const DEFAULT_UENTITY: &str = "0x4321";
+const DEFAULT_UAUTHORITY: &str = "authority-b";
+const DEFAULT_UENTITY: &str = "0x5BB0";
 const DEFAULT_UVERSION: &str = "0x1";
-const DEFAULT_RESOURCE: &str = "0x0421";
+const DEFAULT_RESOURCE: &str = "0x0";
+const DEFAULT_SOURCE_AUTHORITY: &str = "authority-b";
+const DEFAULT_SOURCE_UENTITY: &str = "0x5BA0";
+const DEFAULT_SOURCE_UVERSION: &str = "0x1";
+const DEFAULT_SOURCE_RESOURCE: &str = "0x8000";
 const DEFAULT_REMOTE_AUTHORITY: &str = "authority-b";
 const DEFAULT_VSOMEIP_CONFIG: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/vsomeip-configs/someip_server.json"
+    "/vsomeip-configs/someip_notifyee.json"
 );
-const DEFAULT_UENTITY_NUM: u32 = 0x4321;
-const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"SSRV");
+const DEFAULT_UENTITY_NUM: u32 = 0x5BB0;
+const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"SNTF");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum Encoding {
@@ -44,25 +48,26 @@ enum Encoding {
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// Authority for the local service identity
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
-    /// UEntity ID for local service identity (decimal or 0x-prefixed hex)
     #[arg(long, default_value = DEFAULT_UENTITY)]
     uentity: String,
-    /// UEntity major version for local service identity (decimal or 0x-prefixed hex)
     #[arg(long, default_value = DEFAULT_UVERSION)]
     uversion: String,
-    /// Resource ID for local service identity (decimal or 0x-prefixed hex)
     #[arg(long, default_value = DEFAULT_RESOURCE)]
     resource: String,
-    /// Remote authority used by the SOME/IP transport bridge
+    #[arg(long, default_value = DEFAULT_SOURCE_AUTHORITY)]
+    source_authority: String,
+    #[arg(long, default_value = DEFAULT_SOURCE_UENTITY)]
+    source_uentity: String,
+    #[arg(long, default_value = DEFAULT_SOURCE_UVERSION)]
+    source_uversion: String,
+    #[arg(long, default_value = DEFAULT_SOURCE_RESOURCE)]
+    source_resource: String,
     #[arg(long, default_value = DEFAULT_REMOTE_AUTHORITY)]
     remote_authority: String,
-    /// Path to the vsomeip JSON configuration file
     #[arg(long, default_value = DEFAULT_VSOMEIP_CONFIG)]
     vsomeip_config: String,
-    /// Payload encoding fixed by the SOME/IP topic convention.
     #[arg(long, value_enum, default_value = "protobuf")]
     encoding: Encoding,
 }
@@ -70,14 +75,15 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
-
     let args = Args::parse();
-
-    info!("Started someip_server");
+    info!("Started someip_notifyee");
 
     let uentity = cli::parse_u32_status("--uentity", &args.uentity)?;
     let uversion = cli::parse_u8_status("--uversion", &args.uversion)?;
     let resource = cli::parse_u16_status("--resource", &args.resource)?;
+    let source_uentity = cli::parse_u32_status("--source-uentity", &args.source_uentity)?;
+    let source_uversion = cli::parse_u8_status("--source-uversion", &args.source_uversion)?;
+    let source_resource = cli::parse_u16_status("--source-resource", &args.source_resource)?;
 
     let vsomeip_config = cli::canonicalize_cli_path("--vsomeip-config", &args.vsomeip_config)?;
     trace!("vsomeip_config: {vsomeip_config:?}");
@@ -89,14 +95,11 @@ async fn main() -> Result<(), UStatus> {
         );
     }
 
-    let service_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
+    let local_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
     let assumed_payload_encoding = payload_encoding(&args)?;
-
-    // There will be a single vsomeip_transport, as there is a connection into device and a streamer
-    // TODO: Add error handling if we fail to create a UPTransportVsomeip
-    let service: Arc<dyn UTransport> = Arc::new(
+    let notifyee: Arc<dyn UTransport> = Arc::new(
         UPTransportVsomeip::new_with_config_and_transport_config(
-            service_uuri,
+            local_uuri.clone(),
             &args.remote_authority,
             &vsomeip_config,
             None,
@@ -105,20 +108,18 @@ async fn main() -> Result<(), UStatus> {
         .unwrap(),
     );
 
-    let source_filter = UUri::any();
-    let sink_filter = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
-    let service_request_responder: Arc<dyn UListener> =
-        Arc::new(ServiceRequestResponder::new(service.clone()));
-    service
-        .register_listener(
-            &source_filter,
-            Some(&sink_filter),
-            service_request_responder.clone(),
-        )
+    let source_filter = cli::build_uuri(
+        &args.source_authority,
+        source_uentity,
+        source_uversion,
+        source_resource,
+    )?;
+    let listener: Arc<dyn UListener> = Arc::new(PublishReceiver);
+    notifyee
+        .register_listener(&source_filter, Some(&local_uuri), listener)
         .await?;
 
     println!("READY listener_registered");
-
     loop {
         thread::park();
     }

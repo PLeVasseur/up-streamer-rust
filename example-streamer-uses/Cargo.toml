@@ -28,6 +28,14 @@ name = "someip_publisher"
 required-features = ["vsomeip-transport"]
 
 [[bin]]
+name = "someip_notifier"
+required-features = ["vsomeip-transport"]
+
+[[bin]]
+name = "someip_notifyee"
+required-features = ["vsomeip-transport"]
+
+[[bin]]
 name = "someip_server"
 required-features = ["vsomeip-transport"]
 

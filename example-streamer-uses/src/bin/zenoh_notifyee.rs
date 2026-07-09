@@ -181,8 +181,9 @@ async fn run_classic_zenoh_notifyee(cli: &Cli) -> Result<(), UStatus> {
         .register_listener(&source_filter, Some(&sink_filter), listener)
         .await?;
     println!("READY listener_registered");
-    thread::park();
-    Ok(())
+    loop {
+        thread::park();
+    }
 }
 
 fn classic_zenoh_config(cli: &Cli) -> Result<ZenohConfig, UStatus> {

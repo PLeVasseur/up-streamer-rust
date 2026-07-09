@@ -191,8 +191,9 @@ async fn run_classic_zenoh_server(cli: &Cli) -> Result<(), UStatus> {
         .await?;
 
     println!("READY listener_registered");
-    thread::park();
-    Ok(())
+    loop {
+        thread::park();
+    }
 }
 
 fn classic_zenoh_config(cli: &Cli) -> Result<ZenohConfig, UStatus> {

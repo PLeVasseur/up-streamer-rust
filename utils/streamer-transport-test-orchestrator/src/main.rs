@@ -49,7 +49,7 @@ const ZENOH_LISTENER_STABILIZATION_MS: u64 = 1_000;
 const VSOMEIP_LISTENER_STABILIZATION_MS: u64 = 1_000;
 const VSOMEIP_DUMMY_SERVICE_ID: u16 = 0x7ffe;
 const VSOMEIP_DUMMY_INSTANCE_ID: u16 = 0x0001;
-const UNSUPPORTED_VSOMEIP_NOTIFICATION_REASON: &str = "vSomeIP transport does not implement uProtocol Notification; SOME/IP MT_NOTIFICATION is mapped only to uProtocol Publish";
+const NOTIFICATION_RESOURCE_ID: u16 = 0x8000;
 
 #[derive(Debug, Parser)]
 #[command(name = "streamer-transport-test-orchestrator")]
@@ -65,6 +65,9 @@ struct Cli {
 
     #[arg(long)]
     skip_build: bool,
+
+    #[arg(long)]
+    use_local_sibling_patches: bool,
 
     #[arg(long)]
     artifacts_root: Option<PathBuf>,
@@ -293,7 +296,7 @@ fn main() -> Result<()> {
         .with_context(|| format!("unable to create {}", artifacts_root.display()))?;
 
     if !cli.skip_build {
-        build_required_binaries(&repo_root, &selected_rows)?;
+        build_required_binaries(&repo_root, &selected_rows, cli.use_local_sibling_patches)?;
     }
 
     let mut results = Vec::new();
@@ -476,12 +479,6 @@ fn support_status(row: &MatrixRow) -> SupportStatus {
         return unsupported(
             "source and sink endpoint profiles are identical; no bridge boundary is under test",
         );
-    }
-    if row.role == RoleStyle::NotifierNotifyee
-        && (row.source.physical == PhysicalTransport::Vsomeip
-            || row.sink.physical == PhysicalTransport::Vsomeip)
-    {
-        return unsupported(UNSUPPORTED_VSOMEIP_NOTIFICATION_REASON);
     }
     if row.source.kind == EndpointKind::Classic || row.sink.kind == EndpointKind::Classic {
         return SupportStatus {
@@ -791,8 +788,22 @@ fn run_row_attempt(
     }
 }
 
-fn build_required_binaries(repo_root: &Path, rows: &[MatrixRow]) -> Result<()> {
-    let common_args = cargo_patch_args(repo_root);
+fn build_required_binaries(
+    repo_root: &Path,
+    rows: &[MatrixRow],
+    use_local_sibling_patches: bool,
+) -> Result<()> {
+    let common_args = if use_local_sibling_patches {
+        cargo_patch_args(repo_root)
+    } else {
+        Vec::new()
+    };
+    if !common_args.is_empty() {
+        println!("Using local sibling Cargo patches:");
+        for config in common_args.chunks(2).filter_map(|chunk| chunk.get(1)) {
+            println!("  {config}");
+        }
+    }
     let configurable_features = configurable_streamer_features(rows).join(",");
     let example_features = example_streamer_features(rows).join(",");
     run_cargo(
@@ -1023,7 +1034,12 @@ fn write_config(
 }
 
 fn streamer_uuri_config(row: &MatrixRow) -> serde_json::Value {
-    if row.role == RoleStyle::ClientServerRpc && row.source.physical == PhysicalTransport::Vsomeip {
+    if row.source.physical == PhysicalTransport::Vsomeip
+        && matches!(
+            row.role,
+            RoleStyle::ClientServerRpc | RoleStyle::NotifierNotifyee
+        )
+    {
         return json!({
             "authority": AUTHORITY_B,
             "ue_id": UE_ID,
@@ -1050,11 +1066,19 @@ fn push_endpoint(
     lola_manifest_path: Option<&Path>,
     role: RoleStyle,
 ) {
+    let forwarding_routes = if role == RoleStyle::NotifierNotifyee
+        && side == "sink"
+        && profile.physical == PhysicalTransport::Vsomeip
+    {
+        Vec::new()
+    } else {
+        vec![json!({ "endpoint": forward_endpoint, "wire_format": encoding.wire_format() })]
+    };
     let mut value = json!({
         "authority": authority,
         "endpoint": endpoint,
         "routing_mode": profile.kind.routing_mode(),
-        "forwarding_routes": [{ "endpoint": forward_endpoint, "wire_format": encoding.wire_format() }],
+        "forwarding_routes": forwarding_routes,
     });
     if profile.kind == EndpointKind::CopyMinimized {
         value["copy_minimized_payload_alignment"] = json!(8);
@@ -1124,37 +1148,70 @@ fn write_vsomeip_configs(row: &MatrixRow, paths: &VsomeipConfigPaths) -> Result<
     let network = format!("up_vs_{:08x}", stable_hash(&row.id));
     let base = 0x1000_u16 + ((row.ordinal as u16) * 3);
     let (service_id, instance_id) = vsomeip_config_service(row);
+    let app_ids = vsomeip_app_ids(row, base);
+    let applications = [
+        ("streamer_app", app_ids.streamer),
+        ("source_app", app_ids.source),
+        ("sink_app", app_ids.sink),
+    ];
     write_vsomeip_config(
         &paths.streamer,
         &network,
         "streamer_app",
-        base,
+        app_ids.streamer,
         service_id,
         instance_id,
+        &applications,
     )?;
     write_vsomeip_config(
         &paths.source,
         &network,
         "source_app",
-        base + 1,
+        app_ids.source,
         service_id,
         instance_id,
+        &applications,
     )?;
     write_vsomeip_config(
         &paths.sink,
         &network,
         "sink_app",
-        base + 2,
+        app_ids.sink,
         service_id,
         instance_id,
+        &applications,
     )?;
     Ok(())
+}
+
+struct VsomeipAppIds {
+    streamer: u16,
+    source: u16,
+    sink: u16,
+}
+
+fn vsomeip_app_ids(row: &MatrixRow, base: u16) -> VsomeipAppIds {
+    let mut ids = VsomeipAppIds {
+        streamer: base,
+        source: base + 1,
+        sink: base + 2,
+    };
+    if row.role == RoleStyle::NotifierNotifyee && row.source.physical == PhysicalTransport::Vsomeip
+    {
+        ids.source = UE_ID as u16;
+    }
+    if row.role == RoleStyle::NotifierNotifyee && row.sink.physical == PhysicalTransport::Vsomeip {
+        ids.streamer = UE_ID as u16;
+    }
+    ids
 }
 
 fn vsomeip_config_service(row: &MatrixRow) -> (u16, u16) {
     let service_id = (UE_ID & 0xffff) as u16;
     let instance_id = ((UE_ID >> 16) as u16).max(1);
-    if row.role == RoleStyle::ClientServerRpc && row.source.physical == PhysicalTransport::Vsomeip {
+    if (row.role == RoleStyle::ClientServerRpc && row.source.physical == PhysicalTransport::Vsomeip)
+        || row.role == RoleStyle::NotifierNotifyee
+    {
         (service_id, instance_id)
     } else {
         (VSOMEIP_DUMMY_SERVICE_ID, VSOMEIP_DUMMY_INSTANCE_ID)
@@ -1168,11 +1225,20 @@ fn write_vsomeip_config(
     app_id: u16,
     service_id: u16,
     instance_id: u16,
+    applications: &[(&str, u16)],
 ) -> Result<()> {
+    let mut application_entries =
+        vec![json!({ "name": app_name, "id": format!("0x{app_id:04x}") })];
+    for (candidate_name, candidate_id) in applications {
+        if *candidate_name != app_name {
+            application_entries
+                .push(json!({ "name": candidate_name, "id": format!("0x{candidate_id:04x}") }));
+        }
+    }
     let config = json!({
         "unicast": "127.0.0.1",
         "network": network,
-        "applications": [{ "name": app_name, "id": format!("0x{app_id:04x}") }],
+        "applications": application_entries,
         "services": [{ "service": format!("0x{service_id:04x}"), "instance": format!("0x{instance_id:04x}") }]
     });
     fs::write(path, serde_json::to_string_pretty(&config)?)
@@ -1428,6 +1494,7 @@ fn classic_vsomeip_args(
         "--encoding".to_string(),
         row.encoding.cli_value().to_string(),
     ];
+    let notification_resource_id = role_topic_resource_id(row);
 
     match role_name {
         "publisher" => common_identity
@@ -1486,6 +1553,41 @@ fn classic_vsomeip_args(
                 format!("0x{METHOD_RESOURCE_ID:X}"),
             ])
             .chain(common_transport)
+            .collect(),
+        "notifier" => common_identity
+            .into_iter()
+            .chain([
+                "--resource".to_string(),
+                format!("0x{notification_resource_id:X}"),
+            ])
+            .chain(common_transport)
+            .chain([
+                "--sink-authority".to_string(),
+                peer_authority.to_string(),
+                "--sink-uentity".to_string(),
+                format!("0x{UE_ID:X}"),
+                "--send-count".to_string(),
+                role_send_count(row, cli).to_string(),
+                "--send-interval-ms".to_string(),
+                cli.send_interval_ms.to_string(),
+                "--payload".to_string(),
+                row.id.clone(),
+            ])
+            .collect(),
+        "notifyee" => common_identity
+            .into_iter()
+            .chain(["--resource".to_string(), "0x0".to_string()])
+            .chain(common_transport)
+            .chain([
+                "--source-authority".to_string(),
+                peer_authority.to_string(),
+                "--source-uentity".to_string(),
+                format!("0x{UE_ID:X}"),
+                "--source-uversion".to_string(),
+                format!("0x{UE_VERSION_MAJOR:X}"),
+                "--source-resource".to_string(),
+                format!("0x{notification_resource_id:X}"),
+            ])
             .collect(),
         _ => Vec::new(),
     }
@@ -1598,7 +1700,7 @@ fn classic_generic_flow_args(
         "--ue-version-major".into(),
         UE_VERSION_MAJOR.to_string(),
         "--topic-resource-id".into(),
-        TOPIC_RESOURCE_ID.to_string(),
+        role_topic_resource_id(row).to_string(),
         "--method-resource-id".into(),
         METHOD_RESOURCE_ID.to_string(),
         "--send-count".into(),
@@ -1624,6 +1726,7 @@ fn classic_mqtt_args(
     cli: &Cli,
 ) -> Vec<String> {
     let broker_uri = format!("localhost:{MQTT_BROKER_PORT}");
+    let notification_resource_id = role_topic_resource_id(row);
     match role_name {
         "publisher" => vec![
             "--uauthority".into(),
@@ -1633,7 +1736,7 @@ fn classic_mqtt_args(
             "--uversion".into(),
             format!("0x{UE_VERSION_MAJOR:X}"),
             "--resource".into(),
-            format!("0x{TOPIC_RESOURCE_ID:X}"),
+            format!("0x{notification_resource_id:X}"),
             "--broker-uri".into(),
             broker_uri,
             "--send-count".into(),
@@ -1661,7 +1764,7 @@ fn classic_mqtt_args(
             "--source-uversion".into(),
             format!("0x{UE_VERSION_MAJOR:X}"),
             "--source-resource".into(),
-            format!("0x{TOPIC_RESOURCE_ID:X}"),
+            format!("0x{notification_resource_id:X}"),
             "--broker-uri".into(),
             broker_uri,
         ],
@@ -1713,7 +1816,7 @@ fn classic_mqtt_args(
             "--uversion".into(),
             format!("0x{UE_VERSION_MAJOR:X}"),
             "--resource".into(),
-            format!("0x{TOPIC_RESOURCE_ID:X}"),
+            format!("0x{notification_resource_id:X}"),
             "--sink-authority".into(),
             peer_authority.into(),
             "--sink-uentity".into(),
@@ -1745,7 +1848,7 @@ fn classic_mqtt_args(
             "--source-uversion".into(),
             format!("0x{UE_VERSION_MAJOR:X}"),
             "--source-resource".into(),
-            format!("0x{TOPIC_RESOURCE_ID:X}"),
+            format!("0x{notification_resource_id:X}"),
             "--broker-uri".into(),
             broker_uri,
         ],
@@ -1888,7 +1991,7 @@ fn generic_args(
         "--ue-version-major".into(),
         UE_VERSION_MAJOR.to_string(),
         "--topic-resource-id".into(),
-        TOPIC_RESOURCE_ID.to_string(),
+        role_topic_resource_id(row).to_string(),
         "--method-resource-id".into(),
         METHOD_RESOURCE_ID.to_string(),
         "--send-count".into(),
@@ -1953,6 +2056,14 @@ fn add_lola_args(
 
 fn role_send_count(_row: &MatrixRow, cli: &Cli) -> usize {
     cli.send_count.max(5)
+}
+
+fn role_topic_resource_id(row: &MatrixRow) -> u16 {
+    if row.role == RoleStyle::NotifierNotifyee && row.uses_vsomeip() {
+        NOTIFICATION_RESOURCE_ID
+    } else {
+        TOPIC_RESOURCE_ID
+    }
 }
 
 fn binary_name(profile: EndpointProfile, role_name: &str) -> String {

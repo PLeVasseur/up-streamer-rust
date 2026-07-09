@@ -94,6 +94,7 @@ async fn main() -> Result<(), UStatus> {
         .register_listener(&source_filter, Some(&local_uuri), listener)
         .await?;
     println!("READY listener_registered");
-    thread::park();
-    Ok(())
+    loop {
+        thread::park();
+    }
 }

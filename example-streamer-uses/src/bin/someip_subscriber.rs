@@ -139,8 +139,9 @@ async fn main() -> Result<(), UStatus> {
 
     println!("READY listener_registered");
 
-    thread::park();
-    Ok(())
+    loop {
+        thread::park();
+    }
 }
 
 fn payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {

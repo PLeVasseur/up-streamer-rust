@@ -152,8 +152,9 @@ async fn main() -> Result<(), UStatus> {
 
     println!("READY listener_registered");
 
-    thread::park();
-    Ok(())
+    loop {
+        thread::park();
+    }
 }
 
 async fn run_selected_wire_subscriber(
