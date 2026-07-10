@@ -23,7 +23,7 @@ use hello_world_protos::hello_world_service::HelloRequest;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
-use up_rust::{UCode, UListener, UMessageBuilder, UPayloadFormat, UStatus, UTransport};
+use up_rust::{UCode, UMessageBuilder, UPayloadFormat, UStatus, UTransport};
 use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions, MqttClientOptions};
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
@@ -84,6 +84,9 @@ struct Args {
     /// Milliseconds to wait between request sends
     #[arg(long, default_value_t = 1000)]
     send_interval_ms: u64,
+    /// Milliseconds to wait for an observed response after bounded sends.
+    #[arg(long, default_value_t = 5000)]
+    timeout_ms: u64,
     /// Payload encoding for the classic UMessage request payload.
     #[arg(long, value_enum, default_value = "protobuf")]
     encoding: Encoding,
@@ -131,9 +134,9 @@ async fn main() -> Result<(), UStatus> {
 
     let client: Arc<dyn UTransport> = Arc::new(mqtt5_transport);
 
-    let service_response_listener: Arc<dyn UListener> = Arc::new(ServiceResponseListener);
+    let service_response_listener = Arc::new(ServiceResponseListener::default());
     client
-        .register_listener(&sink, Some(&source), service_response_listener)
+        .register_listener(&sink, Some(&source), service_response_listener.clone())
         .await?;
 
     if args.send_count > 0 {
@@ -176,7 +179,9 @@ async fn main() -> Result<(), UStatus> {
     }
 
     if args.send_count > 0 {
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        service_response_listener
+            .wait_for_response(args.timeout_ms)
+            .await?;
     }
 
     Ok(())

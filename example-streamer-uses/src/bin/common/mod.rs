@@ -8,7 +8,14 @@ use hello_world_protos::{
     hello_world_topics::Timer,
 };
 use protobuf::Message;
-use std::sync::Arc;
+use std::{
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
+use tokio::sync::Notify;
 use tracing::{debug, error, info};
 use up_rust::{
     PayloadEncoding, UCode, UListener, UMessage, UMessageBuilder, UPayloadFormat, UStatus,
@@ -20,7 +27,29 @@ pub(crate) fn protobuf_payload(message: &impl Message) -> Vec<u8> {
 }
 
 #[allow(dead_code)]
-pub(crate) struct ServiceResponseListener;
+#[derive(Default)]
+pub(crate) struct ServiceResponseListener {
+    received: AtomicUsize,
+    observed: Notify,
+}
+
+impl ServiceResponseListener {
+    #[allow(dead_code)]
+    pub(crate) async fn wait_for_response(&self, timeout_ms: u64) -> Result<(), UStatus> {
+        tokio::time::timeout(Duration::from_millis(timeout_ms), async {
+            while self.received.load(Ordering::Acquire) == 0 {
+                self.observed.notified().await;
+            }
+        })
+        .await
+        .map_err(|_| {
+            UStatus::fail_with_code(
+                UCode::DeadlineExceeded,
+                "timed out waiting for classic RPC response",
+            )
+        })
+    }
+}
 
 #[async_trait]
 impl UListener for ServiceResponseListener {
@@ -39,6 +68,8 @@ impl UListener for ServiceResponseListener {
             "FLOW observed_payload_bytes={} role=classic_response_listener",
             payload_bytes.len()
         );
+        self.received.fetch_add(1, Ordering::Release);
+        self.observed.notify_one();
     }
 }
 

@@ -27,8 +27,8 @@ use tracing::{debug, info};
 use up_rust::selected_wire_user_api::{ProtobufWire, StableContainerWireFormat};
 use up_rust::{
     PayloadEncoding, PayloadFormat, StableContainerPayload, UCode, UFrameMetadata, UFrameView,
-    UListener, UMessageBuilder, UOwnedFrame, UOwnedTransport, UPayloadFormat, UStatus, UTransport,
-    UTxBuffer, UTxLoanSpec, UUri, UZeroCopyRxLease, UZeroCopyTransport,
+    UMessageBuilder, UOwnedFrame, UOwnedTransport, UPayloadFormat, UStatus, UTransport, UTxBuffer,
+    UTxLoanSpec, UUri, UZeroCopyRxLease, UZeroCopyTransport,
 };
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
@@ -163,9 +163,9 @@ async fn main() -> Result<(), UStatus> {
         target_resource,
     )?;
 
-    let service_response_listener: Arc<dyn UListener> = Arc::new(ServiceResponseListener);
+    let service_response_listener = Arc::new(ServiceResponseListener::default());
     client
-        .register_listener(&sink, Some(&source), service_response_listener)
+        .register_listener(&sink, Some(&source), service_response_listener.clone())
         .await?;
 
     let mut i: u64 = 0;
@@ -207,7 +207,9 @@ async fn main() -> Result<(), UStatus> {
     }
 
     if args.send_count > 0 {
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        service_response_listener
+            .wait_for_response(args.timeout_ms)
+            .await?;
     }
 
     Ok(())
@@ -533,7 +535,7 @@ async fn receive_owned_payload(
             ));
         }
         match tokio::time::timeout(
-            remaining.min(Duration::from_millis(100)),
+            remaining,
             transport.receive_owned(&source_filter, Some(&sink_filter)),
         )
         .await
@@ -568,7 +570,7 @@ where
             ));
         }
         match tokio::time::timeout(
-            remaining.min(Duration::from_millis(100)),
+            remaining,
             transport.receive_zero_copy(&source_filter, Some(&sink_filter)),
         )
         .await

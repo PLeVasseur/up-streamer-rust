@@ -818,7 +818,7 @@ async fn receive_owned_frame(
             ));
         }
         match tokio::time::timeout(
-            remaining.min(Duration::from_millis(100)),
+            remaining,
             transport.receive_owned(source_filter, sink_filter),
         )
         .await
@@ -969,7 +969,7 @@ where
             ));
         }
         match tokio::time::timeout(
-            remaining.min(Duration::from_millis(100)),
+            remaining,
             transport.receive_zero_copy(source_filter, sink_filter),
         )
         .await

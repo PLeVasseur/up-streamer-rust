@@ -40,9 +40,9 @@ const LOLA_QUEUE_SIZE: usize = 128;
 const LOLA_MAX_SUBSCRIBERS: usize = 8;
 const LOLA_LISTENER_STABILIZATION_MS: u64 = 500;
 const LOLA_ROW_COOLDOWN_MS: u64 = 1_000;
-const LOLA_ROW_RETRIES: usize = 2;
+const LOLA_ROW_RETRIES: usize = 1;
 const ZENOH_ROW_COOLDOWN_MS: u64 = 500;
-const ZENOH_ROW_RETRIES: usize = 1;
+const ZENOH_ROW_RETRIES: usize = 0;
 const ICEORYX2_ROOT_PATH: &str = "/tmp/up-streamer-iceoryx2";
 const NAMESPACE_TMP_SIZE: &str = "1g";
 const NAMESPACE_SHM_SIZE: &str = "2g";
@@ -172,6 +172,30 @@ struct LolaEndpointInfo {
     response_event_name: Option<String>,
 }
 
+struct LolaManifestPaths {
+    streamer: PathBuf,
+    active: PathBuf,
+    passive: PathBuf,
+}
+
+impl LolaManifestPaths {
+    fn new(row_dir: &Path) -> Self {
+        Self {
+            streamer: row_dir.join("mw_com_config_lola_streamer.json"),
+            active: row_dir.join("mw_com_config_lola_active.json"),
+            passive: row_dir.join("mw_com_config_lola_passive.json"),
+        }
+    }
+
+    fn role(&self, active: bool) -> &Path {
+        if active {
+            &self.active
+        } else {
+            &self.passive
+        }
+    }
+}
+
 #[derive(Debug)]
 struct RunningProcess {
     name: String,
@@ -296,6 +320,7 @@ struct RowResult {
     artifact_dir: Option<String>,
     config_path: Option<String>,
     lola_manifest_path: Option<String>,
+    lola_manifest_paths: BTreeMap<String, String>,
     logs: BTreeMap<String, String>,
 }
 
@@ -802,13 +827,27 @@ fn run_row_attempt(
     let mut logs = BTreeMap::new();
     let lola_run_namespace = lola_run_namespace(&row_dir, row);
 
-    let lola_manifest_path = if row.uses_lola() {
-        let path = row_dir.join("mw_com_config_lola.json");
-        write_lola_manifest(row, &path, &lola_run_namespace)?;
-        Some(path)
+    let lola_manifest_paths = if row.uses_lola() {
+        let paths = LolaManifestPaths::new(&row_dir);
+        for (path, role) in [
+            (&paths.streamer, 1),
+            (&paths.active, 2),
+            (&paths.passive, 3),
+        ] {
+            write_lola_manifest(
+                row,
+                path,
+                &lola_run_namespace,
+                lola_application_id(&lola_run_namespace, role),
+            )?;
+        }
+        Some(paths)
     } else {
         None
     };
+    let lola_manifest_path = lola_manifest_paths
+        .as_ref()
+        .map(|paths| paths.streamer.clone());
     let lola_bridge_lib_dir = match detect_lola_bridge_lib_dir(repo_root) {
         Ok(path) => Some(path),
         Err(error) if row.uses_lola() => {
@@ -889,7 +928,9 @@ fn run_row_attempt(
         &config_path,
         &zenoh_config_paths,
         &vsomeip_config_paths,
-        lola_manifest_path.as_deref(),
+        lola_manifest_paths
+            .as_ref()
+            .map(|paths| paths.streamer.as_path()),
         &lola_run_namespace,
     )?;
 
@@ -916,7 +957,7 @@ fn run_row_attempt(
             false,
             &zenoh_config_paths,
             &vsomeip_config_paths,
-            lola_manifest_path.as_deref(),
+            lola_manifest_paths.as_ref().map(|paths| paths.role(false)),
             &lola_run_namespace,
             cli,
         )?;
@@ -949,7 +990,7 @@ fn run_row_attempt(
             true,
             &zenoh_config_paths,
             &vsomeip_config_paths,
-            lola_manifest_path.as_deref(),
+            lola_manifest_paths.as_ref().map(|paths| paths.role(true)),
             &lola_run_namespace,
             cli,
         )?;
@@ -1002,18 +1043,18 @@ fn run_row_attempt(
         thread::sleep(Duration::from_millis(LOLA_ROW_COOLDOWN_MS));
     }
 
-    match result {
-        Ok(()) => Ok(row_result(
+    let mut result = match result {
+        Ok(()) => row_result(
             row,
             RowClassification::Pass,
             "payload proof completed through configurable-streamer and stand-alone role binaries"
                 .to_string(),
             Some(row_dir),
             Some(config_path),
-            lola_manifest_path,
+            lola_manifest_path.clone(),
             logs,
-        )),
-        Err(error) => Ok(row_result(
+        ),
+        Err(error) => row_result(
             row,
             RowClassification::Failed,
             error.to_string(),
@@ -1021,8 +1062,19 @@ fn run_row_attempt(
             Some(config_path),
             lola_manifest_path,
             logs,
-        )),
+        ),
+    };
+    if let Some(paths) = &lola_manifest_paths {
+        result.lola_manifest_paths = [
+            ("streamer", &paths.streamer),
+            ("active", &paths.active),
+            ("passive", &paths.passive),
+        ]
+        .into_iter()
+        .map(|(role, path)| (role.to_string(), path.display().to_string()))
+        .collect();
     }
+    Ok(result)
 }
 
 fn build_required_binaries(
@@ -1482,7 +1534,12 @@ fn write_vsomeip_config(
         .with_context(|| format!("unable to write {}", path.display()))
 }
 
-fn write_lola_manifest(row: &MatrixRow, path: &Path, lola_run_namespace: &str) -> Result<()> {
+fn write_lola_manifest(
+    row: &MatrixRow,
+    path: &Path,
+    lola_run_namespace: &str,
+    application_id: u32,
+) -> Result<()> {
     let mut service_types = Vec::new();
     let mut service_instances = Vec::new();
     let mut service_id = lola_service_id_base(row);
@@ -1521,6 +1578,7 @@ fn write_lola_manifest(row: &MatrixRow, path: &Path, lola_run_namespace: &str) -
         "serviceInstances": service_instances,
         "global": {
             "asil-level": "QM",
+            "applicationID": application_id,
             "queue-size": { "QM-receiver": LOLA_QUEUE_SIZE, "QM-sender": LOLA_QUEUE_SIZE },
             "shm-size-calc-mode": "SIMULATION"
         }
@@ -1779,6 +1837,8 @@ fn classic_vsomeip_args(
                 role_send_count(row, cli).to_string(),
                 "--send-interval-ms".to_string(),
                 cli.send_interval_ms.to_string(),
+                "--timeout-ms".to_string(),
+                cli.timeout_ms.to_string(),
                 "--payload".to_string(),
                 row.id.clone(),
             ])
@@ -1904,6 +1964,8 @@ fn classic_zenoh_args(
             role_send_count(row, cli).to_string(),
             "--send-interval-ms".into(),
             cli.send_interval_ms.to_string(),
+            "--timeout-ms".into(),
+            cli.timeout_ms.to_string(),
             "--encoding".into(),
             row.encoding.cli_value().into(),
             "--payload".into(),
@@ -2028,6 +2090,8 @@ fn classic_mqtt_args(
             role_send_count(row, cli).to_string(),
             "--send-interval-ms".into(),
             cli.send_interval_ms.to_string(),
+            "--timeout-ms".into(),
+            cli.timeout_ms.to_string(),
             "--encoding".into(),
             row.encoding.cli_value().into(),
             "--payload".into(),
@@ -2699,14 +2763,15 @@ fn row_result(
         artifact_dir: artifact_dir.map(|path| path.display().to_string()),
         config_path: config_path.map(|path| path.display().to_string()),
         lola_manifest_path: lola_manifest_path.map(|path| path.display().to_string()),
+        lola_manifest_paths: BTreeMap::new(),
         logs,
     }
 }
 
 fn infer_failure_phase(reason: &str) -> &'static str {
-    if reason.contains("streamer") && reason.contains("marker") {
+    if reason.contains(READY_STREAMER) && reason.contains("marker") {
         "streamer_readiness"
-    } else if reason.contains("passive") && reason.contains("marker") {
+    } else if reason.contains(READY_LISTENER) && reason.contains("marker") {
         "passive_readiness_or_observation"
     } else if reason.contains("active") && reason.contains("process") {
         "active_process_exit"
@@ -2885,6 +2950,10 @@ fn lola_run_namespace(artifacts_root: &Path, row: &MatrixRow) -> String {
         Utc::now().timestamp_micros()
     );
     format!("r{:08x}", stable_hash(&seed))
+}
+
+fn lola_application_id(lola_run_namespace: &str, role: u32) -> u32 {
+    (stable_hash(lola_run_namespace) & 0x1fff_ffff) * 4 + role
 }
 
 fn stable_hash(value: &str) -> u32 {
@@ -3076,5 +3145,18 @@ mod tests {
         summary.max_retries_consumed = 1;
         let errors = validate_criteria(&summary, &zero_criteria());
         assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn lola_application_ids_are_unique_per_process_role() {
+        let ids = [
+            lola_application_id("r12345678", 1),
+            lola_application_id("r12345678", 2),
+            lola_application_id("r12345678", 3),
+        ];
+        assert_ne!(ids[0], ids[1]);
+        assert_ne!(ids[0], ids[2]);
+        assert_ne!(ids[1], ids[2]);
+        assert!(ids.into_iter().all(|id| id < u32::MAX));
     }
 }

@@ -289,12 +289,7 @@ async fn receive_owned_frame(
                 "timed out waiting for owned frame",
             ));
         }
-        match tokio::time::timeout(
-            remaining.min(Duration::from_millis(100)),
-            transport.receive_owned(source_filter, None),
-        )
-        .await
-        {
+        match tokio::time::timeout(remaining, transport.receive_owned(source_filter, None)).await {
             Ok(Ok(frame)) => return Ok(frame),
             Ok(Err(error)) if error.get_code() == UCode::NotFound => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -323,11 +318,8 @@ where
                 "timed out waiting for zero-copy frame",
             ));
         }
-        match tokio::time::timeout(
-            remaining.min(Duration::from_millis(100)),
-            transport.receive_zero_copy(source_filter, None),
-        )
-        .await
+        match tokio::time::timeout(remaining, transport.receive_zero_copy(source_filter, None))
+            .await
         {
             Ok(Ok(frame)) => return Ok(frame.try_contiguous_payload().unwrap_or(&[]).to_vec()),
             Ok(Err(error)) if error.get_code() == UCode::NotFound => {
