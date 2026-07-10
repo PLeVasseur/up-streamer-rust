@@ -1,0 +1,19 @@
+{
+  "description": "R5.1 flake-hardening acceptance criteria. Exact counts and diagonal-only unsupported reasons are unchanged. Configured recovery returns to the R4 regime, while acceptance requires zero retries consumed.",
+  "expected": {
+    "pass": 648,
+    "unsupported": 81,
+    "blocked": 0,
+    "failed": 0
+  },
+  "unsupported_reason_allowlist": [
+    "source and sink endpoint profiles are identical; no bridge boundary is under test"
+  ],
+  "retry": {
+    "max_retries_lola_rows": 1,
+    "max_retries_zenoh_rows": 0,
+    "all_other_rows": 0,
+    "max_retried_rows": 0,
+    "max_retries_consumed": 0
+  }
+}

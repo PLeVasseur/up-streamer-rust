@@ -14,7 +14,7 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use clap::Parser;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -88,6 +88,18 @@ struct Cli {
 
     #[arg(long)]
     max_runnable_rows: Option<usize>,
+
+    #[arg(long, default_value_t = 1)]
+    iterations: usize,
+
+    #[arg(long)]
+    disable_row_retries: bool,
+
+    #[arg(long)]
+    copy_minimized_sinks_only: bool,
+
+    #[arg(long)]
+    criteria: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -248,8 +260,20 @@ struct MatrixSummary {
     unsupported_count: usize,
     blocked_count: usize,
     failed_count: usize,
+    iterations: usize,
+    retry_policy: RetryPolicySummary,
+    retried_row_count: usize,
+    max_retries_consumed: usize,
     artifacts_root: String,
     rows: Vec<RowResult>,
+}
+
+#[derive(Serialize)]
+struct RetryPolicySummary {
+    disabled: bool,
+    lola_max_retries: usize,
+    zenoh_max_retries: usize,
+    default_max_retries: usize,
 }
 
 #[derive(Serialize)]
@@ -263,7 +287,11 @@ struct RowResult {
     sink_endpoint_kind: EndpointKind,
     role: RoleStyle,
     encoding: WireEncoding,
+    iteration: usize,
+    attempts_used: usize,
+    retries_consumed: usize,
     classification: RowClassification,
+    failure_phase: Option<&'static str>,
     reason: String,
     artifact_dir: Option<String>,
     config_path: Option<String>,
@@ -271,8 +299,42 @@ struct RowResult {
     logs: BTreeMap<String, String>,
 }
 
+#[derive(Deserialize)]
+struct MatrixCriteria {
+    expected: ExpectedCounts,
+    unsupported_reason_allowlist: Vec<String>,
+    retry: RetryCriteria,
+}
+
+#[derive(Deserialize)]
+struct ExpectedCounts {
+    pass: usize,
+    unsupported: usize,
+    blocked: usize,
+    failed: usize,
+}
+
+#[derive(Deserialize)]
+struct RetryCriteria {
+    max_retries_lola_rows: usize,
+    max_retries_zenoh_rows: usize,
+    all_other_rows: usize,
+    max_retried_rows: usize,
+    max_retries_consumed: usize,
+}
+
+#[derive(Serialize)]
+struct CriteriaResult {
+    verdict: &'static str,
+    criteria_path: String,
+    errors: Vec<String>,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.iterations == 0 {
+        return Err(anyhow!("--iterations must be greater than zero"));
+    }
     let repo_root = repo_root()?;
     let rows = matrix_rows();
 
@@ -287,7 +349,11 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let selected_rows = select_rows(rows, &cli.only)?;
+    let mut selected_rows = select_rows(rows, &cli.only)?;
+    selected_rows = filter_copy_minimized_sinks(selected_rows, cli.copy_minimized_sinks_only);
+    if selected_rows.is_empty() {
+        return Err(anyhow!("no matrix rows matched the requested selection"));
+    }
     let artifacts_root = cli.artifacts_root.clone().unwrap_or_else(|| {
         repo_root
             .join("target")
@@ -303,43 +369,58 @@ fn main() -> Result<()> {
 
     let mut results = Vec::new();
     let mut runnable_seen = 0_usize;
-    for row in selected_rows {
-        let support = support_status(&row);
-        if support.classification != RowClassification::Pass {
-            results.push(row_result(
-                &row,
-                support.classification,
-                support.reason,
-                None,
-                None,
-                None,
-                BTreeMap::new(),
-            ));
-            continue;
-        }
-
-        runnable_seen += 1;
-        if let Some(max) = cli.max_runnable_rows {
-            if runnable_seen > max {
-                results.push(row_result(
-                    &row,
-                    RowClassification::Blocked,
-                    format!("not executed because --max-runnable-rows={max} was reached"),
+    for iteration in 1..=cli.iterations {
+        for row in &selected_rows {
+            let support = support_status(row);
+            if support.classification != RowClassification::Pass {
+                let mut result = row_result(
+                    row,
+                    support.classification,
+                    support.reason,
                     None,
                     None,
                     None,
                     BTreeMap::new(),
-                ));
+                );
+                result.iteration = iteration;
+                results.push(result);
                 continue;
             }
-        }
 
-        println!("RUNNING {}", row.id);
-        results.push(run_row(&repo_root, &artifacts_root, &row, &cli)?);
+            runnable_seen += 1;
+            if let Some(max) = cli.max_runnable_rows {
+                if runnable_seen > max {
+                    let mut result = row_result(
+                        row,
+                        RowClassification::Blocked,
+                        format!("not executed because --max-runnable-rows={max} was reached"),
+                        None,
+                        None,
+                        None,
+                        BTreeMap::new(),
+                    );
+                    result.iteration = iteration;
+                    results.push(result);
+                    continue;
+                }
+            }
+
+            println!("RUNNING {} iteration={iteration}", row.id);
+            results.push(run_row(&repo_root, &artifacts_root, row, &cli, iteration)?);
+        }
     }
 
+    let retried_row_count = results
+        .iter()
+        .filter(|row| row.retries_consumed > 0)
+        .count();
+    let max_retries_consumed = results
+        .iter()
+        .map(|row| row.retries_consumed)
+        .max()
+        .unwrap_or_default();
     let summary = MatrixSummary {
-        schema_version: "1.0",
+        schema_version: "1.1",
         generated_at: Utc::now().to_rfc3339(),
         row_count: results.len(),
         pass_count: results
@@ -358,6 +439,23 @@ fn main() -> Result<()> {
             .iter()
             .filter(|row| row.classification == RowClassification::Failed)
             .count(),
+        iterations: cli.iterations,
+        retry_policy: RetryPolicySummary {
+            disabled: cli.disable_row_retries,
+            lola_max_retries: if cli.disable_row_retries {
+                0
+            } else {
+                LOLA_ROW_RETRIES
+            },
+            zenoh_max_retries: if cli.disable_row_retries {
+                0
+            } else {
+                ZENOH_ROW_RETRIES
+            },
+            default_max_retries: 0,
+        },
+        retried_row_count,
+        max_retries_consumed,
         artifacts_root: artifacts_root.display().to_string(),
         rows: results,
     };
@@ -365,19 +463,119 @@ fn main() -> Result<()> {
     fs::write(&summary_path, serde_json::to_string_pretty(&summary)?)
         .with_context(|| format!("unable to write {}", summary_path.display()))?;
 
+    let mut criteria_failed = false;
+    if let Some(criteria_path) = &cli.criteria {
+        let criteria: MatrixCriteria = serde_json::from_slice(
+            &fs::read(criteria_path)
+                .with_context(|| format!("unable to read {}", criteria_path.display()))?,
+        )
+        .with_context(|| format!("invalid matrix criteria {}", criteria_path.display()))?;
+        let errors = validate_criteria(&summary, &criteria);
+        criteria_failed = !errors.is_empty();
+        let result = CriteriaResult {
+            verdict: if criteria_failed { "FAIL" } else { "PASS" },
+            criteria_path: criteria_path.display().to_string(),
+            errors,
+        };
+        let result_path = artifacts_root.join("matrix-criteria-result.json");
+        fs::write(&result_path, serde_json::to_string_pretty(&result)?)
+            .with_context(|| format!("unable to write {}", result_path.display()))?;
+        println!(
+            "STREAMER_TRANSPORT_TEST_CRITERIA_JSON={}",
+            result_path.display()
+        );
+    }
+
     println!(
         "STREAMER_TRANSPORT_TEST_SUMMARY_JSON={}",
         summary_path.display()
     );
     println!(
-        "STREAMER_TRANSPORT_TEST_COUNTS pass={} unsupported={} blocked={} failed={}",
-        summary.pass_count, summary.unsupported_count, summary.blocked_count, summary.failed_count
+        "STREAMER_TRANSPORT_TEST_COUNTS pass={} unsupported={} blocked={} failed={} retried_rows={} max_retries_consumed={}",
+        summary.pass_count,
+        summary.unsupported_count,
+        summary.blocked_count,
+        summary.failed_count,
+        summary.retried_row_count,
+        summary.max_retries_consumed
     );
 
-    if summary.failed_count > 0 || summary.blocked_count > 0 {
+    if summary.failed_count > 0 || summary.blocked_count > 0 || criteria_failed {
         std::process::exit(1);
     }
     Ok(())
+}
+
+fn validate_criteria(summary: &MatrixSummary, criteria: &MatrixCriteria) -> Vec<String> {
+    let mut errors = Vec::new();
+    let actual = (
+        summary.pass_count,
+        summary.unsupported_count,
+        summary.blocked_count,
+        summary.failed_count,
+    );
+    let expected = (
+        criteria.expected.pass,
+        criteria.expected.unsupported,
+        criteria.expected.blocked,
+        criteria.expected.failed,
+    );
+    if actual != expected {
+        errors.push(format!(
+            "classification counts {actual:?} do not match expected {expected:?}"
+        ));
+    }
+    if summary.row_count != summary.rows.len() {
+        errors.push(format!(
+            "declared row_count {} does not match rows length {}",
+            summary.row_count,
+            summary.rows.len()
+        ));
+    }
+    for row in summary
+        .rows
+        .iter()
+        .filter(|row| row.classification == RowClassification::Unsupported)
+    {
+        if !criteria
+            .unsupported_reason_allowlist
+            .iter()
+            .any(|allowed| row.reason.contains(allowed))
+        {
+            errors.push(format!(
+                "unsupported row {} has unapproved reason: {}",
+                row.row_id, row.reason
+            ));
+        }
+    }
+    let retry = &criteria.retry;
+    if summary.retry_policy.lola_max_retries != retry.max_retries_lola_rows
+        || summary.retry_policy.zenoh_max_retries != retry.max_retries_zenoh_rows
+        || summary.retry_policy.default_max_retries != retry.all_other_rows
+    {
+        errors.push(format!(
+            "configured retry policy lola/zenoh/default={}/{}/{} does not match criteria {}/{}/{}",
+            summary.retry_policy.lola_max_retries,
+            summary.retry_policy.zenoh_max_retries,
+            summary.retry_policy.default_max_retries,
+            retry.max_retries_lola_rows,
+            retry.max_retries_zenoh_rows,
+            retry.all_other_rows
+        ));
+    }
+    if summary.retried_row_count > retry.max_retried_rows {
+        errors.push(format!(
+            "retried row count {} exceeds criteria maximum {}",
+            summary.retried_row_count, retry.max_retried_rows
+        ));
+    }
+    if summary.max_retries_consumed > retry.max_retries_consumed {
+        errors.push(format!(
+            "maximum retries consumed {} exceeds criteria maximum {}",
+            summary.max_retries_consumed, retry.max_retries_consumed
+        ));
+    }
+    errors
 }
 
 fn profiles() -> Vec<EndpointProfile> {
@@ -522,13 +720,37 @@ fn select_rows(rows: Vec<MatrixRow>, only: &[String]) -> Result<Vec<MatrixRow>> 
     Ok(selected)
 }
 
+fn filter_copy_minimized_sinks(
+    rows: Vec<MatrixRow>,
+    copy_minimized_sinks_only: bool,
+) -> Vec<MatrixRow> {
+    if copy_minimized_sinks_only {
+        rows.into_iter()
+            .filter(|row| row.sink.kind == EndpointKind::CopyMinimized)
+            .collect()
+    } else {
+        rows
+    }
+}
+
+fn row_run_id(row: &MatrixRow, iterations: usize, iteration: usize) -> String {
+    if iterations == 1 {
+        row.id.clone()
+    } else {
+        format!("{}-iteration{iteration:03}", row.id)
+    }
+}
+
 fn run_row(
     repo_root: &Path,
     artifacts_root: &Path,
     row: &MatrixRow,
     cli: &Cli,
+    iteration: usize,
 ) -> Result<RowResult> {
-    let retries = if row.uses_lola() {
+    let retries = if cli.disable_row_retries {
+        0
+    } else if row.uses_lola() {
         LOLA_ROW_RETRIES
     } else if row.uses_zenoh() {
         ZENOH_ROW_RETRIES
@@ -538,7 +760,10 @@ fn run_row(
     let max_attempts = retries + 1;
     let mut last_result = None;
     for attempt in 0..max_attempts {
-        let mut result = run_row_attempt(repo_root, artifacts_root, row, cli, attempt)?;
+        let mut result = run_row_attempt(repo_root, artifacts_root, row, cli, iteration, attempt)?;
+        result.iteration = iteration;
+        result.attempts_used = attempt + 1;
+        result.retries_consumed = attempt;
         if result.classification != RowClassification::Failed {
             if attempt > 0 {
                 result.reason = format!("{} after retry {attempt}", result.reason);
@@ -563,12 +788,14 @@ fn run_row_attempt(
     artifacts_root: &Path,
     row: &MatrixRow,
     cli: &Cli,
+    iteration: usize,
     attempt: usize,
 ) -> Result<RowResult> {
+    let run_id = row_run_id(row, cli.iterations, iteration);
     let row_dir = if attempt == 0 {
-        artifacts_root.join(&row.id)
+        artifacts_root.join(&run_id)
     } else {
-        artifacts_root.join(format!("{}-retry{attempt}", row.id))
+        artifacts_root.join(format!("{run_id}-retry{attempt}"))
     };
     fs::create_dir_all(&row_dir)
         .with_context(|| format!("unable to create {}", row_dir.display()))?;
@@ -2451,6 +2678,8 @@ fn row_result(
     lola_manifest_path: Option<PathBuf>,
     logs: BTreeMap<String, String>,
 ) -> RowResult {
+    let failure_phase =
+        (classification == RowClassification::Failed).then(|| infer_failure_phase(&reason));
     RowResult {
         row_id: row.id.clone(),
         source_profile: row.source.id.to_string(),
@@ -2461,12 +2690,34 @@ fn row_result(
         sink_endpoint_kind: row.sink.kind,
         role: row.role,
         encoding: row.encoding,
+        iteration: 1,
+        attempts_used: 0,
+        retries_consumed: 0,
         classification,
+        failure_phase,
         reason,
         artifact_dir: artifact_dir.map(|path| path.display().to_string()),
         config_path: config_path.map(|path| path.display().to_string()),
         lola_manifest_path: lola_manifest_path.map(|path| path.display().to_string()),
         logs,
+    }
+}
+
+fn infer_failure_phase(reason: &str) -> &'static str {
+    if reason.contains("streamer") && reason.contains("marker") {
+        "streamer_readiness"
+    } else if reason.contains("passive") && reason.contains("marker") {
+        "passive_readiness_or_observation"
+    } else if reason.contains("active") && reason.contains("process") {
+        "active_process_exit"
+    } else if reason.contains("passive") && reason.contains("process") {
+        "passive_process_exit"
+    } else if reason.contains("FLOW") || reason.contains("flow") {
+        "flow_validation"
+    } else if reason.contains("timeout") {
+        "scenario_timeout"
+    } else {
+        "row_execution"
     }
 }
 
@@ -2747,5 +2998,83 @@ impl MatrixRow {
     fn uses_vsomeip(&self) -> bool {
         self.source.physical == PhysicalTransport::Vsomeip
             || self.sink.physical == PhysicalTransport::Vsomeip
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zero_criteria() -> MatrixCriteria {
+        MatrixCriteria {
+            expected: ExpectedCounts {
+                pass: 0,
+                unsupported: 0,
+                blocked: 0,
+                failed: 0,
+            },
+            unsupported_reason_allowlist: vec![
+                "source and sink endpoint profiles are identical".to_string()
+            ],
+            retry: RetryCriteria {
+                max_retries_lola_rows: 1,
+                max_retries_zenoh_rows: 0,
+                all_other_rows: 0,
+                max_retried_rows: 0,
+                max_retries_consumed: 0,
+            },
+        }
+    }
+
+    fn empty_summary() -> MatrixSummary {
+        MatrixSummary {
+            schema_version: "1.1",
+            generated_at: String::new(),
+            row_count: 0,
+            pass_count: 0,
+            unsupported_count: 0,
+            blocked_count: 0,
+            failed_count: 0,
+            iterations: 1,
+            retry_policy: RetryPolicySummary {
+                disabled: false,
+                lola_max_retries: 1,
+                zenoh_max_retries: 0,
+                default_max_retries: 0,
+            },
+            retried_row_count: 0,
+            max_retries_consumed: 0,
+            artifacts_root: String::new(),
+            rows: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn copy_minimized_sink_filter_keeps_full_family() {
+        let rows = filter_copy_minimized_sinks(matrix_rows(), true);
+        assert_eq!(rows.len(), 243);
+        assert_eq!(
+            rows.iter()
+                .filter(|row| support_status(row).classification == RowClassification::Pass)
+                .count(),
+            216
+        );
+    }
+
+    #[test]
+    fn repeated_runs_get_unique_artifact_ids() {
+        let row = matrix_rows().remove(0);
+        assert_eq!(row_run_id(&row, 1, 1), row.id);
+        assert_eq!(row_run_id(&row, 100, 7), format!("{}-iteration007", row.id));
+    }
+
+    #[test]
+    fn criteria_rejects_consumed_retry() {
+        let mut summary = empty_summary();
+        assert!(validate_criteria(&summary, &zero_criteria()).is_empty());
+        summary.retried_row_count = 1;
+        summary.max_retries_consumed = 1;
+        let errors = validate_criteria(&summary, &zero_criteria());
+        assert_eq!(errors.len(), 2);
     }
 }
