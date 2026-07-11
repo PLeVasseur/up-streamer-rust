@@ -55,11 +55,11 @@ tokio = { version = "1.44", default-features = false, features = [
     "macros",
 ] }
 protobuf = { version = "3.7.2", features = ["with-bytes"] }
-up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "035941bc04d0cca73b79e464fd20ed96a7641332", default-features = false }
-up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "d10ae2baec9160601ddcc02b84eb0e95e4ddc522" }
-up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "096729f8e0083ab661e69538cf7256d7827ff72b" }
-up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "5b26e82a87318febe04d9b17b72d007bba0307da", default-features = false }
-up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "eda2d40ad45f52db73c4fdee093fa20e4d16e685" }
+up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "c4ba2590bc1ff85850f7715397bd020c18e26430", default-features = false }
+up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "31789cf3b05fb9ddacb69e65accf1649904231d2" }
+up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "c3ff0e167ac13662876d61f2ad9b8c92ed0fb4f0" }
+up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "d5a46eb6d4a4478627a495e196b24774693c5c49", default-features = false }
+up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "32be3558c8f48d2531bb942d8e7204bfb93e3951" }
 zenoh = { version = "1.2.1", features = [
     "default",
     "plugins",
@@ -72,7 +72,7 @@ zenoh-result = { version = "1.2.1" }
 zenoh-util = { version = "1.2.1" }
 
 [patch."ssh://git@github.com/PLeVasseur/up-rust.git"]
-up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "035941bc04d0cca73b79e464fd20ed96a7641332" }
+up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "c4ba2590bc1ff85850f7715397bd020c18e26430" }
 
 [profile.dev]
 debug = true
