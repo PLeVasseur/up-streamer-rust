@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{info, trace};
 use up_rust::core::usubscription::USubscription;
-use up_rust::{UCode, UPayloadFormat, UStatus, UTransport, UUri};
+use up_rust::{PayloadEncoding, UCode, UStatus, UTransport, UUri};
 use up_streamer::{Endpoint, UStreamer};
 use up_transport_vsomeip::{TransportConfig, UPTransportVsomeip};
 use up_transport_zenoh::{zenoh_config::Config as ZenohConfig, UPTransportZenoh};
@@ -184,7 +184,7 @@ async fn main() -> Result<(), UStatus> {
             &someip_config_file_abs_path,
             None,
             TransportConfig {
-                notification_payload_format: UPayloadFormat::Protobuf,
+                assumed_payload_encoding: PayloadEncoding::PROTOBUF,
             },
         )
         .map_err(|error| {
