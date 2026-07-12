@@ -406,9 +406,9 @@ fn ensure_copy_minimized_endpoint(
         if !endpoint.route_wire_endpoints.is_empty() {
             return Ok(());
         }
-        return Err(invalid_config(format!(
+        Err(invalid_config(format!(
             "endpoint {endpoint_name} uses copy_minimized routing but no route wire endpoint is available"
-        )));
+        )))
     }
 
     #[cfg(not(feature = "experimental-copy-minimized-routing"))]
@@ -429,9 +429,9 @@ fn ensure_owned_frame_endpoint(
         if !endpoint.owned_frame_endpoints.is_empty() {
             return Ok(());
         }
-        return Err(invalid_config(format!(
+        Err(invalid_config(format!(
             "endpoint {endpoint_name} uses owned_frame routing but no owned-frame endpoint is available"
-        )));
+        )))
     }
 
     #[cfg(not(feature = "owned-frame-transport"))]
@@ -1182,7 +1182,7 @@ fn required_lola_mw_com_manifest_path(
     field: &str,
     configured_path: Option<&String>,
 ) -> Result<String, UStatus> {
-    let path = configured_path.as_deref().ok_or_else(|| {
+    let path = configured_path.ok_or_else(|| {
         invalid_config(format!(
             "LoLa endpoint {} requires {field}; configurable-streamer examples must use an explicit checked-in MW COM manifest",
             endpoint_config.endpoint
@@ -1493,7 +1493,7 @@ async fn wire_classic_to_copy_minimized_route(
     configurable_streamer_wire_support::add_classic_to_copy_minimized_route_wire_format(
         streamer,
         standard_endpoint(left_endpoint, left_name)?,
-        &right_route_endpoint,
+        right_route_endpoint,
         route_wire_format,
         options,
     )
@@ -1516,7 +1516,7 @@ async fn wire_copy_minimized_to_classic_route(
     let left_route_endpoint = route_wire_endpoint(left_endpoint, left_name, route_wire_format)?;
     configurable_streamer_wire_support::add_copy_minimized_to_classic_route_wire_format(
         streamer,
-        &left_route_endpoint,
+        left_route_endpoint,
         standard_endpoint(right_endpoint, right_name)?,
         route_wire_format,
     )
