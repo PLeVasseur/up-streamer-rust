@@ -12,16 +12,20 @@
  ********************************************************************************/
 
 use anyhow::{anyhow, Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::BTreeMap;
+use signal_hook::consts::SIGINT;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File, OpenOptions};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::thread;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
+use std::{io::ErrorKind, thread};
 
 const AUTHORITY_A: &str = "authority-a";
 const AUTHORITY_B: &str = "authority-b";
@@ -88,6 +92,12 @@ struct Cli {
 
     #[arg(long)]
     max_runnable_rows: Option<usize>,
+
+    #[arg(long, default_value_t = 4)]
+    jobs: usize,
+
+    #[arg(long, default_value_t = 1)]
+    lola_jobs: usize,
 
     #[arg(long, default_value_t = 1)]
     iterations: usize,
@@ -285,6 +295,8 @@ struct MatrixSummary {
     blocked_count: usize,
     failed_count: usize,
     iterations: usize,
+    jobs: usize,
+    lola_jobs: usize,
     retry_policy: RetryPolicySummary,
     retried_row_count: usize,
     max_retries_consumed: usize,
@@ -355,11 +367,104 @@ struct CriteriaResult {
     errors: Vec<String>,
 }
 
-fn main() -> Result<()> {
-    let cli = Cli::parse();
-    if cli.iterations == 0 {
-        return Err(anyhow!("--iterations must be greater than zero"));
+#[derive(Clone, Default)]
+struct Cancellation(Arc<AtomicBool>);
+
+impl Cancellation {
+    #[cfg(test)]
+    fn cancel(&self) {
+        self.0.store(true, Ordering::SeqCst);
     }
+
+    fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+
+    fn check(&self) -> Result<()> {
+        if self.is_cancelled() {
+            Err(anyhow!("cancelled by Ctrl-C"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+struct ArtifactRootLock {
+    path: PathBuf,
+    _file: File,
+}
+
+impl ArtifactRootLock {
+    fn acquire(root: &Path) -> Result<Self> {
+        match fs::create_dir(root) {
+            Ok(()) => {}
+            Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                let mut entries = fs::read_dir(root)
+                    .with_context(|| format!("unable to read {}", root.display()))?;
+                if entries.next().transpose()?.is_some() {
+                    return Err(anyhow!(
+                        "artifact root {} already exists and is not empty",
+                        root.display()
+                    ));
+                }
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("unable to create {}", root.display()));
+            }
+        }
+        let path = root.join(".streamer-transport-test.lock");
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .with_context(|| format!("artifact root {} is already in use", root.display()))?;
+        Ok(Self { path, _file: file })
+    }
+}
+
+impl Drop for ArtifactRootLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+struct ScheduledTask<T> {
+    slot: usize,
+    lola_sensitive: bool,
+    payload: T,
+}
+
+struct SchedulerState<T> {
+    pending: VecDeque<ScheduledTask<T>>,
+    active_lola: usize,
+    stopped: bool,
+}
+
+struct RowExecution {
+    row: MatrixRow,
+    iteration: usize,
+}
+
+struct MatrixPlan {
+    slot_count: usize,
+    runnable: Vec<ScheduledTask<RowExecution>>,
+    completed: Vec<(usize, RowResult)>,
+}
+
+fn main() -> Result<()> {
+    let succeeded = run(Cli::parse())?;
+    if !succeeded {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+fn run(cli: Cli) -> Result<bool> {
+    validate_cli(&cli)?;
+    let cancellation = Cancellation::default();
+    signal_hook::flag::register(SIGINT, Arc::clone(&cancellation.0))
+        .context("unable to install Ctrl-C handler")?;
+
     let repo_root = repo_root()?;
     let rows = matrix_rows();
 
@@ -371,7 +476,7 @@ fn main() -> Result<()> {
                 row.id, support.classification, row.source.id, row.sink.id, support.reason
             );
         }
-        return Ok(());
+        return Ok(true);
     }
 
     let mut selected_rows = select_rows(rows, &cli.only)?;
@@ -379,61 +484,49 @@ fn main() -> Result<()> {
     if selected_rows.is_empty() {
         return Err(anyhow!("no matrix rows matched the requested selection"));
     }
-    let artifacts_root = cli.artifacts_root.clone().unwrap_or_else(|| {
-        repo_root
-            .join("target")
-            .join("streamer-transport-test")
-            .join(Utc::now().format("%Y%m%dT%H%M%SZ").to_string())
-    });
-    fs::create_dir_all(&artifacts_root)
-        .with_context(|| format!("unable to create {}", artifacts_root.display()))?;
+    let plan = plan_rows(&selected_rows, cli.iterations, cli.max_runnable_rows);
+    let artifacts_root = cli
+        .artifacts_root
+        .clone()
+        .unwrap_or_else(|| generated_artifacts_root(&repo_root, Utc::now(), std::process::id()));
+    if let Some(parent) = artifacts_root.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("unable to create {}", parent.display()))?;
+    }
+    let _artifact_lock = ArtifactRootLock::acquire(&artifacts_root)?;
 
     if !cli.skip_build {
         build_required_binaries(&repo_root, &selected_rows, cli.use_local_sibling_patches)?;
     }
+    cancellation.check()?;
 
-    let mut results = Vec::new();
-    let mut runnable_seen = 0_usize;
-    for iteration in 1..=cli.iterations {
-        for row in &selected_rows {
-            let support = support_status(row);
-            if support.classification != RowClassification::Pass {
-                let mut result = row_result(
-                    row,
-                    support.classification,
-                    support.reason,
-                    None,
-                    None,
-                    None,
-                    BTreeMap::new(),
-                );
-                result.iteration = iteration;
-                results.push(result);
-                continue;
-            }
-
-            runnable_seen += 1;
-            if let Some(max) = cli.max_runnable_rows {
-                if runnable_seen > max {
-                    let mut result = row_result(
-                        row,
-                        RowClassification::Blocked,
-                        format!("not executed because --max-runnable-rows={max} was reached"),
-                        None,
-                        None,
-                        None,
-                        BTreeMap::new(),
-                    );
-                    result.iteration = iteration;
-                    results.push(result);
-                    continue;
-                }
-            }
-
-            println!("RUNNING {} iteration={iteration}", row.id);
-            results.push(run_row(&repo_root, &artifacts_root, row, &cli, iteration)?);
-        }
-    }
+    let MatrixPlan {
+        slot_count,
+        runnable,
+        mut completed,
+    } = plan;
+    let executed = run_bounded(
+        runnable,
+        cli.jobs,
+        cli.lola_jobs,
+        &cancellation,
+        |execution| {
+            println!(
+                "RUNNING {} iteration={}",
+                execution.row.id, execution.iteration
+            );
+            run_row(
+                &repo_root,
+                &artifacts_root,
+                &execution.row,
+                &cli,
+                execution.iteration,
+                &cancellation,
+            )
+        },
+    )?;
+    completed.extend(executed);
+    let results = canonical_order(slot_count, completed)?;
 
     let retried_row_count = results
         .iter()
@@ -445,7 +538,7 @@ fn main() -> Result<()> {
         .max()
         .unwrap_or_default();
     let summary = MatrixSummary {
-        schema_version: "1.1",
+        schema_version: "1.2",
         generated_at: Utc::now().to_rfc3339(),
         row_count: results.len(),
         pass_count: results
@@ -465,6 +558,8 @@ fn main() -> Result<()> {
             .filter(|row| row.classification == RowClassification::Failed)
             .count(),
         iterations: cli.iterations,
+        jobs: cli.jobs,
+        lola_jobs: cli.lola_jobs,
         retry_policy: RetryPolicySummary {
             disabled: cli.disable_row_retries,
             lola_max_retries: if cli.disable_row_retries {
@@ -525,10 +620,245 @@ fn main() -> Result<()> {
         summary.max_retries_consumed
     );
 
-    if summary.failed_count > 0 || summary.blocked_count > 0 || criteria_failed {
-        std::process::exit(1);
+    Ok(summary.failed_count == 0 && summary.blocked_count == 0 && !criteria_failed)
+}
+
+fn validate_cli(cli: &Cli) -> Result<()> {
+    if cli.iterations == 0 {
+        return Err(anyhow!("--iterations must be greater than zero"));
+    }
+    validate_concurrency(cli.jobs, cli.lola_jobs)?;
+    let mut seen = BTreeSet::new();
+    for id in &cli.only {
+        if !seen.insert(id) {
+            return Err(anyhow!("duplicate --only matrix row id {id}"));
+        }
     }
     Ok(())
+}
+
+fn validate_concurrency(jobs: usize, lola_jobs: usize) -> Result<()> {
+    if jobs == 0 {
+        return Err(anyhow!("--jobs must be greater than zero"));
+    }
+    if lola_jobs == 0 {
+        return Err(anyhow!("--lola-jobs must be greater than zero"));
+    }
+    if lola_jobs > jobs {
+        return Err(anyhow!("--lola-jobs must not exceed --jobs"));
+    }
+    Ok(())
+}
+
+fn generated_artifacts_root(repo_root: &Path, now: DateTime<Utc>, process_id: u32) -> PathBuf {
+    repo_root
+        .join("target")
+        .join("streamer-transport-test")
+        .join(format!(
+            "{}-pid{process_id}",
+            now.format("%Y%m%dT%H%M%S%.6fZ")
+        ))
+}
+
+fn plan_rows(
+    rows: &[MatrixRow],
+    iterations: usize,
+    max_runnable_rows: Option<usize>,
+) -> MatrixPlan {
+    let mut runnable = Vec::new();
+    let mut completed = Vec::new();
+    let mut runnable_seen = 0_usize;
+    let mut slot = 0_usize;
+
+    for iteration in 1..=iterations {
+        for row in rows {
+            let support = support_status(row);
+            if support.classification != RowClassification::Pass {
+                let mut result = row_result(
+                    row,
+                    support.classification,
+                    support.reason,
+                    None,
+                    None,
+                    None,
+                    BTreeMap::new(),
+                );
+                result.iteration = iteration;
+                completed.push((slot, result));
+            } else {
+                runnable_seen += 1;
+                if max_runnable_rows.is_some_and(|max| runnable_seen > max) {
+                    let max = max_runnable_rows.expect("maximum was checked above");
+                    let mut result = row_result(
+                        row,
+                        RowClassification::Blocked,
+                        format!("not executed because --max-runnable-rows={max} was reached"),
+                        None,
+                        None,
+                        None,
+                        BTreeMap::new(),
+                    );
+                    result.iteration = iteration;
+                    completed.push((slot, result));
+                } else {
+                    runnable.push(ScheduledTask {
+                        slot,
+                        lola_sensitive: row.uses_lola(),
+                        payload: RowExecution {
+                            row: row.clone(),
+                            iteration,
+                        },
+                    });
+                }
+            }
+            slot += 1;
+        }
+    }
+
+    MatrixPlan {
+        slot_count: slot,
+        runnable,
+        completed,
+    }
+}
+
+fn run_bounded<T, R, F>(
+    tasks: Vec<ScheduledTask<T>>,
+    jobs: usize,
+    lola_jobs: usize,
+    cancellation: &Cancellation,
+    run_task: F,
+) -> Result<Vec<(usize, R)>>
+where
+    T: Send,
+    R: Send,
+    F: Fn(T) -> Result<R> + Sync,
+{
+    validate_concurrency(jobs, lola_jobs)?;
+    let shared = Arc::new((
+        Mutex::new(SchedulerState {
+            pending: tasks.into(),
+            active_lola: 0,
+            stopped: false,
+        }),
+        Condvar::new(),
+    ));
+    let (sender, receiver) = mpsc::channel();
+
+    thread::scope(|scope| -> Result<()> {
+        let mut workers = Vec::with_capacity(jobs);
+        for _ in 0..jobs {
+            let shared = Arc::clone(&shared);
+            let sender = sender.clone();
+            let run_task = &run_task;
+            workers.push(scope.spawn(move || loop {
+                let task = {
+                    let (state_lock, wake) = &*shared;
+                    let mut state = state_lock.lock().expect("scheduler state mutex poisoned");
+                    loop {
+                        if cancellation.is_cancelled() {
+                            state.stopped = true;
+                        }
+                        if state.stopped || state.pending.is_empty() {
+                            return;
+                        }
+                        let eligible = if jobs == 1 {
+                            Some(0)
+                        } else {
+                            let regular_pending =
+                                state.pending.iter().any(|task| !task.lola_sensitive);
+                            let lola_capacity = if regular_pending {
+                                lola_jobs.min(jobs - 1)
+                            } else {
+                                lola_jobs
+                            };
+                            if state.active_lola < lola_capacity {
+                                state.pending.iter().position(|task| task.lola_sensitive)
+                            } else {
+                                None
+                            }
+                            .or_else(|| state.pending.iter().position(|task| !task.lola_sensitive))
+                        };
+                        if let Some(index) = eligible {
+                            let task = state
+                                .pending
+                                .remove(index)
+                                .expect("eligible scheduler task disappeared");
+                            if task.lola_sensitive {
+                                state.active_lola += 1;
+                            }
+                            break task;
+                        }
+                        let (next_state, _) = wake
+                            .wait_timeout(state, Duration::from_millis(50))
+                            .expect("scheduler state mutex poisoned");
+                        state = next_state;
+                    }
+                };
+
+                let lola_sensitive = task.lola_sensitive;
+                let slot = task.slot;
+                let result = catch_unwind(AssertUnwindSafe(|| run_task(task.payload)))
+                    .unwrap_or_else(|_| Err(anyhow!("matrix scheduler task panicked")));
+                let failed = result.is_err();
+                {
+                    let (state_lock, wake) = &*shared;
+                    let mut state = state_lock.lock().expect("scheduler state mutex poisoned");
+                    if lola_sensitive {
+                        state.active_lola -= 1;
+                    }
+                    if failed {
+                        state.stopped = true;
+                    }
+                    wake.notify_all();
+                }
+                if sender.send((slot, result)).is_err() {
+                    return;
+                }
+            }));
+        }
+        drop(sender);
+        for worker in workers {
+            worker
+                .join()
+                .map_err(|_| anyhow!("matrix scheduler worker panicked"))?;
+        }
+        Ok(())
+    })?;
+
+    let mut completed = Vec::new();
+    let mut first_error = None;
+    for (slot, result) in receiver {
+        match result {
+            Ok(result) => completed.push((slot, result)),
+            Err(error) if first_error.is_none() => first_error = Some(error),
+            Err(_) => {}
+        }
+    }
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    cancellation.check()?;
+    Ok(completed)
+}
+
+fn canonical_order<T>(slot_count: usize, completed: Vec<(usize, T)>) -> Result<Vec<T>> {
+    let mut slots: Vec<Option<T>> = std::iter::repeat_with(|| None).take(slot_count).collect();
+    for (slot, result) in completed {
+        let destination = slots
+            .get_mut(slot)
+            .ok_or_else(|| anyhow!("result has invalid canonical slot {slot}"))?;
+        if destination.replace(result).is_some() {
+            return Err(anyhow!("canonical slot {slot} completed more than once"));
+        }
+    }
+    slots
+        .into_iter()
+        .enumerate()
+        .map(|(slot, result)| {
+            result.ok_or_else(|| anyhow!("canonical slot {slot} did not complete"))
+        })
+        .collect()
 }
 
 fn validate_criteria(summary: &MatrixSummary, criteria: &MatrixCriteria) -> Vec<String> {
@@ -772,6 +1102,7 @@ fn run_row(
     row: &MatrixRow,
     cli: &Cli,
     iteration: usize,
+    cancellation: &Cancellation,
 ) -> Result<RowResult> {
     let retries = if cli.disable_row_retries {
         0
@@ -785,7 +1116,17 @@ fn run_row(
     let max_attempts = retries + 1;
     let mut last_result = None;
     for attempt in 0..max_attempts {
-        let mut result = run_row_attempt(repo_root, artifacts_root, row, cli, iteration, attempt)?;
+        cancellation.check()?;
+        let mut result = run_row_attempt(
+            repo_root,
+            artifacts_root,
+            row,
+            cli,
+            iteration,
+            attempt,
+            cancellation,
+        )?;
+        cancellation.check()?;
         result.iteration = iteration;
         result.attempts_used = attempt + 1;
         result.retries_consumed = attempt;
@@ -802,7 +1143,7 @@ fn run_row(
             } else {
                 ZENOH_ROW_COOLDOWN_MS
             };
-            thread::sleep(Duration::from_millis(cooldown_ms));
+            cancellable_sleep(Duration::from_millis(cooldown_ms), cancellation)?;
         }
     }
     Ok(last_result.expect("at least one row attempt ran"))
@@ -815,6 +1156,7 @@ fn run_row_attempt(
     cli: &Cli,
     iteration: usize,
     attempt: usize,
+    cancellation: &Cancellation,
 ) -> Result<RowResult> {
     let run_id = row_run_id(row, cli.iterations, iteration);
     let row_dir = if attempt == 0 {
@@ -895,14 +1237,14 @@ fn run_row_attempt(
         lola_bridge_lib_dir.as_deref(),
         vsomeip_lib_dir.as_deref(),
     );
-    let mut namespace = start_namespace_holder(&row_dir)?;
+    let mut namespace = start_namespace_holder(&row_dir, cancellation)?;
     logs.insert(
         "namespace_holder".to_string(),
         namespace.log_path.display().to_string(),
     );
 
     let mut mqtt_broker = if row.uses_mqtt5() {
-        let broker = start_mqtt_broker(&row_dir, &process_env, &namespace)?;
+        let broker = start_mqtt_broker(&row_dir, &process_env, &namespace, cancellation)?;
         logs.insert(
             "mqtt_broker".to_string(),
             broker.log_path.display().to_string(),
@@ -950,7 +1292,12 @@ fn run_row_attempt(
 
     let started = Instant::now();
     let result = (|| -> Result<()> {
-        wait_for_marker(&streamer.log_path, READY_STREAMER, Duration::from_secs(10))?;
+        wait_for_marker(
+            &mut streamer,
+            READY_STREAMER,
+            Duration::from_secs(10),
+            cancellation,
+        )?;
 
         let passive_spec = role_command(
             row,
@@ -974,15 +1321,29 @@ fn run_row_attempt(
             "passive".to_string(),
             passive.log_path.display().to_string(),
         );
-        wait_for_marker(&passive.log_path, READY_LISTENER, Duration::from_secs(10))?;
+        wait_for_marker(
+            &mut passive,
+            READY_LISTENER,
+            Duration::from_secs(10),
+            cancellation,
+        )?;
         if row.uses_lola() {
-            thread::sleep(Duration::from_millis(LOLA_LISTENER_STABILIZATION_MS));
+            cancellable_sleep(
+                Duration::from_millis(LOLA_LISTENER_STABILIZATION_MS),
+                cancellation,
+            )?;
         }
         if row.sink.physical == PhysicalTransport::Zenoh {
-            thread::sleep(Duration::from_millis(ZENOH_LISTENER_STABILIZATION_MS));
+            cancellable_sleep(
+                Duration::from_millis(ZENOH_LISTENER_STABILIZATION_MS),
+                cancellation,
+            )?;
         }
         if row.sink.physical == PhysicalTransport::Vsomeip {
-            thread::sleep(Duration::from_millis(VSOMEIP_LISTENER_STABILIZATION_MS));
+            cancellable_sleep(
+                Duration::from_millis(VSOMEIP_LISTENER_STABILIZATION_MS),
+                cancellation,
+            )?;
         }
 
         let active_spec = role_command(
@@ -1008,12 +1369,14 @@ fn run_row_attempt(
         wait_for_exit(
             &mut active,
             remaining_timeout(started, cli.scenario_timeout_secs, "active")?,
+            cancellation,
         )?;
         assert_success(&mut active)?;
         if !row.uses_classic() {
             wait_for_exit(
                 &mut passive,
                 remaining_timeout(started, cli.scenario_timeout_secs, "passive")?,
+                cancellation,
             )?;
             assert_success(&mut passive)?;
         } else {
@@ -1025,6 +1388,7 @@ fn run_row_attempt(
                     cli.scenario_timeout_secs,
                     "classic passive observation",
                 )?,
+                cancellation,
             )?;
         }
 
@@ -1040,7 +1404,7 @@ fn run_row_attempt(
     }
     terminate(&mut namespace);
     if row.uses_lola() {
-        thread::sleep(Duration::from_millis(LOLA_ROW_COOLDOWN_MS));
+        cancellable_sleep(Duration::from_millis(LOLA_ROW_COOLDOWN_MS), cancellation)?;
     }
 
     let mut result = match result {
@@ -1338,6 +1702,7 @@ fn streamer_uuri_config(row: &MatrixRow) -> serde_json::Value {
     json!({ "authority": "authority-streamer", "ue_id": 78, "ue_version_major": 1 })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_endpoint(
     zenoh_endpoints: &mut Vec<serde_json::Value>,
     mqtt_endpoints: &mut Vec<serde_json::Value>,
@@ -1426,8 +1791,6 @@ fn push_endpoint(
 fn vsomeip_remote_authority(row: &MatrixRow) -> &'static str {
     if row.source.physical == PhysicalTransport::Vsomeip {
         AUTHORITY_A
-    } else if row.sink.physical == PhysicalTransport::Vsomeip {
-        AUTHORITY_B
     } else {
         AUTHORITY_B
     }
@@ -1729,6 +2092,7 @@ fn role_command(
     Ok(RoleCommand { binary, args })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn classic_args(
     row: &MatrixRow,
     profile: EndpointProfile,
@@ -2534,7 +2898,10 @@ fn spawn_process(
     })
 }
 
-fn start_namespace_holder(artifact_dir: &Path) -> Result<RunningProcess> {
+fn start_namespace_holder(
+    artifact_dir: &Path,
+    cancellation: &Cancellation,
+) -> Result<RunningProcess> {
     let log_path = artifact_dir.join("namespace-holder.log");
     let ready_path = artifact_dir.join("namespace-ready");
     let stdout = log_file(&log_path)?;
@@ -2545,7 +2912,7 @@ fn start_namespace_holder(artifact_dir: &Path) -> Result<RunningProcess> {
         shm_size = NAMESPACE_SHM_SIZE,
         iceoryx2_root = ICEORYX2_ROOT_PATH,
     );
-    let mut child = Command::new("unshare")
+    let child = Command::new("unshare")
         .args(["-U", "--map-root-user", "-m", "-n", "-i", "sh", "-c"])
         .arg(script)
         .arg("sh")
@@ -2554,18 +2921,26 @@ fn start_namespace_holder(artifact_dir: &Path) -> Result<RunningProcess> {
         .stderr(Stdio::from(stderr))
         .spawn()
         .with_context(|| "unable to spawn namespace holder with unshare")?;
-    wait_for_path_or_exit(&ready_path, &mut child, &log_path, Duration::from_secs(10))?;
-    Ok(RunningProcess {
+    let mut process = RunningProcess {
         name: "namespace-holder".to_string(),
         log_path,
         child,
-    })
+    };
+    wait_for_path_or_exit(
+        &ready_path,
+        &mut process.child,
+        &process.log_path,
+        Duration::from_secs(10),
+        cancellation,
+    )?;
+    Ok(process)
 }
 
 fn start_mqtt_broker(
     artifact_dir: &Path,
     env: &[(String, String)],
     namespace: &RunningProcess,
+    cancellation: &Cancellation,
 ) -> Result<RunningProcess> {
     let config_path = artifact_dir.join("mosquitto.conf");
     fs::write(
@@ -2575,7 +2950,7 @@ fn start_mqtt_broker(
         ),
     )
     .with_context(|| format!("unable to write {}", config_path.display()))?;
-    let broker = spawn_process(
+    let mut broker = spawn_process(
         "mqtt-broker",
         Path::new("mosquitto"),
         &["-c".to_string(), config_path.display().to_string()],
@@ -2584,7 +2959,13 @@ fn start_mqtt_broker(
         artifact_dir,
         Some(namespace),
     )?;
-    thread::sleep(Duration::from_millis(250));
+    cancellable_sleep(Duration::from_millis(250), cancellation)?;
+    if let Some(status) = broker.child.try_wait()? {
+        return Err(anyhow!(
+            "MQTT broker exited before readiness with {status}; see {}",
+            broker.log_path.display()
+        ));
+    }
     Ok(broker)
 }
 
@@ -2593,9 +2974,11 @@ fn wait_for_path_or_exit(
     child: &mut Child,
     log_path: &Path,
     timeout: Duration,
+    cancellation: &Cancellation,
 ) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
+        cancellation.check()?;
         if path.exists() {
             return Ok(());
         }
@@ -2626,26 +3009,45 @@ fn log_file(path: &Path) -> Result<File> {
         .with_context(|| format!("unable to open {}", path.display()))
 }
 
-fn wait_for_marker(path: &Path, marker: &str, timeout: Duration) -> Result<()> {
+fn wait_for_marker(
+    process: &mut RunningProcess,
+    marker: &str,
+    timeout: Duration,
+    cancellation: &Cancellation,
+) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
-        let contents = fs::read_to_string(path).unwrap_or_default();
+        cancellation.check()?;
+        let contents = fs::read_to_string(&process.log_path).unwrap_or_default();
         if contents.contains(marker) {
             return Ok(());
+        }
+        if let Some(status) = process.child.try_wait()? {
+            return Err(anyhow!(
+                "process {} exited with {status} before marker {marker}; see {}",
+                process.name,
+                process.log_path.display()
+            ));
         }
         if Instant::now() >= deadline {
             return Err(anyhow!(
                 "timed out waiting for marker {marker} in {}",
-                path.display()
+                process.log_path.display()
             ));
         }
         thread::sleep(Duration::from_millis(50));
     }
 }
 
-fn wait_for_any_marker(path: &Path, markers: &[&str], timeout: Duration) -> Result<()> {
+fn wait_for_any_marker(
+    path: &Path,
+    markers: &[&str],
+    timeout: Duration,
+    cancellation: &Cancellation,
+) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
+        cancellation.check()?;
         let contents = fs::read_to_string(path).unwrap_or_default();
         if markers.iter().any(|marker| contents.contains(marker)) {
             return Ok(());
@@ -2671,9 +3073,14 @@ fn passive_observation_markers(row: &MatrixRow) -> &'static [&'static str] {
     }
 }
 
-fn wait_for_exit(process: &mut RunningProcess, timeout: Duration) -> Result<()> {
+fn wait_for_exit(
+    process: &mut RunningProcess,
+    timeout: Duration,
+    cancellation: &Cancellation,
+) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
+        cancellation.check()?;
         if process.child.try_wait()?.is_some() {
             return Ok(());
         }
@@ -2686,6 +3093,18 @@ fn wait_for_exit(process: &mut RunningProcess, timeout: Duration) -> Result<()> 
             ));
         }
         thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn cancellable_sleep(duration: Duration, cancellation: &Cancellation) -> Result<()> {
+    let deadline = Instant::now() + duration;
+    loop {
+        cancellation.check()?;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(());
+        }
+        thread::sleep(remaining.min(Duration::from_millis(50)));
     }
 }
 
@@ -3097,7 +3516,7 @@ mod tests {
 
     fn empty_summary() -> MatrixSummary {
         MatrixSummary {
-            schema_version: "1.1",
+            schema_version: "1.2",
             generated_at: String::new(),
             row_count: 0,
             pass_count: 0,
@@ -3105,6 +3524,8 @@ mod tests {
             blocked_count: 0,
             failed_count: 0,
             iterations: 1,
+            jobs: 4,
+            lola_jobs: 1,
             retry_policy: RetryPolicySummary {
                 disabled: false,
                 lola_max_retries: 1,
@@ -3135,6 +3556,273 @@ mod tests {
         let row = matrix_rows().remove(0);
         assert_eq!(row_run_id(&row, 1, 1), row.id);
         assert_eq!(row_run_id(&row, 100, 7), format!("{}-iteration007", row.id));
+    }
+
+    #[test]
+    fn concurrency_validation_rejects_zero_and_invalid_limits() {
+        assert!(validate_concurrency(0, 1).is_err());
+        assert!(validate_concurrency(4, 0).is_err());
+        assert!(validate_concurrency(2, 3).is_err());
+        assert!(validate_concurrency(4, 1).is_ok());
+    }
+
+    #[test]
+    fn duplicate_only_selection_is_rejected() {
+        let cli = Cli::try_parse_from(["orchestrator", "--only", "same-row", "--only", "same-row"])
+            .expect("CLI should parse before semantic validation");
+        assert!(validate_cli(&cli)
+            .expect_err("duplicate should fail")
+            .to_string()
+            .contains("duplicate --only"));
+    }
+
+    #[test]
+    fn canonical_results_are_ordered_by_slot() {
+        let ordered = canonical_order(4, vec![(2, "two"), (0, "zero"), (3, "three"), (1, "one")])
+            .expect("all canonical slots are present");
+        assert_eq!(ordered, ["zero", "one", "two", "three"]);
+    }
+
+    #[test]
+    fn max_runnable_planning_is_deterministic_across_iterations() {
+        let all_rows = matrix_rows();
+        let unsupported = all_rows
+            .iter()
+            .find(|row| support_status(row).classification == RowClassification::Unsupported)
+            .expect("matrix has unsupported rows")
+            .clone();
+        let runnable = all_rows
+            .iter()
+            .find(|row| support_status(row).classification == RowClassification::Pass)
+            .expect("matrix has runnable rows")
+            .clone();
+        let plan = plan_rows(&[unsupported, runnable], 3, Some(1));
+
+        assert_eq!(plan.slot_count, 6);
+        assert_eq!(plan.runnable.len(), 1);
+        assert_eq!(plan.runnable[0].slot, 1);
+        assert_eq!(plan.runnable[0].payload.iteration, 1);
+        let completed: Vec<_> = plan
+            .completed
+            .iter()
+            .map(|(slot, result)| (*slot, result.iteration, result.classification))
+            .collect();
+        assert_eq!(
+            completed,
+            [
+                (0, 1, RowClassification::Unsupported),
+                (2, 2, RowClassification::Unsupported),
+                (3, 2, RowClassification::Blocked),
+                (4, 3, RowClassification::Unsupported),
+                (5, 3, RowClassification::Blocked),
+            ]
+        );
+    }
+
+    #[test]
+    fn full_matrix_plan_preserves_authority_cardinality() {
+        let plan = plan_rows(&matrix_rows(), 1, None);
+        assert_eq!(plan.slot_count, 729);
+        assert_eq!(plan.runnable.len(), 648);
+        assert_eq!(plan.completed.len(), 81);
+        assert!(plan
+            .completed
+            .iter()
+            .all(|(_, result)| result.classification == RowClassification::Unsupported));
+    }
+
+    #[test]
+    fn scheduler_enforces_bounds_and_skips_blocked_lola_work() {
+        #[derive(Default)]
+        struct State {
+            started: usize,
+            active: usize,
+            max_active: usize,
+            active_lola: usize,
+            max_active_lola: usize,
+            regular_started: usize,
+            release: bool,
+        }
+
+        let gate = Arc::new((Mutex::new(State::default()), Condvar::new()));
+        let tasks = [true, true, false, false]
+            .into_iter()
+            .enumerate()
+            .map(|(slot, lola_sensitive)| ScheduledTask {
+                slot,
+                lola_sensitive,
+                payload: lola_sensitive,
+            })
+            .collect();
+        let worker_gate = Arc::clone(&gate);
+        let scheduler = thread::spawn(move || {
+            run_bounded(tasks, 3, 1, &Cancellation::default(), move |is_lola| {
+                let (state_lock, wake) = &*worker_gate;
+                let mut state = state_lock.lock().expect("test state mutex poisoned");
+                state.started += 1;
+                state.active += 1;
+                state.max_active = state.max_active.max(state.active);
+                if is_lola {
+                    state.active_lola += 1;
+                    state.max_active_lola = state.max_active_lola.max(state.active_lola);
+                } else {
+                    state.regular_started += 1;
+                }
+                wake.notify_all();
+                while !state.release {
+                    state = wake.wait(state).expect("test state mutex poisoned");
+                }
+                state.active -= 1;
+                if is_lola {
+                    state.active_lola -= 1;
+                }
+                Ok(())
+            })
+        });
+
+        let (state_lock, wake) = &*gate;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut state = state_lock.lock().expect("test state mutex poisoned");
+        while state.started < 3 && Instant::now() < deadline {
+            let (next, _) = wake
+                .wait_timeout(state, Duration::from_millis(20))
+                .expect("test state mutex poisoned");
+            state = next;
+        }
+        assert_eq!(
+            state.started, 3,
+            "three globally eligible tasks should start"
+        );
+        assert_eq!(
+            state.regular_started, 2,
+            "regular work must bypass queued LoLa work"
+        );
+        assert_eq!(state.max_active, 3);
+        assert_eq!(state.max_active_lola, 1);
+        state.release = true;
+        wake.notify_all();
+        drop(state);
+
+        let completed = scheduler
+            .join()
+            .expect("scheduler test thread should not panic")
+            .expect("synthetic scheduler should complete");
+        assert_eq!(completed.len(), 4);
+    }
+
+    #[test]
+    fn single_job_scheduler_preserves_fifo_order() {
+        let tasks = [false, true, false, true]
+            .into_iter()
+            .enumerate()
+            .map(|(slot, lola_sensitive)| ScheduledTask {
+                slot,
+                lola_sensitive,
+                payload: slot,
+            })
+            .collect();
+        let observed = Arc::new(Mutex::new(Vec::new()));
+        let worker_observed = Arc::clone(&observed);
+
+        run_bounded(tasks, 1, 1, &Cancellation::default(), move |slot| {
+            worker_observed
+                .lock()
+                .expect("observed mutex poisoned")
+                .push(slot);
+            Ok(())
+        })
+        .expect("single-worker scheduler should complete");
+
+        assert_eq!(
+            *observed.lock().expect("observed mutex poisoned"),
+            [0, 1, 2, 3]
+        );
+    }
+
+    #[test]
+    fn panicking_lola_task_releases_scheduler_without_deadlock() {
+        let tasks = vec![
+            ScheduledTask {
+                slot: 0,
+                lola_sensitive: true,
+                payload: true,
+            },
+            ScheduledTask {
+                slot: 1,
+                lola_sensitive: true,
+                payload: false,
+            },
+        ];
+
+        let error = run_bounded(tasks, 2, 1, &Cancellation::default(), |should_panic| {
+            assert!(!should_panic, "synthetic worker panic");
+            Ok(())
+        })
+        .expect_err("worker panic should become a scheduler error");
+
+        assert!(error.to_string().contains("task panicked"));
+    }
+
+    #[test]
+    fn scheduler_cancellation_stops_pending_dispatch() {
+        let cancellation = Cancellation::default();
+        let worker_cancellation = cancellation.clone();
+        let started = Arc::new(Mutex::new(0_usize));
+        let worker_started = Arc::clone(&started);
+        let tasks = (0..4)
+            .map(|slot| ScheduledTask {
+                slot,
+                lola_sensitive: false,
+                payload: (),
+            })
+            .collect();
+
+        let result = run_bounded(tasks, 1, 1, &cancellation, move |()| {
+            *worker_started.lock().expect("started mutex poisoned") += 1;
+            worker_cancellation.cancel();
+            Ok(())
+        });
+
+        assert!(result.is_err());
+        assert_eq!(*started.lock().expect("started mutex poisoned"), 1);
+    }
+
+    #[test]
+    fn generated_roots_are_unique_and_include_process_id() {
+        let repo = Path::new("/repo");
+        let first = generated_artifacts_root(
+            repo,
+            DateTime::parse_from_rfc3339("2026-07-12T10:11:12.123456Z")
+                .expect("valid timestamp")
+                .with_timezone(&Utc),
+            42,
+        );
+        let second = generated_artifacts_root(
+            repo,
+            DateTime::parse_from_rfc3339("2026-07-12T10:11:12.123457Z")
+                .expect("valid timestamp")
+                .with_timezone(&Utc),
+            42,
+        );
+        assert_ne!(first, second);
+        assert!(first.to_string_lossy().contains(".123456Z-pid42"));
+    }
+
+    #[test]
+    fn artifact_root_must_be_empty_and_exclusively_locked() {
+        let base = std::env::temp_dir().join(format!(
+            "streamer-orchestrator-root-test-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().expect("timestamp fits")
+        ));
+        fs::create_dir(&base).expect("create test parent");
+        let root = base.join("artifacts");
+        let lock = ArtifactRootLock::acquire(&root).expect("fresh root should lock");
+        assert!(ArtifactRootLock::acquire(&root).is_err());
+        drop(lock);
+        fs::write(root.join("evidence.txt"), "preserve").expect("write evidence");
+        assert!(ArtifactRootLock::acquire(&root).is_err());
+        fs::remove_dir_all(base).expect("remove test directory");
     }
 
     #[test]
