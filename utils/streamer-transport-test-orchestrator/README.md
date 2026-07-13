@@ -42,8 +42,8 @@ cargo run -p streamer-transport-test-orchestrator -- \
 - `--only <ROW_ID>`: select a row; repeat the option to select multiple rows in
   the specified order.
 - `--skip-build`: stage and validate a fresh immutable run bundle from existing
-  Cargo target artifacts. This is intended for focused diagnosis, not a
-  complete acceptance run.
+  `target/matrix` profile artifacts. This is intended for focused diagnosis,
+  not a complete acceptance run.
 - `--use-local-sibling-patches`: add available sibling repositories as Cargo
   patch configuration during the build.
 - `--artifacts-root <PATH>`: choose a new, empty evidence root. Relative paths
@@ -108,13 +108,52 @@ not report inode quotas are identified as unsupported rather than recorded as
 zero; byte capacity is still enforced. Capacity comes directly from
 `statvfs(3)`, not parsed `df` output.
 
-Cargo's target directory is resolved from `CARGO_TARGET_DIR` or `cargo metadata`.
-The repository, target, artifact, criteria, and native input paths are
-canonicalized and rejected if a private matrix `/tmp` or `/dev/shm` mount would
-shadow them. Matrix children receive an empty inherited environment plus a
-small allowlist: deterministic locale/timezone and logging values, bundle-only
-`PATH`/`LD_LIBRARY_PATH`, forced `TMPDIR=/tmp`, transport-specific values, and
-the configured `TOKIO_WORKER_THREADS`.
+Cargo's target directory is resolved through `cargo metadata`, including its
+handling of `CARGO_TARGET_DIR`. After a build, Cargo's JSON executable artifacts
+are authoritative for the actual profile output directory; this supports both
+the normal `<cargo-target>/matrix` layout and a target-qualified
+`<cargo-target>/<target>/matrix` layout. `--skip-build` accepts exactly one
+complete matching matrix directory and rejects missing, ambiguous, or
+debug-only artifacts. The repository, target, artifact, criteria, and native
+input paths are canonicalized and rejected if a private matrix `/tmp` or
+`/dev/shm` mount would shadow them. Matrix children receive an empty inherited
+environment plus a small allowlist: deterministic locale/timezone and logging
+values, bundle-only `PATH`/`LD_LIBRARY_PATH`, forced `TMPDIR=/tmp`,
+transport-specific values, and the configured `TOKIO_WORKER_THREADS`.
+
+Orchestrator-invoked Cargo builds use the custom `matrix` profile and the
+isolated `<cargo-target>/matrix` output directory. It inherits `dev`, preserving
+the development optimization level, debug assertions, overflow checks, and
+unwind behavior, and overrides only these artifact-size settings:
+
+```toml
+[profile.matrix]
+inherits = "dev"
+debug = 0
+strip = "debuginfo"
+incremental = false
+```
+
+Each build also sets the following exact Cargo environment so ambient values
+cannot re-enable debug or incremental artifacts. Ambient `CARGO_PROFILE_*` and
+`CARGO_INCREMENTAL` values are removed before these values are applied:
+
+```text
+CARGO_INCREMENTAL=0
+CARGO_PROFILE_MATRIX_DEBUG=0
+CARGO_PROFILE_MATRIX_INCREMENTAL=false
+CARGO_PROFILE_MATRIX_STRIP=debuginfo
+```
+
+The profile name, inheritance, output directory, overrides, and environment are
+recorded in build provenance, the bundle manifest, and every shard identity;
+build phases also record Cargo's emitted executable paths. The bundle identity
+covers the profile plus its ordered file identities. Cargo fingerprints the
+isolated profile, and staging reads matrix executables only from the one
+discovered matrix directory, so a stale `<cargo-target>/debug` executable cannot
+enter a bundle. Bundle loading and shard merge reject profile, environment,
+target-directory, or executable source-directory drift across build, bundle,
+identity, and run provenance.
 
 After the single build, every executable used by row supervision and every
 selected LoLa/vSomeIP native library is staged once under
@@ -122,11 +161,12 @@ selected LoLa/vSomeIP native library is staged once under
 addressed objects so the immutable snapshot shares no inode with mutable target
 artifacts; no binary is copied per row. Launch names are read-only hard links or
 copies, and `run-bundle/manifest.json` records source and bundle paths, kind,
-size, mode, transfer method, and SHA-256. The complete bundle is checked for
-exact directory contents, hashes, permissions, and schema before preflight and
-again after execution, and rows launch project and supervision executables only
-from the bundle. Replacing or modifying a mutable target path after staging
-cannot alter or redirect an active run.
+size, mode, transfer method, SHA-256, and the exact Cargo profile contract. The
+complete bundle is checked for exact directory contents, hashes, permissions,
+profile, and schema before preflight and again after execution, and rows launch
+project and supervision executables only from the bundle. Replacing or
+modifying a mutable target path after staging cannot alter or redirect an active
+run.
 
 Every child is a process-group leader. Teardown and cancellation signal the
 whole group with bounded SIGINT, SIGTERM, and SIGKILL escalation, reap the
@@ -216,17 +256,18 @@ orchestrator:
   --merge-output target/streamer-transport-test/merged-matrix-summary.json
 ```
 
-Merge rejects incompatible schemas; any matrix, selection, criteria,
-orchestrator, dependency, bundle, binary, native-library, or normalized-option
-identity mismatch; duplicate/missing shards or rows; manifest/count/cost drift;
-failed/blocked rows; and any consumed retry. A full selection is reconstructed
-in canonical 2160-row order and validated against the unchanged full criteria.
+Merge rejects incompatible schemas; any Cargo profile/environment/target,
+matrix, selection, criteria, orchestrator, dependency, bundle, binary,
+native-library, or normalized-option identity mismatch; duplicate/missing shards
+or rows; manifest/count/cost drift; failed/blocked rows; and any consumed retry.
+A full selection is reconstructed in canonical 2160-row order and validated
+against the unchanged full criteria.
 Focused selections validate their exact generated counts and the same
 unsupported/retry policy but are not full-matrix acceptance evidence.
 
 ## Instrumentation
 
-Summary schema `5.0` is written to `matrix-summary.json`. Checkpoints use a
+Summary schema `6.0` is written to `matrix-summary.json`. Checkpoints use a
 versioned `1.0` envelope containing `schema_version` and `row`. The final
 summary, preflight, criteria result, manifest, and all checkpoints use
 same-directory temporary files, file fsync, atomic rename, and parent-directory
@@ -243,8 +284,8 @@ complete provisional durable commit.
 Run-level evidence includes:
 
 - exact argument vector, parsed options, working directory, repository commit,
-  branch, dirty state, target directory, and SHA-256 binary/native-library
-  provenance;
+  branch, dirty state, target directory, Cargo profile/environment, and SHA-256
+  binary/native-library provenance;
 - build features, commands, status, phase timestamps, and durations;
 - before/after CPU, memory, swap, process/FD limits, cgroup task limits, and
   filesystem byte/inode snapshots;

@@ -21,7 +21,7 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
@@ -67,11 +67,12 @@ const DDS_PORT_BASE: i32 = 7_400;
 const DDS_DOMAIN_GAIN: i32 = 250;
 const DDS_MIN_UNPRIVILEGED_PORT: i32 = 1_024;
 const DDS_PORT_MODULUS: i32 = 65_536;
-const SUMMARY_SCHEMA_VERSION: &str = "5.0";
+const SUMMARY_SCHEMA_VERSION: &str = "6.0";
 const CHECKPOINT_SCHEMA_VERSION: &str = "1.0";
-const BUNDLE_SCHEMA_VERSION: &str = "2.0";
-const SHARD_MANIFEST_SCHEMA_VERSION: &str = "1.0";
-const MERGED_SUMMARY_SCHEMA_VERSION: &str = "1.0";
+const BUNDLE_SCHEMA_VERSION: &str = "3.0";
+const SHARD_MANIFEST_SCHEMA_VERSION: &str = "2.0";
+const MERGED_SUMMARY_SCHEMA_VERSION: &str = "2.0";
+const MATRIX_CARGO_PROFILE: &str = "matrix";
 const RESOURCE_SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
 const DEFAULT_HARD_MAX_JOBS: usize = 16;
 const DEFAULT_TOKIO_WORKER_THREADS: usize = 2;
@@ -447,6 +448,7 @@ struct CommandSummary {
 struct ProvenanceSummary {
     repository_root: String,
     target_directory: String,
+    cargo_profile: CargoProfileSummary,
     bundle_root: String,
     bundle_manifest: String,
     orchestrator_commit: Option<String>,
@@ -473,6 +475,7 @@ struct BuildSummary {
     completed_at: Option<String>,
     duration_us: u64,
     target_directory: String,
+    cargo_profile: CargoProfileSummary,
     configurable_streamer_features: Vec<String>,
     example_streamer_features: Vec<String>,
     phases: Vec<BuildPhaseSummary>,
@@ -485,7 +488,25 @@ struct BuildPhaseSummary {
     completed_at: String,
     duration_us: u64,
     command: Vec<String>,
+    executables: Vec<String>,
     status_code: Option<i32>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct CargoProfileSummary {
+    name: String,
+    inherits: String,
+    output_directory: String,
+    debug: u8,
+    strip: String,
+    incremental: bool,
+    environment: BTreeMap<String, String>,
+}
+
+impl Default for CargoProfileSummary {
+    fn default() -> Self {
+        matrix_cargo_profile()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -724,6 +745,7 @@ struct CriteriaResult {
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct ExecutionIdentities {
+    cargo_profile: CargoProfileSummary,
     matrix_sha256: String,
     selection_sha256: String,
     criteria_sha256: String,
@@ -797,6 +819,8 @@ struct MergeShardRunInput {
 
 #[derive(Debug, Deserialize)]
 struct MergeProvenanceInput {
+    target_directory: String,
+    cargo_profile: CargoProfileSummary,
     binaries: Vec<FileProvenance>,
     native_libraries: Vec<FileProvenance>,
 }
@@ -807,6 +831,8 @@ struct MergeBuildInput {
     started_at: Option<String>,
     completed_at: Option<String>,
     duration_us: u64,
+    target_directory: String,
+    cargo_profile: CargoProfileSummary,
     phases: Vec<serde_json::Value>,
 }
 
@@ -881,6 +907,7 @@ struct BundleManifest {
     schema_version: String,
     created_at: String,
     target_directory: String,
+    cargo_profile: CargoProfileSummary,
     orchestrator_commit: Option<String>,
     dependency_sha256: String,
     files: Vec<BundleFile>,
@@ -1358,7 +1385,7 @@ fn run(cli: Cli) -> Result<bool> {
         .as_ref()
         .map(|path| load_run_bundle(path))
         .transpose()?;
-    let (target_root, target_directory) = if let Some(bundle) = &imported_bundle {
+    let (target_root, target_directory_hint) = if let Some(bundle) = &imported_bundle {
         let target_directory = PathBuf::from(&bundle.manifest.target_directory);
         let target_root = target_directory
             .parent()
@@ -1371,7 +1398,7 @@ fn run(cli: Cli) -> Result<bool> {
             "Cargo target directory",
             &canonicalize_allow_missing(&target_root)?,
         )?;
-        let target_directory = target_root.join("debug");
+        let target_directory = matrix_profile_target_directory(&target_root);
         (target_root, target_directory)
     };
     let artifacts_root = artifacts_root_requested;
@@ -1388,7 +1415,7 @@ fn run(cli: Cli) -> Result<bool> {
         &artifacts_root,
         imported_bundle
             .as_ref()
-            .map_or(&target_directory, |bundle| &bundle.root),
+            .map_or(&target_root, |bundle| &bundle.root),
     ]);
     let resource_monitor = ResourceMonitor::start();
 
@@ -1396,12 +1423,22 @@ fn run(cli: Cli) -> Result<bool> {
         write_row_checkpoint(&artifacts_root, *slot, result)?;
     }
 
-    let build = if imported_bundle.is_some() || cli.skip_build {
-        skipped_build_summary(&target_directory, &selected_rows)
+    let (build, target_directory) = if imported_bundle.is_some() {
+        (
+            skipped_build_summary(&target_directory_hint, &selected_rows),
+            target_directory_hint,
+        )
+    } else if cli.skip_build {
+        let target_directory =
+            discover_existing_matrix_target_directory(&target_root, &selected_rows)?;
+        (
+            skipped_build_summary(&target_directory, &selected_rows),
+            target_directory,
+        )
     } else {
         build_required_binaries(
             &repo_root,
-            &target_directory,
+            &target_root,
             &selected_rows,
             cli.use_local_sibling_patches,
         )?
@@ -1705,15 +1742,14 @@ fn prepare_shards(cli: &Cli) -> Result<bool> {
         "Cargo target directory",
         &canonicalize_allow_missing(&target_root)?,
     )?;
-    let target_directory = target_root.join("debug");
     if let Some(parent) = artifacts_root.parent() {
         fs::create_dir_all(parent)?;
     }
     let _artifact_lock = ArtifactRootLock::acquire(&artifacts_root)?;
     let _build_lock = BuildLock::acquire(&target_root)?;
-    let build = build_required_binaries(
+    let (build, target_directory) = build_required_binaries(
         &repo_root,
-        &target_directory,
+        &target_root,
         &rows,
         cli.use_local_sibling_patches,
     )?;
@@ -1844,6 +1880,7 @@ fn merge_shards(cli: &Cli) -> Result<bool> {
             &summary.identities,
             &summary.bundle,
             &summary.provenance,
+            &summary.build,
         )?;
         validate_canonical_shard_manifest(&manifest, summary.iterations, &canonical_matrix)?;
         if let Some(reference) = &reference_manifest {
@@ -2027,9 +2064,7 @@ fn merge_shards(cli: &Cli) -> Result<bool> {
     let expected_indices: BTreeSet<_> = (0..reference.shard_count).collect();
     if seen_shards != expected_indices {
         return Err(anyhow!(
-            "missing shards: expected {:?}, received {:?}",
-            expected_indices,
-            seen_shards
+            "missing shards: expected {expected_indices:?}, received {seen_shards:?}"
         ));
     }
     let selection_keys: Vec<_> = reference
@@ -2148,6 +2183,9 @@ fn ensure_identity_match(
     expected: &ExecutionIdentities,
     actual: &ExecutionIdentities,
 ) -> Result<()> {
+    if expected.cargo_profile != actual.cargo_profile {
+        return Err(anyhow!("mismatched Cargo profile identity"));
+    }
     for (label, expected, actual) in [
         ("matrix", &expected.matrix_sha256, &actual.matrix_sha256),
         (
@@ -2194,10 +2232,22 @@ fn validate_summary_bundle_identity(
     identities: &ExecutionIdentities,
     bundle: &BundleManifest,
     provenance: &MergeProvenanceInput,
+    build: &MergeBuildInput,
 ) -> Result<()> {
     validate_bundle_manifest_structure(bundle)?;
+    if identities.cargo_profile != bundle.cargo_profile
+        || provenance.cargo_profile != bundle.cargo_profile
+        || build.cargo_profile != bundle.cargo_profile
+    {
+        return Err(anyhow!("mismatched Cargo profile identity"));
+    }
+    if provenance.target_directory != bundle.target_directory
+        || build.target_directory != bundle.target_directory
+    {
+        return Err(anyhow!("mismatched matrix target directory provenance"));
+    }
     let orchestrator_sha256 = bundle_orchestrator_sha256(bundle)?;
-    let bundle_sha256 = bundle_files_sha256(bundle, |_| true)?;
+    let bundle_sha256 = bundle_identity_sha256(bundle)?;
     let binaries_sha256 =
         bundle_files_sha256(bundle, |kind| kind != BundleFileKind::NativeLibrary)?;
     let native_libraries_sha256 =
@@ -2569,14 +2619,6 @@ fn generated_artifacts_root(repo_root: &Path, now: DateTime<Utc>, process_id: u3
 }
 
 fn resolve_target_directory(repo_root: &Path) -> Result<PathBuf> {
-    if let Some(configured) = std::env::var_os("CARGO_TARGET_DIR") {
-        let path = PathBuf::from(configured);
-        return Ok(if path.is_absolute() {
-            path
-        } else {
-            repo_root.join(path)
-        });
-    }
     let output = Command::new("cargo")
         .current_dir(repo_root)
         .args(["metadata", "--format-version=1", "--no-deps"])
@@ -2589,10 +2631,153 @@ fn resolve_target_directory(repo_root: &Path) -> Result<PathBuf> {
         ));
     }
     let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
-    metadata["target_directory"]
+    let path = metadata["target_directory"]
         .as_str()
         .map(PathBuf::from)
-        .ok_or_else(|| anyhow!("cargo metadata did not report target_directory"))
+        .ok_or_else(|| anyhow!("cargo metadata did not report target_directory"))?;
+    canonicalize_allow_missing(&if path.is_absolute() {
+        path
+    } else {
+        repo_root.join(path)
+    })
+}
+
+fn matrix_profile_target_directory(target_root: &Path) -> PathBuf {
+    target_root.join(MATRIX_CARGO_PROFILE)
+}
+
+fn validate_matrix_target_directory(target_root: &Path, target_directory: &Path) -> Result<()> {
+    if !target_directory.starts_with(target_root)
+        || target_directory.file_name().and_then(|name| name.to_str()) != Some(MATRIX_CARGO_PROFILE)
+    {
+        return Err(anyhow!(
+            "Cargo matrix artifacts resolved outside the matrix profile directory: {}",
+            target_directory.display()
+        ));
+    }
+    Ok(())
+}
+
+fn required_executables_present(target_directory: &Path, required: &BTreeSet<String>) -> bool {
+    required
+        .iter()
+        .all(|name| target_directory.join(name).is_file())
+}
+
+fn discover_existing_matrix_target_directory(
+    target_root: &Path,
+    rows: &[MatrixRow],
+) -> Result<PathBuf> {
+    let required = required_matrix_executables(rows);
+    let mut candidates = vec![matrix_profile_target_directory(target_root)];
+    if target_root.is_dir() {
+        for entry in fs::read_dir(target_root).with_context(|| {
+            format!("unable to read Cargo target root {}", target_root.display())
+        })? {
+            let path = entry?.path();
+            if path.is_dir() {
+                candidates.push(path.join(MATRIX_CARGO_PROFILE));
+            }
+        }
+    }
+    let mut complete = BTreeSet::new();
+    for candidate in candidates {
+        if required_executables_present(&candidate, &required) {
+            let candidate = fs::canonicalize(&candidate)?;
+            validate_matrix_target_directory(target_root, &candidate)?;
+            complete.insert(candidate);
+        }
+    }
+    match complete.len() {
+        1 => Ok(complete.pop_first().expect("one complete matrix directory")),
+        0 => Err(anyhow!(
+            "complete {MATRIX_CARGO_PROFILE} profile artifacts were not found below {}; stale debug artifacts are not accepted",
+            target_root.display()
+        )),
+        _ => Err(anyhow!(
+            "multiple complete {MATRIX_CARGO_PROFILE} profile output directories were found below {complete:?}; refusing ambiguous artifacts"
+        )),
+    }
+}
+
+fn matrix_target_directory_from_artifacts(
+    target_root: &Path,
+    rows: &[MatrixRow],
+    executables: &[PathBuf],
+) -> Result<PathBuf> {
+    let required = required_matrix_executables(rows);
+    let mut discovered = BTreeMap::new();
+    for executable in executables {
+        let Some(name) = executable.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !required.contains(name) {
+            continue;
+        }
+        let executable = fs::canonicalize(executable).with_context(|| {
+            format!(
+                "Cargo reported missing matrix executable {}",
+                executable.display()
+            )
+        })?;
+        if discovered.insert(name.to_string(), executable).is_some() {
+            return Err(anyhow!(
+                "Cargo reported duplicate matrix executable output for {name}"
+            ));
+        }
+    }
+    let missing: Vec<_> = required
+        .difference(&discovered.keys().cloned().collect())
+        .cloned()
+        .collect();
+    if !missing.is_empty() {
+        return Err(anyhow!(
+            "Cargo did not report required matrix executables: {}",
+            missing.join(", ")
+        ));
+    }
+    let directories: BTreeSet<_> = discovered
+        .values()
+        .map(|path| {
+            path.parent()
+                .expect("Cargo executable has a parent directory")
+                .to_path_buf()
+        })
+        .collect();
+    if directories.len() != 1 {
+        return Err(anyhow!(
+            "Cargo reported matrix executables in multiple output directories: {directories:?}"
+        ));
+    }
+    let target_directory = directories
+        .into_iter()
+        .next()
+        .expect("one Cargo executable directory");
+    validate_matrix_target_directory(target_root, &target_directory)?;
+    Ok(target_directory)
+}
+
+fn matrix_cargo_profile() -> CargoProfileSummary {
+    CargoProfileSummary {
+        name: MATRIX_CARGO_PROFILE.to_string(),
+        inherits: "dev".to_string(),
+        output_directory: MATRIX_CARGO_PROFILE.to_string(),
+        debug: 0,
+        strip: "debuginfo".to_string(),
+        incremental: false,
+        environment: BTreeMap::from([
+            ("CARGO_INCREMENTAL".to_string(), "0".to_string()),
+            ("CARGO_PROFILE_MATRIX_DEBUG".to_string(), "0".to_string()),
+            (
+                "CARGO_PROFILE_MATRIX_INCREMENTAL".to_string(),
+                "false".to_string(),
+            ),
+            (
+                "CARGO_PROFILE_MATRIX_STRIP".to_string(),
+                "debuginfo".to_string(),
+            ),
+        ]),
+    }
 }
 
 fn canonicalize_allow_missing(path: &Path) -> Result<PathBuf> {
@@ -3722,8 +3907,7 @@ where
     }
     if declared_row_count != rows_length {
         errors.push(format!(
-            "declared row_count {} does not match rows length {}",
-            declared_row_count, rows_length
+            "declared row_count {declared_row_count} does not match rows length {rows_length}"
         ));
     }
     for (classification, row_id, reason) in rows {
@@ -3736,8 +3920,7 @@ where
             .any(|allowed| reason.contains(allowed))
         {
             errors.push(format!(
-                "unsupported row {} has unapproved reason: {}",
-                row_id, reason
+                "unsupported row {row_id} has unapproved reason: {reason}"
             ));
         }
     }
@@ -4567,10 +4750,10 @@ fn run_row_attempt(
 
 fn build_required_binaries(
     repo_root: &Path,
-    target_directory: &Path,
+    target_root: &Path,
     rows: &[MatrixRow],
     use_local_sibling_patches: bool,
-) -> Result<BuildSummary> {
+) -> Result<(BuildSummary, PathBuf)> {
     let started = Instant::now();
     let started_at = Utc::now().to_rfc3339();
     let common_args = if use_local_sibling_patches {
@@ -4586,7 +4769,7 @@ fn build_required_binaries(
     }
     let configurable_features = configurable_streamer_features(rows).join(",");
     let example_features = example_streamer_features(rows).join(",");
-    let phases = vec![
+    let outputs = [
         run_cargo(
             "configurable_streamer",
             repo_root,
@@ -4621,12 +4804,22 @@ fn build_required_binaries(
             &common_args,
         )?,
     ];
-    Ok(BuildSummary {
+    let mut executables = Vec::new();
+    let phases = outputs
+        .into_iter()
+        .map(|(phase, output)| {
+            executables.extend(output);
+            phase
+        })
+        .collect();
+    let target_directory = matrix_target_directory_from_artifacts(target_root, rows, &executables)?;
+    let summary = BuildSummary {
         skipped: false,
         started_at: Some(started_at),
         completed_at: Some(Utc::now().to_rfc3339()),
         duration_us: duration_us(started.elapsed()),
         target_directory: target_directory.display().to_string(),
+        cargo_profile: matrix_cargo_profile(),
         configurable_streamer_features: configurable_streamer_features(rows)
             .into_iter()
             .map(str::to_string)
@@ -4636,7 +4829,8 @@ fn build_required_binaries(
             .map(str::to_string)
             .collect(),
         phases,
-    })
+    };
+    Ok((summary, target_directory))
 }
 
 fn skipped_build_summary(target_directory: &Path, rows: &[MatrixRow]) -> BuildSummary {
@@ -4646,6 +4840,7 @@ fn skipped_build_summary(target_directory: &Path, rows: &[MatrixRow]) -> BuildSu
         completed_at: None,
         duration_us: 0,
         target_directory: target_directory.display().to_string(),
+        cargo_profile: matrix_cargo_profile(),
         configurable_streamer_features: configurable_streamer_features(rows)
             .into_iter()
             .map(str::to_string)
@@ -4702,15 +4897,23 @@ fn run_cargo<const N: usize>(
     repo_root: &Path,
     args: [&str; N],
     patch_args: &[String],
-) -> Result<BuildPhaseSummary> {
+) -> Result<(BuildPhaseSummary, Vec<PathBuf>)> {
     let started = Instant::now();
     let started_at = Utc::now().to_rfc3339();
     let rendered_command: Vec<_> = std::iter::once("cargo".to_string())
         .chain(args.iter().map(|arg| (*arg).to_string()))
+        .chain(["--profile".to_string(), MATRIX_CARGO_PROFILE.to_string()])
+        .chain(["--message-format=json-render-diagnostics".to_string()])
         .chain(patch_args.iter().cloned())
         .collect();
     let mut command = Command::new("cargo");
-    command.current_dir(repo_root).args(args).args(patch_args);
+    command
+        .current_dir(repo_root)
+        .args(args)
+        .args(["--profile", MATRIX_CARGO_PROFILE])
+        .arg("--message-format=json-render-diagnostics")
+        .args(patch_args);
+    configure_matrix_cargo_environment(&mut command);
     command.env("CARGO_NET_GIT_FETCH_WITH_CLI", "true");
     if std::env::var_os("BAZEL").is_none() {
         let bazel = repo_root.join(".cache/tools/bazelisk-v1.29.0-linux-amd64");
@@ -4718,18 +4921,75 @@ fn run_cargo<const N: usize>(
             command.env("BAZEL", bazel);
         }
     }
-    let status = command.status().context("failed to run cargo build")?;
+    let mut child = command
+        .stdout(Stdio::piped())
+        .spawn()
+        .context("failed to run cargo build")?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| anyhow!("Cargo build stdout was not captured"))?;
+    let mut executables = Vec::new();
+    let mut output_error = None;
+    for line in BufReader::new(stdout).lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(error) => {
+                output_error = Some(anyhow!("unable to read Cargo JSON output: {error}"));
+                break;
+            }
+        };
+        let message: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(message) => message,
+            Err(error) => {
+                output_error = Some(anyhow!("invalid Cargo JSON output: {error}: {line}"));
+                continue;
+            }
+        };
+        if let Some(rendered) = message["message"]["rendered"].as_str() {
+            eprint!("{rendered}");
+        }
+        if message["reason"] == "compiler-artifact" {
+            if let Some(executable) = message["executable"].as_str() {
+                executables.push(PathBuf::from(executable));
+            }
+        }
+    }
+    let status = child.wait().context("unable to wait for cargo build")?;
     if !status.success() {
         return Err(anyhow!("cargo build failed with status {status}"));
     }
-    Ok(BuildPhaseSummary {
-        name,
-        started_at,
-        completed_at: Utc::now().to_rfc3339(),
-        duration_us: duration_us(started.elapsed()),
-        command: rendered_command,
-        status_code: status.code(),
-    })
+    if let Some(error) = output_error {
+        return Err(error);
+    }
+    executables.sort();
+    executables.dedup();
+    let executable_paths = executables
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect();
+    Ok((
+        BuildPhaseSummary {
+            name,
+            started_at,
+            completed_at: Utc::now().to_rfc3339(),
+            duration_us: duration_us(started.elapsed()),
+            command: rendered_command,
+            executables: executable_paths,
+            status_code: status.code(),
+        },
+        executables,
+    ))
+}
+
+fn configure_matrix_cargo_environment(command: &mut Command) {
+    for (name, _) in std::env::vars_os() {
+        let name_lossy = name.to_string_lossy();
+        if name_lossy == "CARGO_INCREMENTAL" || name_lossy.starts_with("CARGO_PROFILE_") {
+            command.env_remove(name);
+        }
+    }
+    command.envs(matrix_cargo_profile().environment);
 }
 
 fn cargo_patch_args(repo_root: &Path) -> Vec<String> {
@@ -6195,10 +6455,7 @@ fn start_namespace_holder(
     let stdout = log_file(&log_path)?;
     let stderr = stdout.try_clone()?;
     let script = format!(
-        "set -eu; ip link set lo up; mount -t tmpfs -o size={tmp_size} tmpfs /tmp; mount -t tmpfs -o size={shm_size} tmpfs /dev/shm; mkdir -p {iceoryx2_root}; touch \"$1\"; exec sleep infinity",
-        tmp_size = NAMESPACE_TMP_SIZE,
-        shm_size = NAMESPACE_SHM_SIZE,
-        iceoryx2_root = ICEORYX2_ROOT_PATH,
+        "set -eu; ip link set lo up; mount -t tmpfs -o size={NAMESPACE_TMP_SIZE} tmpfs /tmp; mount -t tmpfs -o size={NAMESPACE_SHM_SIZE} tmpfs /dev/shm; mkdir -p {ICEORYX2_ROOT_PATH}; touch \"$1\"; exec sleep infinity"
     );
     let mut command = Command::new(bundle.executable("unshare")?);
     command
@@ -6921,7 +7178,7 @@ fn detect_vsomeip_lib_dir(target_directory: &Path) -> Result<PathBuf> {
         return Ok(path);
     }
     Err(anyhow!(
-        "libvsomeip3.so.3 not found under LD_LIBRARY_PATH or target/debug/build"
+        "libvsomeip3.so.3 not found under LD_LIBRARY_PATH or the matrix profile build directory"
     ))
 }
 
@@ -6949,7 +7206,7 @@ fn detect_lola_bridge_lib_dir(target_directory: &Path) -> Result<PathBuf> {
         return Ok(path);
     }
     Err(anyhow!(
-        "libup_lola_bridge.so not found under LD_LIBRARY_PATH or target/debug/build"
+        "libup_lola_bridge.so not found under LD_LIBRARY_PATH or the matrix profile build directory"
     ))
 }
 
@@ -6979,7 +7236,7 @@ fn stage_run_bundle(
         inputs.push((
             BundleFileKind::MatrixExecutable,
             name.clone(),
-            target_debug_binary(target_directory, &name),
+            target_profile_binary(target_directory, &name),
         ));
     }
     for name in required_system_executables(rows) {
@@ -7075,6 +7332,7 @@ fn stage_run_bundle(
         schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
         created_at: Utc::now().to_rfc3339(),
         target_directory: target_directory.display().to_string(),
+        cargo_profile: matrix_cargo_profile(),
         orchestrator_commit: git_output(repo_root, &["rev-parse", "HEAD"]),
         dependency_sha256: dependency_sha256(repo_root)?,
         files,
@@ -7311,6 +7569,21 @@ fn validate_bundle_manifest_structure(manifest: &BundleManifest) -> Result<()> {
             BUNDLE_SCHEMA_VERSION
         ));
     }
+    if manifest.cargo_profile != matrix_cargo_profile() {
+        return Err(anyhow!(
+            "run bundle Cargo profile is not the matrix profile"
+        ));
+    }
+    let target_directory = Path::new(&manifest.target_directory);
+    if !target_directory.is_absolute()
+        || target_directory.file_name().and_then(|name| name.to_str())
+            != Some(manifest.cargo_profile.output_directory.as_str())
+    {
+        return Err(anyhow!(
+            "run bundle target directory {} is not an absolute matrix profile output directory",
+            target_directory.display()
+        ));
+    }
     validate_sha256("bundle dependency", &manifest.dependency_sha256)?;
     if manifest.files.is_empty() {
         return Err(anyhow!("bundle manifest contains no files"));
@@ -7332,6 +7605,15 @@ fn validate_bundle_manifest_structure(manifest: &BundleManifest) -> Result<()> {
         }
         if !paths.insert(file.bundle_path.as_str()) {
             return Err(anyhow!("duplicate bundle path {}", file.bundle_path));
+        }
+        if file.kind == BundleFileKind::MatrixExecutable
+            && Path::new(&file.source_path).parent() != Some(target_directory)
+        {
+            return Err(anyhow!(
+                "matrix executable {} was not staged from {}",
+                file.name,
+                target_directory.display()
+            ));
         }
         let expected_mode = if file.kind == BundleFileKind::NativeLibrary {
             0o444
@@ -7496,6 +7778,23 @@ where
     sha256_serializable(&files)
 }
 
+fn bundle_identity_sha256(manifest: &BundleManifest) -> Result<String> {
+    let files: Vec<_> = manifest
+        .files
+        .iter()
+        .map(|file| {
+            (
+                file.kind,
+                &file.name,
+                file.size_bytes,
+                &file.sha256,
+                file.mode,
+            )
+        })
+        .collect();
+    sha256_serializable(&(&manifest.cargo_profile, files))
+}
+
 fn load_criteria(path: Option<&Path>) -> Result<MatrixCriteria> {
     let payload = match path {
         Some(path) => fs::read(path)
@@ -7521,9 +7820,10 @@ fn execution_identities(
     let native_libraries_sha256 = bundle_files_sha256(&bundle.manifest, |kind| {
         kind == BundleFileKind::NativeLibrary
     })?;
-    let bundle_sha256 = bundle_files_sha256(&bundle.manifest, |_| true)?;
+    let bundle_sha256 = bundle_identity_sha256(&bundle.manifest)?;
     let orchestrator_sha256 = bundle_orchestrator_sha256(&bundle.manifest)?;
     Ok(ExecutionIdentities {
+        cargo_profile: bundle.manifest.cargo_profile.clone(),
         matrix_sha256: matrix_identity_sha256(matrix)?,
         selection_sha256,
         criteria_sha256: sha256_serializable(criteria)?,
@@ -7628,7 +7928,7 @@ fn probe_user_namespaces(bundle: &RunBundle) -> Result<()> {
     Ok(())
 }
 
-fn target_debug_binary(target_directory: &Path, name: &str) -> PathBuf {
+fn target_profile_binary(target_directory: &Path, name: &str) -> PathBuf {
     target_directory.join(name)
 }
 
@@ -7663,6 +7963,7 @@ fn capture_provenance(
     Ok(ProvenanceSummary {
         repository_root: repo_root.display().to_string(),
         target_directory: target_directory.display().to_string(),
+        cargo_profile: bundle.manifest.cargo_profile.clone(),
         bundle_root: bundle.root.display().to_string(),
         bundle_manifest: bundle.manifest_path.display().to_string(),
         orchestrator_commit: git_output(repo_root, &["rev-parse", "HEAD"]),
@@ -8158,6 +8459,7 @@ mod tests {
 
     fn test_identities() -> ExecutionIdentities {
         ExecutionIdentities {
+            cargo_profile: matrix_cargo_profile(),
             matrix_sha256: "matrix".to_string(),
             selection_sha256: "selection".to_string(),
             criteria_sha256: "criteria".to_string(),
@@ -8174,14 +8476,15 @@ mod tests {
         BundleManifest {
             schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
             created_at: "2026-07-13T00:00:00Z".to_string(),
-            target_directory: "/target/debug".to_string(),
+            target_directory: "/target/matrix".to_string(),
+            cargo_profile: matrix_cargo_profile(),
             orchestrator_commit: Some("commit".to_string()),
             dependency_sha256: sha256_bytes(b"dependencies"),
             files: vec![
                 BundleFile {
                     kind: BundleFileKind::MatrixExecutable,
                     name: "streamer-transport-test-orchestrator".to_string(),
-                    source_path: "/target/debug/orchestrator".to_string(),
+                    source_path: "/target/matrix/orchestrator".to_string(),
                     bundle_path: "bin/streamer-transport-test-orchestrator".to_string(),
                     size_bytes: 12,
                     sha256: sha256_bytes(b"orchestrator"),
@@ -8191,7 +8494,7 @@ mod tests {
                 BundleFile {
                     kind: BundleFileKind::NativeLibrary,
                     name: "libnative.so".to_string(),
-                    source_path: "/target/debug/libnative.so".to_string(),
+                    source_path: "/target/matrix/libnative.so".to_string(),
                     bundle_path: "lib/libnative.so".to_string(),
                     size_bytes: 6,
                     sha256: sha256_bytes(b"native"),
@@ -8260,7 +8563,8 @@ mod tests {
             shard: None,
             provenance: ProvenanceSummary {
                 repository_root: "/repo".to_string(),
-                target_directory: "/repo/target/debug".to_string(),
+                target_directory: "/target/matrix".to_string(),
+                cargo_profile: matrix_cargo_profile(),
                 bundle_root: "/repo/artifacts/run-bundle".to_string(),
                 bundle_manifest: "/repo/artifacts/run-bundle/manifest.json".to_string(),
                 orchestrator_commit: Some("dc4c17f".to_string()),
@@ -8328,7 +8632,7 @@ mod tests {
         identities.criteria_sha256 = sha256_serializable(&criteria).unwrap();
         identities.orchestrator_sha256 = bundle_orchestrator_sha256(&bundle).unwrap();
         identities.dependency_sha256 = bundle.dependency_sha256.clone();
-        identities.bundle_sha256 = bundle_files_sha256(&bundle, |_| true).unwrap();
+        identities.bundle_sha256 = bundle_identity_sha256(&bundle).unwrap();
         identities.binaries_sha256 =
             bundle_files_sha256(&bundle, |kind| kind != BundleFileKind::NativeLibrary).unwrap();
         identities.native_libraries_sha256 =
@@ -8367,7 +8671,7 @@ mod tests {
             let (binaries, native_libraries) = test_file_provenance(&bundle);
             summary.provenance.binaries = binaries;
             summary.provenance.native_libraries = native_libraries;
-            summary.build = skipped_build_summary(Path::new("/target/debug"), &rows);
+            summary.build = skipped_build_summary(Path::new("/target/matrix"), &rows);
             summary.shard = Some(ShardRunSummary {
                 shard_count: manifest.shard_count,
                 shard_index: manifest.shard_index,
@@ -8462,7 +8766,7 @@ mod tests {
         );
 
         let value = serde_json::to_value(&summary).expect("summary serializes");
-        assert_eq!(value["schema_version"], "5.0");
+        assert_eq!(value["schema_version"], "6.0");
         assert_eq!(value["options"]["only"][0], "matrix-row");
         assert_eq!(value["options"]["jobs"], 7);
         assert_eq!(value["options"]["lola_jobs"], 2);
@@ -8470,6 +8774,8 @@ mod tests {
         assert_eq!(value["command"]["argv"][1], "--jobs");
         assert_eq!(value["command"]["working_directory"], "/repo");
         assert_eq!(value["provenance"]["orchestrator_commit"], "dc4c17f");
+        assert_eq!(value["provenance"]["cargo_profile"]["name"], "matrix");
+        assert_eq!(value["build"]["cargo_profile"]["debug"], 0);
         assert!(value.get("host_resources").is_some());
         assert!(value.get("preflight").is_some());
         assert!(value.get("build").is_some());
@@ -8488,6 +8794,86 @@ mod tests {
         assert_eq!(cli.zenoh_sink_stabilization_ms, 0);
         assert_eq!(cli.vsomeip_sink_stabilization_ms, 0);
         assert_eq!(cli.lola_success_cooldown_ms, 0);
+    }
+
+    #[test]
+    fn matrix_cargo_profile_is_isolated_and_reproducible() {
+        let profile = matrix_cargo_profile();
+        assert_eq!(profile.name, "matrix");
+        assert_eq!(profile.inherits, "dev");
+        assert_eq!(profile.output_directory, "matrix");
+        assert_eq!(profile.debug, 0);
+        assert_eq!(profile.strip, "debuginfo");
+        assert!(!profile.incremental);
+        assert_eq!(
+            profile.environment,
+            BTreeMap::from([
+                ("CARGO_INCREMENTAL".to_string(), "0".to_string()),
+                ("CARGO_PROFILE_MATRIX_DEBUG".to_string(), "0".to_string()),
+                (
+                    "CARGO_PROFILE_MATRIX_INCREMENTAL".to_string(),
+                    "false".to_string(),
+                ),
+                (
+                    "CARGO_PROFILE_MATRIX_STRIP".to_string(),
+                    "debuginfo".to_string(),
+                ),
+            ])
+        );
+        assert_eq!(
+            matrix_profile_target_directory(Path::new("/target")),
+            PathBuf::from("/target/matrix")
+        );
+        let workspace_manifest = include_str!("../../../Cargo.toml");
+        assert!(workspace_manifest.contains(
+            "[profile.matrix]\ninherits = \"dev\"\ndebug = 0\nstrip = \"debuginfo\"\nincremental = false"
+        ));
+    }
+
+    #[test]
+    fn matrix_output_discovery_rejects_debug_and_ambiguous_artifacts() {
+        let base = std::env::temp_dir().join(format!(
+            "streamer-orchestrator-profile-discovery-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().expect("timestamp fits")
+        ));
+        let debug = base.join("debug");
+        fs::create_dir_all(&debug).expect("create stale debug directory");
+        let row = representative_row();
+        let required = required_matrix_executables(std::slice::from_ref(&row));
+        for name in &required {
+            fs::write(debug.join(name), b"stale").expect("write stale debug executable");
+        }
+        let error = discover_existing_matrix_target_directory(&base, std::slice::from_ref(&row))
+            .expect_err("debug artifacts must not be discovered")
+            .to_string();
+        assert!(
+            error.contains("stale debug artifacts are not accepted"),
+            "{error}"
+        );
+
+        let cross_matrix = base.join("x86_64-unknown-linux-gnu/matrix");
+        fs::create_dir_all(&cross_matrix).expect("create target-qualified matrix directory");
+        for name in &required {
+            fs::write(cross_matrix.join(name), b"matrix")
+                .expect("write target-qualified matrix executable");
+        }
+        assert_eq!(
+            discover_existing_matrix_target_directory(&base, std::slice::from_ref(&row))
+                .expect("target-qualified matrix output is discovered"),
+            fs::canonicalize(&cross_matrix).unwrap()
+        );
+
+        let direct_matrix = base.join("matrix");
+        fs::create_dir(&direct_matrix).expect("create direct matrix directory");
+        for name in &required {
+            fs::write(direct_matrix.join(name), b"matrix").expect("write direct matrix executable");
+        }
+        let error = discover_existing_matrix_target_directory(&base, &[row])
+            .expect_err("ambiguous matrix outputs must fail")
+            .to_string();
+        assert!(error.contains("multiple complete matrix"), "{error}");
+        fs::remove_dir_all(base).expect("remove profile discovery fixture");
     }
 
     #[test]
@@ -9046,6 +9432,54 @@ mod tests {
             assert!(error.contains(label), "{field}: {error}");
             fs::remove_dir_all(base).expect("remove identity fixture");
         }
+    }
+
+    #[test]
+    fn shard_merge_rejects_every_cargo_profile_provenance_mismatch() {
+        for location in ["identities", "bundle", "provenance", "build"] {
+            let (base, roots, output, _) = merge_fixture(location);
+            mutate_json(&roots[0].join("matrix-summary.json"), |summary| {
+                summary[location]["cargo_profile"]["debug"] = json!(1);
+            });
+            let error = merge_shards(&merge_cli(&roots, &output))
+                .expect_err("Cargo profile mismatch must fail")
+                .to_string();
+            assert!(error.contains("Cargo profile"), "{location}: {error}");
+            fs::remove_dir_all(base).expect("remove profile identity fixture");
+        }
+    }
+
+    #[test]
+    fn shard_merge_rejects_target_directory_provenance_mismatch() {
+        for location in ["provenance", "build"] {
+            let (base, roots, output, _) = merge_fixture(location);
+            mutate_json(&roots[0].join("matrix-summary.json"), |summary| {
+                summary[location]["target_directory"] = json!("/target/debug");
+            });
+            let error = merge_shards(&merge_cli(&roots, &output))
+                .expect_err("matrix target directory mismatch must fail")
+                .to_string();
+            assert!(
+                error.contains("target directory provenance"),
+                "{location}: {error}"
+            );
+            fs::remove_dir_all(base).expect("remove target provenance fixture");
+        }
+    }
+
+    #[test]
+    fn bundle_manifest_rejects_stale_debug_executable_provenance() {
+        let mut bundle = test_bundle_manifest();
+        bundle.target_directory = "/target/debug".to_string();
+        for file in &mut bundle.files {
+            if file.kind == BundleFileKind::MatrixExecutable {
+                file.source_path = format!("/target/debug/{}", file.name);
+            }
+        }
+        let error = validate_bundle_manifest_structure(&bundle)
+            .expect_err("debug target provenance must fail")
+            .to_string();
+        assert!(error.contains("matrix profile output directory"), "{error}");
     }
 
     #[test]
@@ -9723,6 +10157,7 @@ mod tests {
                 schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
                 created_at: String::new(),
                 target_directory: "/target".to_string(),
+                cargo_profile: matrix_cargo_profile(),
                 orchestrator_commit: None,
                 dependency_sha256: "dependencies".to_string(),
                 files: Vec::new(),
@@ -9782,7 +10217,9 @@ mod tests {
         ] {
             fs::create_dir_all(directory).expect("create bundle test directory");
         }
-        let source = base.join("source-bin");
+        let target_directory = base.join("matrix");
+        fs::create_dir(&target_directory).expect("create matrix target directory");
+        let source = target_directory.join("test-bin");
         fs::write(&source, b"original executable").expect("write source");
         fs::set_permissions(&source, fs::Permissions::from_mode(0o755))
             .expect("make source executable");
@@ -9792,7 +10229,8 @@ mod tests {
         let manifest = BundleManifest {
             schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
             created_at: Utc::now().to_rfc3339(),
-            target_directory: base.display().to_string(),
+            target_directory: target_directory.display().to_string(),
+            cargo_profile: matrix_cargo_profile(),
             orchestrator_commit: None,
             dependency_sha256: sha256_bytes(b"dependencies"),
             files: vec![staged.clone()],
@@ -9969,6 +10407,7 @@ mod tests {
                 schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
                 created_at: String::new(),
                 target_directory: String::new(),
+                cargo_profile: matrix_cargo_profile(),
                 orchestrator_commit: None,
                 dependency_sha256: "dependencies".to_string(),
                 files: Vec::new(),

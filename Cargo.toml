@@ -82,6 +82,12 @@ up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "31ee659aae
 debug = true
 opt-level = 0
 
+[profile.matrix]
+inherits = "dev"
+debug = 0
+strip = "debuginfo"
+incremental = false
+
 [profile.fast]
 inherits = "release"
 opt-level = 3
