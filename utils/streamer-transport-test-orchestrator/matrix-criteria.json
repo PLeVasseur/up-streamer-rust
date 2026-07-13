@@ -1,13 +1,13 @@
 {
-  "description": "R5.1 flake-hardening acceptance criteria. Exact counts and diagonal-only unsupported reasons are unchanged. Configured recovery returns to the R4 regime, while acceptance requires zero retries consumed.",
   "expected": {
-    "pass": 648,
-    "unsupported": 81,
+    "pass": 1728,
+    "unsupported": 432,
     "blocked": 0,
     "failed": 0
   },
   "unsupported_reason_allowlist": [
-    "source and sink endpoint profiles are identical; no bridge boundary is under test"
+    "source and sink endpoint profiles are identical",
+    "Arrow and OMGIDL are not implemented by MQTT5 or vSomeIP classic role binaries"
   ],
   "retry": {
     "max_retries_lola_rows": 1,

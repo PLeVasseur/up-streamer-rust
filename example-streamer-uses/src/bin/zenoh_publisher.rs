@@ -18,7 +18,8 @@ use chrono::Timelike;
 use clap::{Parser, ValueEnum};
 use common::cli;
 use common::payloads::{
-    native_payload_alignment, native_payload_bytes, xcdrv2_payload_bytes, SelectedWireNativePayload,
+    arrow_payload_bytes, native_payload_alignment, native_payload_bytes, omgidl_payload_bytes,
+    xcdrv2_payload_bytes, SelectedWireNativePayload,
 };
 use common::protobuf_payload;
 use hello_world_protos::hello_world_topics::Timer;
@@ -36,6 +37,8 @@ use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
     UPTransportZenoh, ZenohOwnedCore, ZenohZeroCopyCore,
 };
+use up_wire_arrow::ArrowWire;
+use up_wire_omgidl::OmgIdlWire;
 use up_wire_xcdrv2::XcdrV2Wire;
 
 const DEFAULT_ENDPOINT: &str = "tcp/127.0.0.1:7447";
@@ -56,6 +59,8 @@ enum Encoding {
     Native,
     Protobuf,
     Xcdrv2,
+    Arrow,
+    Omgidl,
 }
 
 #[derive(Parser, Debug)]
@@ -221,6 +226,22 @@ async fn run_selected_wire_publisher(
             ) as Arc<dyn UOwnedTransport>;
             send_owned_repeated(&transport, metadata, &payload, args.selected_send_count).await?;
         }
+        (RouteFamily::OwnedFrame, Encoding::Arrow) => {
+            let transport = Arc::new(
+                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(ArrowWire),
+            ) as Arc<dyn UOwnedTransport>;
+            send_owned_repeated(&transport, metadata, &payload, args.selected_send_count).await?;
+        }
+        (RouteFamily::OwnedFrame, Encoding::Omgidl) => {
+            let transport = Arc::new(
+                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(OmgIdlWire),
+            ) as Arc<dyn UOwnedTransport>;
+            send_owned_repeated(&transport, metadata, &payload, args.selected_send_count).await?;
+        }
         (RouteFamily::CopyMinimized, Encoding::Native) => {
             let transport = Arc::new(
                 ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
@@ -250,6 +271,24 @@ async fn run_selected_wire_publisher(
                 ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
                     .await?
                     .with_selected_wire(XcdrV2Wire),
+            );
+            send_zero_copy_repeated(&transport, metadata, &payload, args.payload_alignment, args)
+                .await?;
+        }
+        (RouteFamily::CopyMinimized, Encoding::Arrow) => {
+            let transport = Arc::new(
+                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(ArrowWire),
+            );
+            send_zero_copy_repeated(&transport, metadata, &payload, args.payload_alignment, args)
+                .await?;
+        }
+        (RouteFamily::CopyMinimized, Encoding::Omgidl) => {
+            let transport = Arc::new(
+                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(OmgIdlWire),
             );
             send_zero_copy_repeated(&transport, metadata, &payload, args.payload_alignment, args)
                 .await?;
@@ -333,6 +372,8 @@ fn selected_payload_encoding(encoding: Encoding) -> PayloadEncoding {
         Encoding::Native => StableContainerPayload::<SelectedWireNativePayload>::encoding(),
         Encoding::Protobuf => ProtobufWire::encoding(),
         Encoding::Xcdrv2 => XcdrV2Wire::encoding(),
+        Encoding::Arrow => ArrowWire::encoding(),
+        Encoding::Omgidl => OmgIdlWire::encoding(),
     }
 }
 
@@ -341,6 +382,8 @@ fn selected_payload_bytes(args: &Args) -> Result<Vec<u8>, UStatus> {
         Encoding::Native => native_payload_bytes(NATIVE_PAYLOAD_MAGIC, 1, &args.payload),
         Encoding::Protobuf => Ok(args.payload.as_bytes().to_vec()),
         Encoding::Xcdrv2 => xcdrv2_payload_bytes(1, args.uauthority.clone(), &args.payload),
+        Encoding::Arrow => arrow_payload_bytes(1, &args.payload),
+        Encoding::Omgidl => omgidl_payload_bytes(1, &args.payload),
     }
 }
 

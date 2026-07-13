@@ -567,7 +567,7 @@ fn streamer_criterion(c: &mut Criterion) {
         b.iter(|| black_box(("benchmark-route", true)));
     });
     selected_wire_route_group.bench_function("reject_same_authority", |b| {
-        b.iter(|| black_box("authority-a" == "authority-a"));
+        b.iter(|| black_box("authority-a" == black_box("authority-a")));
     });
     selected_wire_route_group.finish();
 

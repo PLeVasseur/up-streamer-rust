@@ -30,6 +30,8 @@ use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
     UPTransportZenoh, ZenohOwnedCore, ZenohZeroCopyCore,
 };
+use up_wire_arrow::ArrowWire;
+use up_wire_omgidl::OmgIdlWire;
 use up_wire_xcdrv2::XcdrV2Wire;
 
 const DEFAULT_ENDPOINT: &str = "tcp/127.0.0.1:7447";
@@ -53,6 +55,8 @@ enum Encoding {
     Native,
     Protobuf,
     Xcdrv2,
+    Arrow,
+    Omgidl,
 }
 
 #[derive(Parser, Debug)]
@@ -203,6 +207,24 @@ async fn run_selected_wire_subscriber(
             println!("READY listener_registered");
             receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
         }
+        (RouteFamily::OwnedFrame, Encoding::Arrow) => {
+            let transport = Arc::new(
+                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(ArrowWire),
+            ) as Arc<dyn UOwnedTransport>;
+            println!("READY listener_registered");
+            receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
+        }
+        (RouteFamily::OwnedFrame, Encoding::Omgidl) => {
+            let transport = Arc::new(
+                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(OmgIdlWire),
+            ) as Arc<dyn UOwnedTransport>;
+            println!("READY listener_registered");
+            receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
+        }
         (RouteFamily::CopyMinimized, Encoding::Native) => {
             let transport = Arc::new(
                 ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
@@ -226,6 +248,24 @@ async fn run_selected_wire_subscriber(
                 ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
                     .await?
                     .with_selected_wire(XcdrV2Wire),
+            );
+            println!("READY listener_registered");
+            receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
+        }
+        (RouteFamily::CopyMinimized, Encoding::Arrow) => {
+            let transport = Arc::new(
+                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(ArrowWire),
+            );
+            println!("READY listener_registered");
+            receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
+        }
+        (RouteFamily::CopyMinimized, Encoding::Omgidl) => {
+            let transport = Arc::new(
+                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
+                    .await?
+                    .with_selected_wire(OmgIdlWire),
             );
             println!("READY listener_registered");
             receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?

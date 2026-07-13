@@ -45,6 +45,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
 dependencies = [
  "cfg-if",
+ "const-random",
  "getrandom 0.3.4",
  "once_cell",
  "version_check",
@@ -164,6 +165,83 @@ name = "array-init"
 version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d62b7694a562cdf5a74227903507c56ab2cc8bdd1f781ed5cb4cf9c9f810bfc"
+
+[[package]]
+name = "arrow-array"
+version = "58.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfd33d3e92f207444098c75b42de99d329562be0cf686b307b097cc52b4e999e"
+dependencies = [
+ "ahash",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "chrono",
+ "half",
+ "hashbrown 0.17.1",
+ "num-complex",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "arrow-buffer"
+version = "58.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c6cd424c2693bcdbc150d843dc9d4d137dd2de4782ce6df491ad11a3a0416c0"
+dependencies = [
+ "bytes",
+ "half",
+ "num-bigint",
+ "num-traits",
+]
+
+[[package]]
+name = "arrow-data"
+version = "58.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c88210023a2bfee1896af366309a3028fc3bcbd6515fa29a7990ee1baa08ee0"
+dependencies = [
+ "arrow-buffer",
+ "arrow-schema",
+ "half",
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "arrow-ipc"
+version = "58.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "238438f0834483703d88896db6fe5a7138b2230debc31b34c0336c2996e3c64f"
+dependencies = [
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "arrow-select",
+ "flatbuffers",
+]
+
+[[package]]
+name = "arrow-schema"
+version = "58.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f633dbfdf39c039ada1bf9e34c694816eb71fbb7dc78f613993b7245e078a1ed"
+
+[[package]]
+name = "arrow-select"
+version = "58.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8cd065c54172ac787cf3f2f8d4107e0d3fdc26edba76fdf4f4cc170258942222"
+dependencies = [
+ "ahash",
+ "arrow-array",
+ "arrow-buffer",
+ "arrow-data",
+ "arrow-schema",
+ "num-traits",
+]
 
 [[package]]
 name = "asn1-rs"
@@ -909,6 +987,7 @@ dependencies = [
  "tracing-subscriber",
  "up-rust",
  "up-streamer",
+ "up-transport-dds",
  "up-transport-iceoryx2-rust",
  "up-transport-lola-rust",
  "up-transport-mqtt5",
@@ -925,9 +1004,12 @@ version = "0.1.0"
 dependencies = [
  "up-rust",
  "up-streamer",
+ "up-transport-dds",
  "up-transport-iceoryx2-rust",
  "up-transport-lola-rust",
  "up-transport-zenoh",
+ "up-wire-arrow",
+ "up-wire-omgidl",
  "up-wire-xcdrv2",
 ]
 
@@ -936,6 +1018,26 @@ name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
+
+[[package]]
+name = "const-random"
+version = "0.1.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87e00182fe74b066627d63b85fd550ac2998d4b0bd86bfed477a0ae4c7c71359"
+dependencies = [
+ "const-random-macro",
+]
+
+[[package]]
+name = "const-random-macro"
+version = "0.1.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f9d839f2a20b0aee515dc581a6172f2321f96cab76c1a38a4c584a194955390e"
+dependencies = [
+ "getrandom 0.2.17",
+ "once_cell",
+ "tiny-keccak",
+]
 
 [[package]]
 name = "const_format"
@@ -1060,6 +1162,12 @@ dependencies = [
  "cast",
  "itertools 0.10.5",
 ]
+
+[[package]]
+name = "critical-section"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
 name = "crossbeam"
@@ -1371,6 +1479,33 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4c3cf4824e2d5f025c7b531afcb2325364084a16806f6d47fbc1f5fbd9960590"
 
 [[package]]
+name = "dust_dds"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0a1a8670f436a711942d5218b2ef20aa579e8745a9912721de540e5a2e29dae"
+dependencies = [
+ "critical-section",
+ "dust_dds_derive",
+ "md5",
+ "network-interface",
+ "regex",
+ "socket2 0.5.10",
+ "tracing",
+]
+
+[[package]]
+name = "dust_dds_derive"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56b01180d953c1a42e2e0b556daf15fde64d84daf836834457de949fcbddece2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.118",
+ "xml-rs",
+]
+
+[[package]]
 name = "dyn-clone"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1498,11 +1633,14 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "up-rust",
+ "up-transport-dds",
  "up-transport-iceoryx2-rust",
  "up-transport-lola-rust",
  "up-transport-mqtt5",
  "up-transport-vsomeip",
  "up-transport-zenoh",
+ "up-wire-arrow",
+ "up-wire-omgidl",
  "up-wire-xcdrv2",
  "zenoh",
 ]
@@ -1557,6 +1695,16 @@ name = "fixedbitset"
 version = "0.5.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+
+[[package]]
+name = "flatbuffers"
+version = "25.12.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "35f6839d7b3b98adde531effaf34f0c2badc6f4735d26fe74709d8e513a96ef3"
+dependencies = [
+ "bitflags 2.13.0",
+ "rustc_version",
+]
 
 [[package]]
 name = "flate2"
@@ -1833,6 +1981,7 @@ checksum = "6ea2d84b969582b4b1864a92dc5d27cd2b77b622a8d79306834f1be5ba20d84b"
 dependencies = [
  "cfg-if",
  "crunchy",
+ "num-traits",
  "zerocopy",
 ]
 
@@ -2865,6 +3014,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47e1ffaa40ddd1f3ed91f717a33c8c0ee23fff369e3aa8772b9605cc1d22f4c3"
 
 [[package]]
+name = "md5"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490cc448043f947bae3cbee9c203358d62dbee0db12107a74be5c30ccfd09771"
+
+[[package]]
 name = "mediatype"
 version = "0.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3000,6 +3155,18 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "tempfile",
+]
+
+[[package]]
+name = "network-interface"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ddcb8865ad3d9950f22f42ffa0ef0aecbfbf191867b3122413602b0a360b2a6"
+dependencies = [
+ "cc",
+ "libc",
+ "thiserror 2.0.18",
+ "winapi",
 ]
 
 [[package]]
@@ -5255,6 +5422,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9659b108631d1e1cf3e8e489f894bee40bc9d68fd6cc67ec4d4ce9b72d565228"
 
 [[package]]
+name = "tiny-keccak"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
+dependencies = [
+ "crunchy",
+]
+
+[[package]]
 name = "tinystr"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5861,6 +6037,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "up-transport-dds"
+version = "0.1.0"
+source = "git+https://github.com/PLeVasseur/up-transport-dds-rust.git?rev=8c81fb75955a03d442ac2e522b45efb557a3b961#8c81fb75955a03d442ac2e522b45efb557a3b961"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "clap",
+ "dust_dds",
+ "tokio",
+ "up-rust",
+ "up-wire-arrow",
+ "up-wire-omgidl",
+ "up-wire-xcdrv2",
+]
+
+[[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.1.0"
 source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=7a601c320e7190adef20142e9edc2610c785bce5#7a601c320e7190adef20142e9edc2610c785bce5"
@@ -5911,7 +6103,7 @@ dependencies = [
 [[package]]
 name = "up-transport-vsomeip"
 version = "0.4.1"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=117fefbd468f48b8576e250be79ed9cd68a0f360#117fefbd468f48b8576e250be79ed9cd68a0f360"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=b7530d4541bfc7d380f318817e94efc0dbb879c5#b7530d4541bfc7d380f318817e94efc0dbb879c5"
 dependencies = [
  "async-trait",
  "bimap",
@@ -5955,9 +6147,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "up-wire-arrow"
+version = "0.1.0"
+source = "git+https://github.com/PLeVasseur/up-wire-arrow-rust.git?rev=0f064f049124f3dce9d2413fcb73cf05e87d8f35#0f064f049124f3dce9d2413fcb73cf05e87d8f35"
+dependencies = [
+ "arrow-array",
+ "arrow-ipc",
+ "arrow-schema",
+ "bytes",
+ "up-rust",
+]
+
+[[package]]
+name = "up-wire-omgidl"
+version = "0.1.0"
+source = "git+https://github.com/PLeVasseur/up-wire-omgidl-rust.git?rev=280378616ade087340c89c5c65237ed14a32eaaf#280378616ade087340c89c5c65237ed14a32eaaf"
+dependencies = [
+ "bytes",
+ "dust_dds",
+ "up-rust",
+]
+
+[[package]]
 name = "up-wire-xcdrv2"
 version = "0.0.0"
-source = "git+ssh://git@github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=cd89d2494a089163d1c6a7473fd9ae50ebd6897f#cd89d2494a089163d1c6a7473fd9ae50ebd6897f"
+source = "git+https://github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=27a6451ac6f46b2f30cebb82b5f0ada04eb78146#27a6451ac6f46b2f30cebb82b5f0ada04eb78146"
 dependencies = [
  "up-rust",
  "up-wire-xcdrv2-macros",
@@ -5966,7 +6180,7 @@ dependencies = [
 [[package]]
 name = "up-wire-xcdrv2-macros"
 version = "0.0.0"
-source = "git+ssh://git@github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=cd89d2494a089163d1c6a7473fd9ae50ebd6897f#cd89d2494a089163d1c6a7473fd9ae50ebd6897f"
+source = "git+https://github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=27a6451ac6f46b2f30cebb82b5f0ada04eb78146#27a6451ac6f46b2f30cebb82b5f0ada04eb78146"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6136,7 +6350,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 [[package]]
 name = "vsomeip-proc-macro"
 version = "0.4.1"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=117fefbd468f48b8576e250be79ed9cd68a0f360#117fefbd468f48b8576e250be79ed9cd68a0f360"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=b7530d4541bfc7d380f318817e94efc0dbb879c5#b7530d4541bfc7d380f318817e94efc0dbb879c5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6147,7 +6361,7 @@ dependencies = [
 [[package]]
 name = "vsomeip-sys"
 version = "0.4.1"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=117fefbd468f48b8576e250be79ed9cd68a0f360#117fefbd468f48b8576e250be79ed9cd68a0f360"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=b7530d4541bfc7d380f318817e94efc0dbb879c5#b7530d4541bfc7d380f318817e94efc0dbb879c5"
 dependencies = [
  "autocxx",
  "autocxx-build",
@@ -6721,6 +6935,12 @@ dependencies = [
  "libc",
  "rustix 1.1.4",
 ]
+
+[[package]]
+name = "xml-rs"
+version = "0.8.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ae8337f8a065cfc972643663ea4279e04e7256de865aa66fe25cec5fb912d3f"
 
 [[package]]
 name = "yasna"

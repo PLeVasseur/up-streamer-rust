@@ -64,6 +64,68 @@ pub struct Transports {
     /// R3A: classic vSomeIP endpoints (Tier 1 of the vSomeIP plan).
     #[serde(default)]
     pub(crate) vsomeip: Option<VsomeipTransport>,
+    #[serde(default)]
+    pub(crate) dds: Option<DdsTransport>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DdsTransport {
+    pub(crate) domain_id: i32,
+    pub(crate) origin_id: String,
+    #[serde(default)]
+    pub(crate) qos: DdsQosConfig,
+    #[serde(default = "default_dds_history_depth")]
+    pub(crate) history_depth: u32,
+    #[serde(default)]
+    pub(crate) readiness: DdsReadinessConfig,
+    #[serde(default)]
+    pub(crate) endpoints: Vec<EndpointConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DdsQosConfig {
+    #[serde(default)]
+    pub(crate) reliability: DdsReliability,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DdsReliability {
+    #[default]
+    Reliable,
+    BestEffort,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DdsReadinessConfig {
+    #[serde(default = "default_dds_required_matched_readers")]
+    pub(crate) required_matched_readers: usize,
+    #[serde(default = "default_dds_readiness_timeout_ms")]
+    pub(crate) timeout_ms: u64,
+}
+
+impl Default for DdsReadinessConfig {
+    fn default() -> Self {
+        Self {
+            required_matched_readers: default_dds_required_matched_readers(),
+            timeout_ms: default_dds_readiness_timeout_ms(),
+        }
+    }
+}
+
+const fn default_dds_history_depth() -> u32 {
+    32
+}
+
+const fn default_dds_required_matched_readers() -> usize {
+    1
+}
+
+const fn default_dds_readiness_timeout_ms() -> u64 {
+    5_000
 }
 
 /// R3A: classic vSomeIP transport section. `config_file` is the vsomeip JSON
@@ -278,5 +340,43 @@ mod tests {
         ));
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn dds_config_accepts_domain_origin_qos_history_readiness_and_endpoints() {
+        let config: Config = json5::from_str(
+            r#"{
+                up_streamer_config: { message_queue_size: 4 },
+                streamer_uuri: { authority: "authority-streamer", ue_id: 1, ue_version_major: 1 },
+                usubscription_config: { mode: "static_file", file_path: "subscriptions.json" },
+                transports: {
+                    zenoh: { config_file: "ZENOH_CONFIG.json5", endpoints: [] },
+                    mqtt: { config_file: "MQTT_CONFIG.json5", endpoints: [] },
+                    dds: {
+                        domain_id: 91,
+                        origin_id: "matrix-row-17-streamer",
+                        qos: { reliability: "best_effort" },
+                        history_depth: 12,
+                        readiness: { required_matched_readers: 1, timeout_ms: 2500 },
+                        endpoints: [{
+                            authority: "authority-a",
+                            endpoint: "dds-owned",
+                            routing_mode: "owned_frame",
+                            forwarding_routes: [{ endpoint: "dds-copy", wire_format: "arrow" }],
+                        }],
+                    },
+                },
+            }"#,
+        )
+        .expect("DDS config parses");
+
+        let dds = config.transports.dds.expect("DDS transport present");
+        assert_eq!(dds.domain_id, 91);
+        assert_eq!(dds.origin_id, "matrix-row-17-streamer");
+        assert_eq!(dds.qos.reliability, DdsReliability::BestEffort);
+        assert_eq!(dds.history_depth, 12);
+        assert_eq!(dds.readiness.required_matched_readers, 1);
+        assert_eq!(dds.readiness.timeout_ms, 2500);
+        assert_eq!(dds.endpoints.len(), 1);
     }
 }

@@ -14,7 +14,8 @@
 mod config;
 
 use crate::config::{
-    Config, EndpointConfig, ForwardingRouteConfig, RoutingMode, SubscriptionProviderMode,
+    Config, DdsReliability, DdsTransport, EndpointConfig, ForwardingRouteConfig, RoutingMode,
+    SubscriptionProviderMode,
 };
 use clap::Parser;
 #[cfg(feature = "owned-frame-transport")]
@@ -41,12 +42,20 @@ use std::path::{Path, PathBuf};
 #[cfg(any(feature = "zenoh-zero-copy", feature = "zenoh-owned-frame"))]
 use std::str::FromStr;
 use std::sync::Arc;
+#[cfg(feature = "dds-transport")]
+use std::time::Duration;
 use tracing::info;
 use up_rust::core::usubscription::USubscription;
 use up_rust::{UCode, UStatus, UTransport, UUri};
 #[cfg(feature = "experimental-copy-minimized-routing")]
 use up_streamer::CopyMinimizedRouteOptions;
 use up_streamer::{Endpoint, UStreamer};
+#[cfg(feature = "dds-owned-frame")]
+use up_transport_dds::owned::UPTransportDdsOwned;
+#[cfg(feature = "dds-zero-copy")]
+use up_transport_dds::zero_copy::DdsZeroCopyCore;
+#[cfg(feature = "dds-transport")]
+use up_transport_dds::{DdsConfig, Reliability as DdsTransportReliability, UPTransportDds};
 #[cfg(any(
     all(
         feature = "experimental-copy-minimized-routing",
@@ -787,6 +796,184 @@ fn register_mqtt_endpoints(
         )?;
     }
 
+    Ok(())
+}
+
+#[cfg(feature = "dds-transport")]
+fn dds_runtime_config(
+    transport: &DdsTransport,
+    endpoint: &EndpointConfig,
+    wire_format: Option<RouteWireFormat>,
+) -> Result<DdsConfig, UStatus> {
+    if transport.origin_id.is_empty() {
+        return Err(invalid_config("DDS origin_id must not be empty"));
+    }
+    if transport.history_depth == 0 {
+        return Err(invalid_config(
+            "DDS history_depth must be greater than zero",
+        ));
+    }
+    if transport.readiness.timeout_ms == 0 {
+        return Err(invalid_config(
+            "DDS readiness timeout_ms must be greater than zero",
+        ));
+    }
+
+    let family = match endpoint.routing_mode {
+        RoutingMode::Owned => "classic",
+        RoutingMode::OwnedFrame => "owned-frame",
+        RoutingMode::CopyMinimized => "copy-minimized",
+    };
+    let wire = wire_format
+        .map(RouteWireFormat::as_config_value)
+        .unwrap_or("classic");
+    let mut config = DdsConfig::new(transport.domain_id);
+    config.origin_id = format!(
+        "{}:{}:{family}:{wire}",
+        transport.origin_id, endpoint.endpoint
+    );
+    config.qos.reliability = match transport.qos.reliability {
+        DdsReliability::Reliable => DdsTransportReliability::Reliable,
+        DdsReliability::BestEffort => DdsTransportReliability::BestEffort,
+    };
+    config.qos.history_depth = transport.history_depth;
+    Ok(config)
+}
+
+#[cfg(feature = "dds-transport")]
+fn dds_readiness(transport: &DdsTransport) -> (usize, Duration) {
+    (
+        transport.readiness.required_matched_readers,
+        Duration::from_millis(transport.readiness.timeout_ms),
+    )
+}
+
+#[cfg(feature = "dds-transport")]
+fn register_dds_endpoints(
+    endpoints: &mut HashMap<String, ConfiguredEndpoint>,
+    transport_config: &DdsTransport,
+    #[cfg(any(
+        feature = "experimental-copy-minimized-routing",
+        feature = "owned-frame-transport"
+    ))]
+    route_wire_formats: &HashMap<String, HashSet<RouteWireFormat>>,
+) -> Result<(), UStatus> {
+    let runtime = tokio::runtime::Handle::current();
+    let (required_matches, readiness_timeout) = dds_readiness(transport_config);
+
+    for endpoint_config in &transport_config.endpoints {
+        let mut standard = None;
+        #[cfg(feature = "experimental-copy-minimized-routing")]
+        let mut route_wire_endpoints = HashMap::new();
+        #[cfg(feature = "owned-frame-transport")]
+        let mut owned_frame_endpoints = HashMap::new();
+
+        match endpoint_config.routing_mode {
+            RoutingMode::Owned => {
+                let transport = UPTransportDds::with_config(
+                    dds_runtime_config(transport_config, endpoint_config, None)?,
+                    runtime.clone(),
+                )?;
+                transport.wait_ready(required_matches, readiness_timeout)?;
+                standard = Some(Endpoint::new(
+                    &endpoint_config.endpoint,
+                    &endpoint_config.authority,
+                    Arc::new(transport),
+                ));
+            }
+            RoutingMode::OwnedFrame => {
+                #[cfg(feature = "dds-owned-frame")]
+                {
+                    let formats = route_wire_formats
+                        .get(&endpoint_config.endpoint)
+                        .ok_or_else(|| {
+                            invalid_config(format!(
+                                "DDS owned_frame endpoint {} has no route wire formats",
+                                endpoint_config.endpoint
+                            ))
+                        })?;
+                    for format in formats {
+                        let transport = UPTransportDdsOwned::with_config(
+                            dds_runtime_config(transport_config, endpoint_config, Some(*format))?,
+                            runtime.clone(),
+                        )?;
+                        transport.wait_ready(required_matches, readiness_timeout)?;
+                        owned_frame_endpoints.insert(
+                            *format,
+                            configurable_streamer_wire_support::dds_owned_endpoint(
+                                &endpoint_config.endpoint,
+                                &endpoint_config.authority,
+                                transport,
+                                *format,
+                            ),
+                        );
+                    }
+                }
+                #[cfg(not(feature = "dds-owned-frame"))]
+                return Err(invalid_config(format!(
+                    "DDS endpoint {} uses owned_frame routing but the dds-owned-frame feature is disabled",
+                    endpoint_config.endpoint
+                )));
+            }
+            RoutingMode::CopyMinimized => {
+                #[cfg(all(
+                    feature = "dds-zero-copy",
+                    feature = "experimental-copy-minimized-routing"
+                ))]
+                {
+                    let formats = route_wire_formats
+                        .get(&endpoint_config.endpoint)
+                        .ok_or_else(|| {
+                            invalid_config(format!(
+                                "DDS copy_minimized endpoint {} has no route wire formats",
+                                endpoint_config.endpoint
+                            ))
+                        })?;
+                    for format in formats {
+                        let core = DdsZeroCopyCore::with_config(
+                            dds_runtime_config(transport_config, endpoint_config, Some(*format))?,
+                            runtime.clone(),
+                        )?;
+                        core.wait_ready(required_matches, readiness_timeout)?;
+                        route_wire_endpoints.insert(
+                            *format,
+                            configurable_streamer_wire_support::dds_endpoint(
+                                &endpoint_config.endpoint,
+                                &endpoint_config.authority,
+                                core,
+                                *format,
+                            ),
+                        );
+                    }
+                }
+                #[cfg(not(all(
+                    feature = "dds-zero-copy",
+                    feature = "experimental-copy-minimized-routing"
+                )))]
+                return Err(invalid_config(format!(
+                    "DDS endpoint {} uses copy_minimized routing but the dds-zero-copy and experimental-copy-minimized-routing features are required",
+                    endpoint_config.endpoint
+                )));
+            }
+        }
+
+        let endpoint = ConfiguredEndpoint {
+            routing_mode: endpoint_config.routing_mode,
+            copy_minimized_payload_alignment: endpoint_config.copy_minimized_payload_alignment,
+            standard,
+            #[cfg(feature = "experimental-copy-minimized-routing")]
+            route_wire_endpoints,
+            #[cfg(feature = "owned-frame-transport")]
+            owned_frame_endpoints,
+        };
+        if endpoint_config.routing_mode == RoutingMode::CopyMinimized {
+            ensure_copy_minimized_endpoint(&endpoint, &endpoint_config.endpoint)?;
+        }
+        if endpoint_config.routing_mode == RoutingMode::OwnedFrame {
+            ensure_owned_frame_endpoint(&endpoint, &endpoint_config.endpoint)?;
+        }
+        insert_configured_endpoint(endpoints, endpoint_config, endpoint)?;
+    }
     Ok(())
 }
 
@@ -1831,6 +2018,12 @@ async fn main() -> Result<(), UStatus> {
             .as_ref()
             .map(|transport| transport.endpoints.as_slice())
             .unwrap_or(&[]),
+        config
+            .transports
+            .dds
+            .as_ref()
+            .map(|transport| transport.endpoints.as_slice())
+            .unwrap_or(&[]),
     ])?;
     if !config.transports.mqtt.endpoints.is_empty() {
         config.transports.mqtt.load_mqtt_details().map_err(|e| {
@@ -2055,6 +2248,25 @@ async fn main() -> Result<(), UStatus> {
             ));
         }
     }
+    if let Some(dds_config) = &config.transports.dds {
+        #[cfg(feature = "dds-transport")]
+        register_dds_endpoints(
+            &mut endpoints,
+            dds_config,
+            #[cfg(any(
+                feature = "experimental-copy-minimized-routing",
+                feature = "owned-frame-transport"
+            ))]
+            &route_wire_formats,
+        )?;
+        #[cfg(not(feature = "dds-transport"))]
+        {
+            let _ = dds_config;
+            return Err(invalid_config(
+                "DDS transport config requires configurable-streamer feature dds-transport",
+            ));
+        }
+    }
 
     wire_forwarding_rules(
         &mut streamer,
@@ -2068,6 +2280,9 @@ async fn main() -> Result<(), UStatus> {
     }
     if let Some(lola_config) = &config.transports.lola {
         wire_forwarding_rules(&mut streamer, &endpoints, &lola_config.endpoints).await?;
+    }
+    if let Some(dds_config) = &config.transports.dds {
+        wire_forwarding_rules(&mut streamer, &endpoints, &dds_config.endpoints).await?;
     }
     #[cfg(feature = "vsomeip-transport")]
     if let Some(vsomeip_config) = &config.transports.vsomeip {

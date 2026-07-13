@@ -21,13 +21,16 @@ license.workspace = true
 
 [features]
 default = []
-zenoh-zero-copy = ["dep:up-transport-zenoh", "dep:up-wire-xcdrv2", "up-transport-zenoh/zero-copy"]
-iceoryx2-zero-copy = ["dep:up-transport-iceoryx2-rust", "dep:up-wire-xcdrv2"]
-lola-transport = ["dep:up-transport-lola-rust", "dep:up-wire-xcdrv2", "up-transport-lola-rust/zero-copy"]
-owned-frame-transport = ["dep:up-wire-xcdrv2", "up-streamer/owned-frame-transport"]
+wire-formats = ["dep:up-wire-arrow", "dep:up-wire-omgidl", "dep:up-wire-xcdrv2"]
+zenoh-zero-copy = ["wire-formats", "dep:up-transport-zenoh", "up-transport-zenoh/zero-copy"]
+iceoryx2-zero-copy = ["wire-formats", "dep:up-transport-iceoryx2-rust"]
+lola-transport = ["wire-formats", "dep:up-transport-lola-rust", "up-transport-lola-rust/zero-copy"]
+dds-zero-copy = ["wire-formats", "dep:up-transport-dds"]
+owned-frame-transport = ["wire-formats", "up-streamer/owned-frame-transport"]
 zenoh-owned-frame = ["owned-frame-transport", "dep:up-transport-zenoh", "up-transport-zenoh/benchmark-owned"]
 iceoryx2-owned-frame = ["owned-frame-transport", "dep:up-transport-iceoryx2-rust", "up-transport-iceoryx2-rust/benchmark-owned"]
 lola-owned-frame = ["owned-frame-transport", "dep:up-transport-lola-rust", "up-transport-lola-rust/benchmark-owned", "up-transport-lola-rust/zero-copy"]
+dds-owned-frame = ["owned-frame-transport", "dep:up-transport-dds"]
 
 [dependencies]
 up-rust = { workspace = true }
@@ -35,4 +38,7 @@ up-streamer = { path = "../../up-streamer", features = ["experimental-copy-minim
 up-transport-zenoh = { workspace = true, optional = true }
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
 up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "fbe47df294a962cee880567f240003beeeb72eb8", optional = true }
-up-wire-xcdrv2 = { git = "ssh://git@github.com/PLeVasseur/up-wire-xcdrv2-rust.git", rev = "cd89d2494a089163d1c6a7473fd9ae50ebd6897f", optional = true }
+up-transport-dds = { workspace = true, optional = true }
+up-wire-arrow = { workspace = true, optional = true }
+up-wire-omgidl = { workspace = true, optional = true }
+up-wire-xcdrv2 = { workspace = true, optional = true }

@@ -56,6 +56,10 @@ const VSOMEIP_LISTENER_STABILIZATION_MS: u64 = 1_000;
 const VSOMEIP_DUMMY_SERVICE_ID: u16 = 0x7ffe;
 const VSOMEIP_DUMMY_INSTANCE_ID: u16 = 0x0001;
 const NOTIFICATION_RESOURCE_ID: u16 = 0x8000;
+const DDS_PORT_BASE: i32 = 7_400;
+const DDS_DOMAIN_GAIN: i32 = 250;
+const DDS_MIN_UNPRIVILEGED_PORT: i32 = 1_024;
+const DDS_PORT_MODULUS: i32 = 65_536;
 
 #[derive(Debug, Parser)]
 #[command(name = "streamer-transport-test-orchestrator")]
@@ -65,6 +69,9 @@ const NOTIFICATION_RESOURCE_ID: u16 = 0x8000;
 struct Cli {
     #[arg(long)]
     list: bool,
+
+    #[arg(long, value_name = "FILE")]
+    generate_criteria: Option<PathBuf>,
 
     #[arg(long = "only")]
     only: Vec<String>,
@@ -120,6 +127,7 @@ enum PhysicalTransport {
     Lola,
     Mqtt5,
     Vsomeip,
+    Dds,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -144,6 +152,8 @@ enum WireEncoding {
     Native,
     Protobuf,
     Xcdrv2,
+    Arrow,
+    Omgidl,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -336,14 +346,14 @@ struct RowResult {
     logs: BTreeMap<String, String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct MatrixCriteria {
     expected: ExpectedCounts,
     unsupported_reason_allowlist: Vec<String>,
     retry: RetryCriteria,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct ExpectedCounts {
     pass: usize,
     unsupported: usize,
@@ -351,7 +361,7 @@ struct ExpectedCounts {
     failed: usize,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 struct RetryCriteria {
     max_retries_lola_rows: usize,
     max_retries_zenoh_rows: usize,
@@ -468,6 +478,14 @@ fn run(cli: Cli) -> Result<bool> {
     let repo_root = repo_root()?;
     let rows = matrix_rows();
 
+    if let Some(path) = &cli.generate_criteria {
+        let criteria = derived_criteria(&rows);
+        fs::write(path, serde_json::to_string_pretty(&criteria)?)
+            .with_context(|| format!("unable to write {}", path.display()))?;
+        println!("STREAMER_TRANSPORT_TEST_CRITERIA_JSON={}", path.display());
+        return Ok(true);
+    }
+
     if cli.list {
         for row in &rows {
             let support = support_status(row);
@@ -488,6 +506,13 @@ fn run(cli: Cli) -> Result<bool> {
     let artifacts_root = cli
         .artifacts_root
         .clone()
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root.join(path)
+            }
+        })
         .unwrap_or_else(|| generated_artifacts_root(&repo_root, Utc::now(), std::process::id()));
     if let Some(parent) = artifacts_root.parent() {
         fs::create_dir_all(parent)
@@ -933,6 +958,33 @@ fn validate_criteria(summary: &MatrixSummary, criteria: &MatrixCriteria) -> Vec<
     errors
 }
 
+fn derived_criteria(rows: &[MatrixRow]) -> MatrixCriteria {
+    let pass = rows
+        .iter()
+        .filter(|row| support_status(row).classification == RowClassification::Pass)
+        .count();
+    MatrixCriteria {
+        expected: ExpectedCounts {
+            pass,
+            unsupported: rows.len() - pass,
+            blocked: 0,
+            failed: 0,
+        },
+        unsupported_reason_allowlist: vec![
+            "source and sink endpoint profiles are identical".to_string(),
+            "Arrow and OMGIDL are not implemented by MQTT5 or vSomeIP classic role binaries"
+                .to_string(),
+        ],
+        retry: RetryCriteria {
+            max_retries_lola_rows: LOLA_ROW_RETRIES,
+            max_retries_zenoh_rows: ZENOH_ROW_RETRIES,
+            all_other_rows: 0,
+            max_retried_rows: 0,
+            max_retries_consumed: 0,
+        },
+    }
+}
+
 fn profiles() -> Vec<EndpointProfile> {
     vec![
         EndpointProfile {
@@ -980,6 +1032,21 @@ fn profiles() -> Vec<EndpointProfile> {
             physical: PhysicalTransport::Lola,
             kind: EndpointKind::CopyMinimized,
         },
+        EndpointProfile {
+            id: "dds-classic",
+            physical: PhysicalTransport::Dds,
+            kind: EndpointKind::Classic,
+        },
+        EndpointProfile {
+            id: "dds-owned-frame",
+            physical: PhysicalTransport::Dds,
+            kind: EndpointKind::OwnedFrame,
+        },
+        EndpointProfile {
+            id: "dds-copy-minimized",
+            physical: PhysicalTransport::Dds,
+            kind: EndpointKind::CopyMinimized,
+        },
     ]
 }
 
@@ -994,6 +1061,8 @@ fn matrix_rows() -> Vec<MatrixRow> {
         WireEncoding::Native,
         WireEncoding::Protobuf,
         WireEncoding::Xcdrv2,
+        WireEncoding::Arrow,
+        WireEncoding::Omgidl,
     ];
     let mut rows = Vec::new();
     let mut ordinal = 0_usize;
@@ -1033,6 +1102,19 @@ fn support_status(row: &MatrixRow) -> SupportStatus {
     if row.source.id == row.sink.id {
         return unsupported(
             "source and sink endpoint profiles are identical; no bridge boundary is under test",
+        );
+    }
+    if matches!(row.encoding, WireEncoding::Arrow | WireEncoding::Omgidl)
+        && [row.source, row.sink].into_iter().any(|profile| {
+            profile.kind == EndpointKind::Classic
+                && matches!(
+                    profile.physical,
+                    PhysicalTransport::Mqtt5 | PhysicalTransport::Vsomeip
+                )
+        })
+    {
+        return unsupported(
+            "Arrow and OMGIDL are not implemented by MQTT5 or vSomeIP classic role binaries",
         );
     }
     if row.source.kind == EndpointKind::Classic || row.sink.kind == EndpointKind::Classic {
@@ -1501,6 +1583,9 @@ fn configurable_streamer_features(rows: &[MatrixRow]) -> Vec<&'static str> {
     if rows.iter().any(MatrixRow::uses_vsomeip) {
         features.extend(["vsomeip-transport", "bundled-vsomeip"]);
     }
+    if rows.iter().any(MatrixRow::uses_dds) {
+        features.extend(["dds-transport", "dds-owned-frame", "dds-zero-copy"]);
+    }
     features
 }
 
@@ -1516,6 +1601,9 @@ fn example_streamer_features(rows: &[MatrixRow]) -> Vec<&'static str> {
     }
     if rows.iter().any(MatrixRow::uses_vsomeip) {
         features.extend(["vsomeip-transport", "bundled-vsomeip"]);
+    }
+    if rows.iter().any(MatrixRow::uses_dds) {
+        features.push("dds-transport");
     }
     features
 }
@@ -1621,6 +1709,7 @@ fn write_config(
     let mut iceoryx2_endpoints = Vec::new();
     let mut lola_endpoints = Vec::new();
     let mut vsomeip_endpoints = Vec::new();
+    let mut dds_endpoints = Vec::new();
 
     push_endpoint(
         &mut zenoh_endpoints,
@@ -1628,6 +1717,7 @@ fn write_config(
         &mut iceoryx2_endpoints,
         &mut lola_endpoints,
         &mut vsomeip_endpoints,
+        &mut dds_endpoints,
         row.source,
         "source",
         AUTHORITY_A,
@@ -1645,6 +1735,7 @@ fn write_config(
         &mut iceoryx2_endpoints,
         &mut lola_endpoints,
         &mut vsomeip_endpoints,
+        &mut dds_endpoints,
         row.sink,
         "sink",
         AUTHORITY_B,
@@ -1672,6 +1763,16 @@ fn write_config(
             "config_file": vsomeip_config_paths.streamer,
             "remote_authority": vsomeip_remote_authority(row),
             "endpoints": vsomeip_endpoints
+        });
+    }
+    if !dds_endpoints.is_empty() {
+        transports["dds"] = json!({
+            "domain_id": dds_domain(row),
+            "origin_id": dds_streamer_origin(row),
+            "qos": { "reliability": "reliable" },
+            "history_depth": 32,
+            "readiness": { "required_matched_readers": 1, "timeout_ms": 5000 },
+            "endpoints": dds_endpoints,
         });
     }
 
@@ -1709,6 +1810,7 @@ fn push_endpoint(
     iceoryx2_endpoints: &mut Vec<serde_json::Value>,
     lola_endpoints: &mut Vec<serde_json::Value>,
     vsomeip_endpoints: &mut Vec<serde_json::Value>,
+    dds_endpoints: &mut Vec<serde_json::Value>,
     profile: EndpointProfile,
     side: &str,
     authority: &str,
@@ -1785,7 +1887,35 @@ fn push_endpoint(
         PhysicalTransport::Iceoryx2 => iceoryx2_endpoints.push(value),
         PhysicalTransport::Lola => lola_endpoints.push(value),
         PhysicalTransport::Vsomeip => vsomeip_endpoints.push(value),
+        PhysicalTransport::Dds => dds_endpoints.push(value),
     }
+}
+
+fn dds_domain(row: &MatrixRow) -> i32 {
+    let mut candidate = 80_i32;
+    let mut remaining = row.ordinal;
+    loop {
+        let multicast_port = (DDS_PORT_BASE + DDS_DOMAIN_GAIN * candidate) % DDS_PORT_MODULUS;
+        if multicast_port >= DDS_MIN_UNPRIVILEGED_PORT {
+            if remaining == 0 {
+                return candidate;
+            }
+            remaining -= 1;
+        }
+        candidate += 1;
+    }
+}
+
+fn dds_streamer_origin(row: &MatrixRow) -> String {
+    format!("matrix-{:04}-streamer", row.ordinal)
+}
+
+fn dds_role_origin(row: &MatrixRow, active: bool) -> String {
+    format!(
+        "matrix-{:04}-{}-role",
+        row.ordinal,
+        if active { "source" } else { "sink" }
+    )
 }
 
 fn vsomeip_remote_authority(row: &MatrixRow) -> &'static str {
@@ -2049,16 +2179,22 @@ fn role_command(
     let binary = binary_name(profile, role_name);
     let zenoh_client_config = zenoh_config_paths.client_for_active(active);
     let mut args = if profile.kind == EndpointKind::Classic {
-        classic_args(
-            row,
-            profile,
-            role_name,
-            local_authority,
-            peer_authority,
-            zenoh_client_config,
-            vsomeip_config_paths.role_config(active),
-            cli,
-        )
+        if profile.physical == PhysicalTransport::Dds {
+            dds_args(row, profile, active, local_authority, peer_authority, cli)
+        } else {
+            classic_args(
+                row,
+                profile,
+                role_name,
+                local_authority,
+                peer_authority,
+                zenoh_client_config,
+                vsomeip_config_paths.role_config(active),
+                cli,
+            )
+        }
+    } else if profile.physical == PhysicalTransport::Dds {
+        dds_args(row, profile, active, local_authority, peer_authority, cli)
     } else if profile.physical == PhysicalTransport::Zenoh {
         zenoh_args(
             row,
@@ -2092,6 +2228,44 @@ fn role_command(
     Ok(RoleCommand { binary, args })
 }
 
+fn dds_args(
+    row: &MatrixRow,
+    profile: EndpointProfile,
+    active: bool,
+    local_authority: &str,
+    peer_authority: &str,
+    cli: &Cli,
+) -> Vec<String> {
+    vec![
+        "--domain-id".into(),
+        dds_domain(row).to_string(),
+        "--origin-id".into(),
+        dds_role_origin(row, active),
+        "--reliability".into(),
+        "reliable".into(),
+        "--history-depth".into(),
+        "32".into(),
+        "--route-family".into(),
+        profile.kind.route_family().into(),
+        "--encoding".into(),
+        row.encoding.cli_value().into(),
+        "--local-authority".into(),
+        local_authority.into(),
+        "--peer-authority".into(),
+        peer_authority.into(),
+        "--topic-resource-id".into(),
+        role_topic_resource_id(row).to_string(),
+        "--method-resource-id".into(),
+        METHOD_RESOURCE_ID.to_string(),
+        "--timeout-ms".into(),
+        cli.timeout_ms.max(8_000).to_string(),
+        "--payload".into(),
+        row.id.clone(),
+        "--payload-alignment".into(),
+        "8".into(),
+    ]
+}
+
 #[allow(clippy::too_many_arguments)]
 fn classic_args(
     row: &MatrixRow,
@@ -2123,8 +2297,8 @@ fn classic_args(
             vsomeip_config,
             cli,
         ),
-        PhysicalTransport::Iceoryx2 | PhysicalTransport::Lola => {
-            unreachable!("iceoryx2/lola profiles are selected-wire only in this matrix")
+        PhysicalTransport::Iceoryx2 | PhysicalTransport::Lola | PhysicalTransport::Dds => {
+            unreachable!("selected-wire or DDS profiles are handled before classic dispatch")
         }
     }
 }
@@ -2738,6 +2912,7 @@ fn binary_name(profile: EndpointProfile, role_name: &str) -> String {
         PhysicalTransport::Lola => format!("lola_{role_name}"),
         PhysicalTransport::Mqtt5 => format!("mqtt_{role_name}"),
         PhysicalTransport::Vsomeip => format!("someip_{role_name}"),
+        PhysicalTransport::Dds => format!("dds_{role_name}"),
     }
 }
 
@@ -3214,7 +3389,7 @@ fn row_env(
     let mut env = vec![
         (
             "RUST_LOG".to_string(),
-            "info,configurable_streamer=debug,up_streamer=debug,example_streamer_uses=debug,up_transport_zenoh=debug,up_transport_iceoryx2_rust=debug,up_transport_lola_rust=debug".to_string(),
+            "info,configurable_streamer=debug,up_streamer=debug,example_streamer_uses=debug,up_transport_zenoh=debug,up_transport_iceoryx2_rust=debug,up_transport_lola_rust=debug,up_transport_dds=debug".to_string(),
         ),
         ("CARGO_NET_GIT_FETCH_WITH_CLI".to_string(), "true".to_string()),
     ];
@@ -3426,6 +3601,8 @@ impl WireEncoding {
             Self::Native => "native",
             Self::Protobuf => "protobuf",
             Self::Xcdrv2 => "xcdrv2",
+            Self::Arrow => "arrow",
+            Self::Omgidl => "omgidl",
         }
     }
 
@@ -3438,6 +3615,8 @@ impl WireEncoding {
             Self::Native => "up_native",
             Self::Protobuf => "protobuf",
             Self::Xcdrv2 => "xcdrv2",
+            Self::Arrow => "arrow",
+            Self::Omgidl => "omgidl",
         }
     }
 
@@ -3446,6 +3625,8 @@ impl WireEncoding {
             Self::Native => "up.stable-container",
             Self::Protobuf => "up.protobuf",
             Self::Xcdrv2 => "up.xcdr-v2",
+            Self::Arrow => "up.arrow-ipc-stream",
+            Self::Omgidl => "up.omgidl-xcdr1-le",
         }
     }
 
@@ -3454,6 +3635,8 @@ impl WireEncoding {
             Self::Native => "application/vnd.uprotocol.stable-container;type=\"org.eclipse.uprotocol.examples.SelectedWireNativePayloadV1\";variant=fixed;size=272;align=4",
             Self::Protobuf => "application/protobuf",
             Self::Xcdrv2 => "application/vnd.uprotocol.xcdr-v2;endianness=little;version=2",
+            Self::Arrow => "application/vnd.apache.arrow.stream",
+            Self::Omgidl => "application/vnd.omg.dds.xcdr1;endianness=little",
         }
     }
 }
@@ -3486,6 +3669,11 @@ impl MatrixRow {
     fn uses_vsomeip(&self) -> bool {
         self.source.physical == PhysicalTransport::Vsomeip
             || self.sink.physical == PhysicalTransport::Vsomeip
+    }
+
+    fn uses_dds(&self) -> bool {
+        self.source.physical == PhysicalTransport::Dds
+            || self.sink.physical == PhysicalTransport::Dds
     }
 }
 
@@ -3542,12 +3730,12 @@ mod tests {
     #[test]
     fn copy_minimized_sink_filter_keeps_full_family() {
         let rows = filter_copy_minimized_sinks(matrix_rows(), true);
-        assert_eq!(rows.len(), 243);
+        assert_eq!(rows.len(), 720);
         assert_eq!(
             rows.iter()
                 .filter(|row| support_status(row).classification == RowClassification::Pass)
                 .count(),
-            216
+            612
         );
     }
 
@@ -3620,15 +3808,160 @@ mod tests {
     }
 
     #[test]
-    fn full_matrix_plan_preserves_authority_cardinality() {
+    fn full_matrix_plan_derives_r11_profile_wire_compatibility_counts() {
         let plan = plan_rows(&matrix_rows(), 1, None);
-        assert_eq!(plan.slot_count, 729);
-        assert_eq!(plan.runnable.len(), 648);
-        assert_eq!(plan.completed.len(), 81);
+        assert_eq!(plan.slot_count, 2160);
+        assert_eq!(plan.runnable.len(), 1728);
+        assert_eq!(plan.completed.len(), 432);
         assert!(plan
             .completed
             .iter()
             .all(|(_, result)| result.classification == RowClassification::Unsupported));
+    }
+
+    #[test]
+    fn existing_profiles_are_preserved_and_dds_families_are_appended() {
+        let ids: Vec<_> = profiles().into_iter().map(|profile| profile.id).collect();
+        assert_eq!(
+            &ids[..9],
+            [
+                "zenoh-classic",
+                "mqtt5-classic",
+                "vsomeip-classic",
+                "zenoh-owned-frame",
+                "zenoh-copy-minimized",
+                "iceoryx2-owned-frame",
+                "iceoryx2-copy-minimized",
+                "lola-owned-frame",
+                "lola-copy-minimized",
+            ]
+        );
+        assert_eq!(
+            &ids[9..],
+            ["dds-classic", "dds-owned-frame", "dds-copy-minimized"]
+        );
+    }
+
+    #[test]
+    fn derived_criteria_matches_actual_profiles_and_compatibility() {
+        let criteria = derived_criteria(&matrix_rows());
+        assert_eq!(criteria.expected.pass, 1728);
+        assert_eq!(criteria.expected.unsupported, 432);
+        assert_eq!(criteria.expected.blocked, 0);
+        assert_eq!(criteria.expected.failed, 0);
+    }
+
+    #[test]
+    fn arrow_and_omgidl_classic_legacy_limit_has_exact_reason() {
+        let row = matrix_rows()
+            .into_iter()
+            .find(|row| {
+                row.source.id == "mqtt5-classic"
+                    && row.sink.id == "dds-copy-minimized"
+                    && row.encoding == WireEncoding::Arrow
+            })
+            .expect("representative unsupported row exists");
+        let status = support_status(&row);
+        assert_eq!(status.classification, RowClassification::Unsupported);
+        assert_eq!(
+            status.reason,
+            "Arrow and OMGIDL are not implemented by MQTT5 or vSomeIP classic role binaries"
+        );
+    }
+
+    #[test]
+    fn dds_domains_are_unique_and_origins_are_deterministic_per_row_and_process() {
+        let rows: Vec<_> = matrix_rows()
+            .into_iter()
+            .filter(MatrixRow::uses_dds)
+            .collect();
+        let domains: BTreeSet<_> = rows.iter().map(dds_domain).collect();
+        assert_eq!(domains.len(), rows.len());
+        assert!(domains.iter().all(|domain| {
+            (DDS_PORT_BASE + DDS_DOMAIN_GAIN * domain) % DDS_PORT_MODULUS
+                >= DDS_MIN_UNPRIVILEGED_PORT
+        }));
+
+        let row = &rows[17];
+        assert_ne!(dds_streamer_origin(row), dds_role_origin(row, true));
+        assert_ne!(dds_role_origin(row, true), dds_role_origin(row, false));
+        assert_eq!(dds_role_origin(row, true), dds_role_origin(row, true));
+    }
+
+    #[test]
+    fn dds_role_command_contains_family_wire_domain_origin_and_flow_options() {
+        let row = matrix_rows()
+            .into_iter()
+            .find(|row| {
+                row.source.id == "dds-copy-minimized"
+                    && row.sink.id == "zenoh-owned-frame"
+                    && row.role == RoleStyle::ClientServerRpc
+                    && row.encoding == WireEncoding::Omgidl
+            })
+            .expect("DDS command row exists");
+        let cli = Cli::try_parse_from(["orchestrator"]).expect("default CLI parses");
+        let command = role_command(
+            &row,
+            true,
+            &ZenohConfigPaths::new(Path::new("/tmp/row")),
+            &VsomeipConfigPaths::new(Path::new("/tmp/row")),
+            None,
+            "unused",
+            &cli,
+        )
+        .expect("DDS command builds");
+
+        assert_eq!(command.binary, "dds_client");
+        let rendered = command.args.join(" ");
+        assert!(rendered.contains("--route-family copy-minimized"));
+        assert!(rendered.contains("--encoding omgidl"));
+        assert!(rendered.contains(&format!("--domain-id {}", dds_domain(&row))));
+        assert!(rendered.contains(&format!("--origin-id {}", dds_role_origin(&row, true))));
+    }
+
+    #[test]
+    fn generated_dds_config_contains_lifecycle_and_qos_fields() {
+        let row = matrix_rows()
+            .into_iter()
+            .find(|row| {
+                row.source.id == "dds-owned-frame"
+                    && row.sink.id == "dds-copy-minimized"
+                    && row.role == RoleStyle::PublisherSubscriber
+                    && row.encoding == WireEncoding::Arrow
+            })
+            .expect("DDS config row exists");
+        let root = std::env::temp_dir().join(format!(
+            "streamer-r11-dds-config-{}-{}",
+            std::process::id(),
+            row.ordinal
+        ));
+        fs::create_dir(&root).expect("create config test root");
+        let config_path = root.join("config.json");
+        write_config(
+            Path::new("/workspace"),
+            &row,
+            &config_path,
+            &ZenohConfigPaths::new(&root),
+            &VsomeipConfigPaths::new(&root),
+            None,
+            "unused",
+        )
+        .expect("write DDS config");
+        let config: serde_json::Value =
+            serde_json::from_slice(&fs::read(&config_path).expect("read config"))
+                .expect("parse config");
+        let dds = &config["transports"]["dds"];
+        assert_eq!(dds["domain_id"], dds_domain(&row));
+        assert_eq!(dds["origin_id"], dds_streamer_origin(&row));
+        assert_eq!(dds["qos"]["reliability"], "reliable");
+        assert_eq!(dds["history_depth"], 32);
+        assert_eq!(dds["readiness"]["required_matched_readers"], 1);
+        assert_eq!(dds["endpoints"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            dds["endpoints"][0]["forwarding_routes"][0]["wire_format"],
+            "arrow"
+        );
+        fs::remove_dir_all(root).expect("remove config test root");
     }
 
     #[test]

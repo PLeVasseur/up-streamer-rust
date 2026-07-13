@@ -59,6 +59,17 @@ lola-owned-frame = [
     "up-transport-lola-rust/benchmark-owned",
     "up-transport-lola-rust/zero-copy",
 ]
+dds-transport = ["dep:up-transport-dds"]
+dds-zero-copy = [
+    "dds-transport",
+    "experimental-copy-minimized-routing",
+    "configurable-streamer-wire-support/dds-zero-copy",
+]
+dds-owned-frame = [
+    "dds-transport",
+    "owned-frame-transport",
+    "configurable-streamer-wire-support/dds-owned-frame",
+]
 vsomeip-transport = ["dep:up-transport-vsomeip"]
 bundled-vsomeip = ["up-transport-vsomeip/bundled"]
 
@@ -77,7 +88,8 @@ configurable-streamer-wire-support = { path = "../utils/configurable-streamer-wi
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
 up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "fbe47df294a962cee880567f240003beeeb72eb8", optional = true }
 up-transport-zenoh = { workspace = true }
-up-wire-xcdrv2 = { git = "ssh://git@github.com/PLeVasseur/up-wire-xcdrv2-rust.git", rev = "cd89d2494a089163d1c6a7473fd9ae50ebd6897f", optional = true }
+up-wire-xcdrv2 = { workspace = true, optional = true }
+up-transport-dds = { workspace = true, optional = true }
 up-transport-mqtt5 = { workspace = true }
 up-transport-vsomeip = { workspace = true, optional = true }
 zenoh = { workspace = true }

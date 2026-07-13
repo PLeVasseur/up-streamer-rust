@@ -15,7 +15,8 @@ mod common;
 
 use clap::{Parser, ValueEnum};
 use common::payloads::{
-    native_payload_alignment, native_payload_bytes, xcdrv2_payload_bytes, SelectedWireNativePayload,
+    arrow_payload_bytes, native_payload_alignment, native_payload_bytes, omgidl_payload_bytes,
+    xcdrv2_payload_bytes, SelectedWireNativePayload,
 };
 use common::PublishReceiver;
 use std::sync::Arc;
@@ -51,6 +52,8 @@ use up_transport_zenoh::UPTransportZenoh;
 use up_transport_zenoh::ZenohOwnedCore;
 #[cfg(feature = "zenoh-zero-copy")]
 use up_transport_zenoh::ZenohZeroCopyCore;
+use up_wire_arrow::ArrowWire;
+use up_wire_omgidl::OmgIdlWire;
 #[cfg(any(
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",
@@ -79,6 +82,8 @@ enum FlowWireFormat {
     Native,
     Protobuf,
     Xcdrv2,
+    Arrow,
+    Omgidl,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -336,6 +341,10 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
             )
             .await
         }
+        #[cfg(feature = "zenoh-zero-copy")]
+        (FlowTransport::Zenoh, FlowWireFormat::Arrow) => run_zero_copy_transport(Arc::new(zenoh_zero_copy_core(cli).await?.with_selected_wire(ArrowWire)), cli).await,
+        #[cfg(feature = "zenoh-zero-copy")]
+        (FlowTransport::Zenoh, FlowWireFormat::Omgidl) => run_zero_copy_transport(Arc::new(zenoh_zero_copy_core(cli).await?.with_selected_wire(OmgIdlWire)), cli).await,
         #[cfg(feature = "iceoryx2-zero-copy")]
         (FlowTransport::Iceoryx2, FlowWireFormat::Native) => {
             run_zero_copy_transport(
@@ -360,6 +369,10 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
             )
             .await
         }
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        (FlowTransport::Iceoryx2, FlowWireFormat::Arrow) => run_zero_copy_transport(Arc::new(Iceoryx2PubSub::new().with_selected_wire(ArrowWire)), cli).await,
+        #[cfg(feature = "iceoryx2-zero-copy")]
+        (FlowTransport::Iceoryx2, FlowWireFormat::Omgidl) => run_zero_copy_transport(Arc::new(Iceoryx2PubSub::new().with_selected_wire(OmgIdlWire)), cli).await,
         #[cfg(feature = "lola-transport")]
         (FlowTransport::Lola, FlowWireFormat::Native) => {
             let core = lola_transport(cli)?.zero_copy_core();
@@ -379,6 +392,10 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
             let core = lola_transport(cli)?.zero_copy_core();
             run_zero_copy_transport(Arc::new(core.with_selected_wire(XcdrV2Wire)), cli).await
         }
+        #[cfg(feature = "lola-transport")]
+        (FlowTransport::Lola, FlowWireFormat::Arrow) => { let core = lola_transport(cli)?.zero_copy_core(); run_zero_copy_transport(Arc::new(core.with_selected_wire(ArrowWire)), cli).await }
+        #[cfg(feature = "lola-transport")]
+        (FlowTransport::Lola, FlowWireFormat::Omgidl) => { let core = lola_transport(cli)?.zero_copy_core(); run_zero_copy_transport(Arc::new(core.with_selected_wire(OmgIdlWire)), cli).await }
         #[cfg(not(all(
             feature = "zenoh-zero-copy",
             feature = "iceoryx2-zero-copy",
@@ -528,6 +545,14 @@ async fn owned_transport(cli: &Cli) -> Result<Arc<dyn UOwnedTransport>, UStatus>
         (FlowTransport::Zenoh, FlowWireFormat::Xcdrv2) => Ok(Arc::new(
             zenoh_owned_core(cli).await?.with_selected_wire(XcdrV2Wire),
         )),
+        #[cfg(feature = "zenoh-owned-frame")]
+        (FlowTransport::Zenoh, FlowWireFormat::Arrow) => Ok(Arc::new(
+            zenoh_owned_core(cli).await?.with_selected_wire(ArrowWire),
+        )),
+        #[cfg(feature = "zenoh-owned-frame")]
+        (FlowTransport::Zenoh, FlowWireFormat::Omgidl) => Ok(Arc::new(
+            zenoh_owned_core(cli).await?.with_selected_wire(OmgIdlWire),
+        )),
         #[cfg(feature = "iceoryx2-owned-frame")]
         (FlowTransport::Iceoryx2, FlowWireFormat::Native) => Ok(Arc::new(
             BenchmarkOwnedIceoryx2Core::new(Iceoryx2PubSub::new())
@@ -540,6 +565,14 @@ async fn owned_transport(cli: &Cli) -> Result<Arc<dyn UOwnedTransport>, UStatus>
         #[cfg(feature = "iceoryx2-owned-frame")]
         (FlowTransport::Iceoryx2, FlowWireFormat::Xcdrv2) => Ok(Arc::new(
             BenchmarkOwnedIceoryx2Core::new(Iceoryx2PubSub::new()).with_selected_wire(XcdrV2Wire),
+        )),
+        #[cfg(feature = "iceoryx2-owned-frame")]
+        (FlowTransport::Iceoryx2, FlowWireFormat::Arrow) => Ok(Arc::new(
+            BenchmarkOwnedIceoryx2Core::new(Iceoryx2PubSub::new()).with_selected_wire(ArrowWire),
+        )),
+        #[cfg(feature = "iceoryx2-owned-frame")]
+        (FlowTransport::Iceoryx2, FlowWireFormat::Omgidl) => Ok(Arc::new(
+            BenchmarkOwnedIceoryx2Core::new(Iceoryx2PubSub::new()).with_selected_wire(OmgIdlWire),
         )),
         #[cfg(feature = "lola-owned-frame")]
         (FlowTransport::Lola, _) => lola_owned_transport(cli, lola_transport(cli)?),
@@ -570,6 +603,12 @@ fn lola_owned_transport(
         )),
         FlowWireFormat::Xcdrv2 => Ok(Arc::new(
             LolaOwnedCore::new(transport.zero_copy_core()).with_selected_wire(XcdrV2Wire),
+        )),
+        FlowWireFormat::Arrow => Ok(Arc::new(
+            LolaOwnedCore::new(transport.zero_copy_core()).with_selected_wire(ArrowWire),
+        )),
+        FlowWireFormat::Omgidl => Ok(Arc::new(
+            LolaOwnedCore::new(transport.zero_copy_core()).with_selected_wire(OmgIdlWire),
         )),
     }
 }
@@ -1051,6 +1090,8 @@ fn payload_encoding(wire_format: FlowWireFormat) -> PayloadEncoding {
             feature = "lola-owned-frame"
         ))]
         FlowWireFormat::Xcdrv2 => XcdrV2Wire::encoding(),
+        FlowWireFormat::Arrow => ArrowWire::encoding(),
+        FlowWireFormat::Omgidl => OmgIdlWire::encoding(),
         #[cfg(not(any(
             feature = "zenoh-zero-copy",
             feature = "iceoryx2-zero-copy",
@@ -1077,7 +1118,18 @@ fn payload_bytes(cli: &Cli) -> Result<Vec<u8>, UStatus> {
         FlowWireFormat::Xcdrv2 => {
             xcdrv2_payload_bytes(1, cli.local_authority.clone(), &cli.payload)
         }
-        _ => Ok(cli.payload.as_bytes().to_vec()),
+        FlowWireFormat::Protobuf => Ok(cli.payload.as_bytes().to_vec()),
+        FlowWireFormat::Arrow => arrow_payload_bytes(1, &cli.payload),
+        FlowWireFormat::Omgidl => omgidl_payload_bytes(1, &cli.payload),
+        #[cfg(not(any(
+            feature = "zenoh-zero-copy",
+            feature = "iceoryx2-zero-copy",
+            feature = "lola-transport",
+            feature = "zenoh-owned-frame",
+            feature = "iceoryx2-owned-frame",
+            feature = "lola-owned-frame"
+        )))]
+        FlowWireFormat::Xcdrv2 => Ok(cli.payload.as_bytes().to_vec()),
     }
 }
 

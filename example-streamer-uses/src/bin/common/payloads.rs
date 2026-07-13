@@ -2,7 +2,7 @@
 
 use std::mem::{self, MaybeUninit};
 
-use up_rust::{StablePayloadInit, UCode, UStatus};
+use up_rust::{EncodePayload, StablePayloadInit, UCode, UStatus};
 use up_wire_xcdrv2::{XcdrV2Payload, XcdrV2Type};
 
 pub(crate) const EXAMPLE_PAYLOAD_CAPACITY: usize = 256;
@@ -81,6 +81,24 @@ pub(crate) fn xcdrv2_payload_bytes(
     })
     .map(|payload| payload.into_bytes())
     .map_err(|error| invalid_config(format!("failed to encode XCDRv2 payload: {error}")))
+}
+
+pub(crate) fn arrow_payload_bytes(sequence: u32, payload: &str) -> Result<Vec<u8>, UStatus> {
+    let seed = u64::from(sequence) << 32 | u64::from(payload_checksum(payload.as_bytes()));
+    <up_wire_arrow::ArrowWire as EncodePayload<up_wire_arrow::TelemetryTableV1>>::encode_payload_owned(
+        &up_wire_arrow::TelemetryTableV1::fixture(payload.len().max(1), seed),
+    )
+    .map(|payload| payload.to_vec())
+    .map_err(|error| invalid_config(format!("failed to encode Arrow payload: {error}")))
+}
+
+pub(crate) fn omgidl_payload_bytes(sequence: u32, payload: &str) -> Result<Vec<u8>, UStatus> {
+    let seed = u64::from(sequence) << 32 | u64::from(payload_checksum(payload.as_bytes()));
+    <up_wire_omgidl::OmgIdlWire as EncodePayload<
+        up_wire_omgidl::VehicleStatusV1,
+    >>::encode_payload_owned(&up_wire_omgidl::VehicleStatusV1::fixture(seed))
+    .map(|payload| payload.to_vec())
+    .map_err(|error| invalid_config(format!("failed to encode OMG IDL payload: {error}")))
 }
 
 pub(crate) fn native_payload_alignment() -> usize {

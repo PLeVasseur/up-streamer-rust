@@ -116,6 +116,30 @@ name = "zenoh_subscriber"
 required-features = ["zenoh-transport"]
 
 [[bin]]
+name = "dds_publisher"
+required-features = ["dds-transport"]
+
+[[bin]]
+name = "dds_subscriber"
+required-features = ["dds-transport"]
+
+[[bin]]
+name = "dds_notifier"
+required-features = ["dds-transport"]
+
+[[bin]]
+name = "dds_notifyee"
+required-features = ["dds-transport"]
+
+[[bin]]
+name = "dds_client"
+required-features = ["dds-transport"]
+
+[[bin]]
+name = "dds_server"
+required-features = ["dds-transport"]
+
+[[bin]]
 name = "mqtt_client"
 required-features = ["mqtt-transport"]
 
@@ -141,20 +165,22 @@ required-features = ["mqtt-transport"]
 
 [features]
 selected-wire-common = ["up-rust/owned-frame-transport", "up-rust/selected-wire-user-api"]
-zenoh-transport = ["selected-wire-common", "up-transport-zenoh", "up-transport-zenoh/benchmark-owned", "up-transport-zenoh/zero-copy", "up-wire-xcdrv2", "zenoh"]
+wire-formats = ["up-wire-arrow", "up-wire-omgidl", "up-wire-xcdrv2"]
+zenoh-transport = ["selected-wire-common", "wire-formats", "up-transport-zenoh", "up-transport-zenoh/benchmark-owned", "up-transport-zenoh/zero-copy", "zenoh"]
 zenoh-owned-frame = ["selected-wire-common", "zenoh-transport", "up-transport-zenoh/benchmark-owned", "up-wire-xcdrv2"]
 zenoh-zero-copy = ["selected-wire-common", "zenoh-transport", "up-transport-zenoh/zero-copy", "up-wire-xcdrv2"]
 zenoh-selected-wire = ["zenoh-owned-frame", "zenoh-zero-copy"]
-iceoryx2-owned-frame = ["selected-wire-common", "up-transport-iceoryx2-rust", "up-transport-iceoryx2-rust/benchmark-owned", "up-wire-xcdrv2"]
-iceoryx2-zero-copy = ["selected-wire-common", "up-transport-iceoryx2-rust", "up-wire-xcdrv2"]
+iceoryx2-owned-frame = ["selected-wire-common", "wire-formats", "up-transport-iceoryx2-rust", "up-transport-iceoryx2-rust/benchmark-owned"]
+iceoryx2-zero-copy = ["selected-wire-common", "wire-formats", "up-transport-iceoryx2-rust"]
 iceoryx2-selected-wire = ["iceoryx2-owned-frame", "iceoryx2-zero-copy"]
-lola-transport = ["selected-wire-common", "up-transport-lola-rust", "up-transport-lola-rust/zero-copy", "up-wire-xcdrv2"]
+lola-transport = ["selected-wire-common", "wire-formats", "up-transport-lola-rust", "up-transport-lola-rust/zero-copy"]
 lola-owned-frame = ["lola-transport", "up-transport-lola-rust/benchmark-owned"]
 lola-zero-copy = ["lola-transport"]
 lola-selected-wire = ["lola-owned-frame", "lola-zero-copy"]
 vsomeip-transport = ["up-transport-vsomeip"]
 bundled-vsomeip = ["up-transport-vsomeip/bundled"]
 mqtt-transport = ["up-transport-mqtt5"]
+dds-transport = ["selected-wire-common", "wire-formats", "up-transport-dds"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -173,5 +199,8 @@ up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lol
 up-transport-zenoh = { workspace = true, optional = true }
 up-transport-vsomeip = { workspace = true, optional = true }
 up-transport-mqtt5 = { workspace = true, optional = true }
-up-wire-xcdrv2 = { git = "ssh://git@github.com/PLeVasseur/up-wire-xcdrv2-rust.git", rev = "cd89d2494a089163d1c6a7473fd9ae50ebd6897f", optional = true }
+up-transport-dds = { workspace = true, optional = true }
+up-wire-arrow = { workspace = true, optional = true }
+up-wire-omgidl = { workspace = true, optional = true }
+up-wire-xcdrv2 = { workspace = true, optional = true }
 zenoh = { workspace = true, optional = true }
