@@ -50,7 +50,18 @@ cargo run -p streamer-transport-test-orchestrator -- \
   resolve from the workspace root.
 - `--send-count <N>`: requested sends, default `1`; role commands retain the
   established minimum of five.
-- `--send-interval-ms <MS>`: active-role pacing, default `200`.
+- `--send-interval-ms <MS>`: active-role pacing, default `50`.
+- `--mqtt-readiness-timeout-ms <MS>`: timeout for a namespaced MQTT 5
+  CONNECT/CONNACK readiness probe, default `250`.
+- `--lola-pre-active-stabilization-ms <MS>`,
+  `--zenoh-sink-stabilization-ms <MS>`, and
+  `--vsomeip-sink-stabilization-ms <MS>`: optional post-readiness gates,
+  default `0`. These preserve an explicit diagnostic control without imposing
+  a blind wait after the corresponding readiness contract succeeds.
+- `--lola-success-cooldown-ms <MS>`: post-success LoLa resource-permit hold,
+  default `0`. The hold does not consume a global worker permit.
+- `--lola-failed-retry-backoff-ms <MS>`: backoff before a configured LoLa
+  retry, default `1000`.
 - `--timeout-ms <MS>`: role operation timeout, default `5000`; established
   transport-specific floors remain in effect.
 - `--scenario-timeout-secs <S>`: row scenario timeout, default `30`.
@@ -116,7 +127,7 @@ flag.
 
 ## Instrumentation
 
-Summary schema `3.0` is written to `matrix-summary.json`. Checkpoints use a
+Summary schema `4.0` is written to `matrix-summary.json`. Checkpoints use a
 versioned `1.0` envelope containing `schema_version` and `row`. The final
 summary, preflight, criteria result, manifest, and all checkpoints use
 same-directory temporary files, file fsync, atomic rename, and parent-directory
@@ -140,9 +151,9 @@ Run-level evidence includes:
   filesystem byte/inode snapshots;
 - low-frequency peak observations for descendant process count, tasks, RSS,
   swap, open FDs, and host memory/swap use;
-- scheduler dispatch/completion events with queued, active, LoLa-active, and
-  per-resource active/available permit counts, plus concurrency-time
-  aggregates;
+- scheduler dispatch/completion/resource-hold-completion events with queued,
+  active, LoLa-active, per-resource active/held/available permit counts, plus
+  concurrency-time aggregates;
 - criteria, summary-generation, scheduler, build, and total run durations.
 
 Every duration ending in `_us` is derived from `std::time::Instant`; RFC3339 UTC
@@ -160,19 +171,26 @@ Per-attempt timing has these boundaries:
 - `preparation_us`: artifact directory, manifests, native-library resolution,
   and environment preparation.
 - `namespace_us`: namespace-holder spawn through its readiness marker.
-- `broker_us`: MQTT broker spawn and the existing liveness wait; zero for rows
-  without MQTT.
+- `broker_us`: MQTT broker spawn through a successful namespaced MQTT 5
+  CONNECT/CONNACK exchange; zero for rows without MQTT.
 - `config_us`: generated router/client, transport, and Streamer configuration.
 - `streamer_readiness_us`: Streamer spawn through `READY streamer_initialized`.
-- `passive_readiness_us`: passive command/spawn through listener readiness.
-- `stabilization`: each existing fixed wait with its LoLa, Zenoh-sink, or
-  vSomeIP-sink reason.
+- `passive_readiness_us`: passive command/spawn through listener registration,
+  including explicit selected-wire Zenoh subscriber declaration. vSomeIP publish rows first
+  establish local listener readiness, then require `SUBSCRIBE ACK` after the
+  active publisher's first send causes the provider to offer its event.
+- `readiness`: contract, target marker/probe, timeout, check count, configured
+  stabilization, and measured duration for every readiness phase and optional
+  post-readiness gate.
+- `stabilization`: each configurable LoLa, Zenoh-sink, or vSomeIP-sink gate and
+  its measured duration.
 - `active_us`: active command/spawn through successful completion.
 - `passive_observation_or_completion_us`: passive exit or classic observation.
 - `validation_us`: established flow-log validation.
 - `teardown_us`: measured explicit process teardown.
-- `cooldown_us`: established LoLa cooldown plus any retry cooldown attributable
-  to the attempt.
+- `cooldown_us`: retry backoff attributable to the attempt. `cooldown` records
+  the configured contract and scope for retry backoff and post-success LoLa
+  resource-permit holds.
 - `total_us`: complete attempt envelope; row timing separately records queue,
   execution, and complete row envelope.
 

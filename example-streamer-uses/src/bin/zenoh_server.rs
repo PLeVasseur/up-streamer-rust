@@ -13,6 +13,7 @@
 
 mod common;
 
+use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use common::payloads::{
     arrow_payload_bytes, native_payload_alignment, native_payload_bytes, omgidl_payload_bytes,
@@ -23,11 +24,13 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
+use tokio::sync::mpsc;
 use up_rust::selected_wire_user_api::{ProtobufWire, StableContainerWireFormat};
 use up_rust::{
     PayloadEncoding, PayloadFormat, StableContainerPayload, UCode, UFrameMetadata, UFrameView,
-    UListener, UMessage, UMessageBuilder, UOwnedFrame, UOwnedTransport, UStatus, UTransport,
-    UTxBuffer, UTxLoanSpec, UUri, UZeroCopyRxLease, UZeroCopyTransport,
+    UListener, UMessage, UMessageBuilder, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus,
+    UTransport, UTxBuffer, UTxLoanSpec, UUri, UZeroCopyListener, UZeroCopyRxLease,
+    UZeroCopyTransport,
 };
 #[cfg(feature = "iceoryx2-owned-frame")]
 use up_transport_iceoryx2_rust::BenchmarkOwnedIceoryx2Core;
@@ -232,12 +235,11 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
             println!("FLOW sent_payload_bytes={} role=pub_sender", payload.len());
         }
         FlowRole::PubReceiver => {
-            println!("READY listener_registered");
-            let payload = receive_owned_payload(
+            let payload = receive_passive_owned_payload(
                 &transport,
                 &topic_uri(cli.peer_authority.as_str(), cli.topic_resource_id)?,
                 None,
-                cli.timeout_ms,
+                cli,
             )
             .await?;
             println!(
@@ -259,11 +261,10 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
             );
         }
         FlowRole::NotifyReceiver => {
-            println!("READY listener_registered");
             let source = topic_uri(cli.peer_authority.as_str(), cli.topic_resource_id)?;
             let sink = endpoint_uri(cli.local_authority.as_str())?;
             let payload =
-                receive_owned_payload(&transport, &source, Some(&sink), cli.timeout_ms).await?;
+                receive_passive_owned_payload(&transport, &source, Some(&sink), cli).await?;
             println!(
                 "FLOW observed_payload_bytes={} role=notify_receiver",
                 payload.len()
@@ -307,11 +308,10 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
             );
         }
         FlowRole::RpcServer => {
-            println!("READY listener_registered");
             let source = endpoint_wildcard(cli.peer_authority.as_str())?;
             let sink = method_uri(cli.local_authority.as_str(), cli.method_resource_id)?;
             let request =
-                receive_owned_frame(&transport, &source, Some(&sink), cli.timeout_ms).await?;
+                receive_passive_owned_frame(&transport, &source, Some(&sink), cli).await?;
             let payload = request.payload_bytes().to_vec();
             let response_metadata = response_metadata(cli, request.metadata())?;
             tokio::time::sleep(Duration::from_millis(cli.rpc_response_delay_ms)).await;
@@ -490,12 +490,11 @@ where
             println!("FLOW sent_payload_bytes={} role=pub_sender", payload.len());
         }
         FlowRole::PubReceiver => {
-            println!("READY listener_registered");
-            let payload = receive_zero_copy_payload(
+            let payload = receive_passive_zero_copy_payload(
                 &transport,
                 &topic_uri(cli.peer_authority.as_str(), cli.topic_resource_id)?,
                 None,
-                cli.timeout_ms,
+                cli,
             )
             .await?;
             println!(
@@ -517,11 +516,10 @@ where
             );
         }
         FlowRole::NotifyReceiver => {
-            println!("READY listener_registered");
             let source = topic_uri(cli.peer_authority.as_str(), cli.topic_resource_id)?;
             let sink = endpoint_uri(cli.local_authority.as_str())?;
             let payload =
-                receive_zero_copy_payload(&transport, &source, Some(&sink), cli.timeout_ms).await?;
+                receive_passive_zero_copy_payload(&transport, &source, Some(&sink), cli).await?;
             println!(
                 "FLOW observed_payload_bytes={} role=notify_receiver",
                 payload.len()
@@ -569,11 +567,10 @@ where
             );
         }
         FlowRole::RpcServer => {
-            println!("READY listener_registered");
             let source = endpoint_wildcard(cli.peer_authority.as_str())?;
             let sink = method_uri(cli.local_authority.as_str(), cli.method_resource_id)?;
             let request =
-                receive_zero_copy_frame(&transport, &source, Some(&sink), cli.timeout_ms).await?;
+                receive_passive_zero_copy_frame(&transport, &source, Some(&sink), cli).await?;
             let payload = request.try_contiguous_payload().unwrap_or(&[]).to_vec();
             let response_metadata = response_metadata(cli, request.metadata())?;
             tokio::time::sleep(Duration::from_millis(cli.rpc_response_delay_ms)).await;
@@ -879,6 +876,36 @@ async fn receive_owned_payload(
         .map(|frame| frame.payload_bytes().to_vec())
 }
 
+async fn receive_passive_owned_payload(
+    transport: &Arc<dyn UOwnedTransport>,
+    source_filter: &UUri,
+    sink_filter: Option<&UUri>,
+    cli: &Cli,
+) -> Result<Vec<u8>, UStatus> {
+    receive_passive_owned_frame(transport, source_filter, sink_filter, cli)
+        .await
+        .map(|frame| frame.payload_bytes().to_vec())
+}
+
+async fn receive_passive_owned_frame(
+    transport: &Arc<dyn UOwnedTransport>,
+    source_filter: &UUri,
+    sink_filter: Option<&UUri>,
+    cli: &Cli,
+) -> Result<UOwnedFrame, UStatus> {
+    if cli.transport != FlowTransport::Zenoh {
+        println!("READY listener_registered");
+        return receive_owned_frame(transport, source_filter, sink_filter, cli.timeout_ms).await;
+    }
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    transport
+        .register_owned_listener(source_filter, sink_filter, Arc::new(OwnedListener(tx)))
+        .await?;
+    print_zenoh_listener_ready();
+    receive_listener_frame(&mut rx, cli.timeout_ms, "owned frame").await
+}
+
 async fn receive_owned_frame(
     transport: &Arc<dyn UOwnedTransport>,
     source_filter: &UUri,
@@ -1016,6 +1043,90 @@ where
     receive_zero_copy_frame(transport, source_filter, sink_filter, timeout_ms)
         .await
         .map(|frame| frame.try_contiguous_payload().unwrap_or(&[]).to_vec())
+}
+
+async fn receive_passive_zero_copy_payload<T>(
+    transport: &Arc<T>,
+    source_filter: &UUri,
+    sink_filter: Option<&UUri>,
+    cli: &Cli,
+) -> Result<Vec<u8>, UStatus>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+    T::Rx: UZeroCopyRxLease,
+{
+    receive_passive_zero_copy_frame(transport, source_filter, sink_filter, cli)
+        .await
+        .map(|frame| frame.try_contiguous_payload().unwrap_or(&[]).to_vec())
+}
+
+async fn receive_passive_zero_copy_frame<T>(
+    transport: &Arc<T>,
+    source_filter: &UUri,
+    sink_filter: Option<&UUri>,
+    cli: &Cli,
+) -> Result<T::Rx, UStatus>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+    T::Rx: UZeroCopyRxLease,
+{
+    if cli.transport != FlowTransport::Zenoh {
+        println!("READY listener_registered");
+        return receive_zero_copy_frame(transport, source_filter, sink_filter, cli.timeout_ms)
+            .await;
+    }
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    transport
+        .register_zero_copy_listener(source_filter, sink_filter, Arc::new(ZeroCopyListener(tx)))
+        .await?;
+    print_zenoh_listener_ready();
+    receive_listener_frame(&mut rx, cli.timeout_ms, "zero-copy frame").await
+}
+
+struct OwnedListener(mpsc::UnboundedSender<UOwnedFrame>);
+
+#[async_trait]
+impl UOwnedListener for OwnedListener {
+    async fn on_receive_owned(&self, frame: UOwnedFrame) {
+        let _ = self.0.send(frame);
+    }
+}
+
+struct ZeroCopyListener<Rx>(mpsc::UnboundedSender<Rx>);
+
+#[async_trait]
+impl<Rx> UZeroCopyListener<Rx> for ZeroCopyListener<Rx>
+where
+    Rx: UZeroCopyRxLease + Send + 'static,
+{
+    async fn on_receive_zero_copy(&self, frame: Rx) {
+        let _ = self.0.send(frame);
+    }
+}
+
+fn print_zenoh_listener_ready() {
+    println!("READY session_established");
+    println!("READY zenoh_listener_registered");
+    println!("READY listener_registered");
+}
+
+async fn receive_listener_frame<T>(
+    receiver: &mut mpsc::UnboundedReceiver<T>,
+    timeout_ms: u64,
+    what: &str,
+) -> Result<T, UStatus> {
+    tokio::time::timeout(Duration::from_millis(timeout_ms), receiver.recv())
+        .await
+        .map_err(|_| {
+            UStatus::fail_with_code(
+                UCode::DeadlineExceeded,
+                format!("timed out waiting for {what}"),
+            )
+        })?
+        .ok_or_else(|| {
+            UStatus::fail_with_code(UCode::Unavailable, format!("{what} channel closed"))
+        })
 }
 
 #[cfg_attr(

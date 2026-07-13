@@ -20,7 +20,8 @@ use signal_hook::consts::{SIGINT, SIGTERM};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::{Ipv4Addr, SocketAddrV4, TcpStream};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
@@ -43,12 +44,12 @@ const ZENOH_SOURCE_PORT: u16 = 7447;
 const ZENOH_SINK_PORT: u16 = 7448;
 const READY_STREAMER: &str = "READY streamer_initialized";
 const READY_LISTENER: &str = "READY listener_registered";
+const READY_ZENOH_LISTENER: &str = "READY zenoh_listener_registered";
+const READY_VSOMEIP_SUBSCRIPTION: &str = "SUBSCRIBE ACK(";
 const LOLA_MAX_SAMPLES: usize = 16;
 const LOLA_SAMPLE_SLOTS: usize = 128;
 const LOLA_QUEUE_SIZE: usize = 128;
 const LOLA_MAX_SUBSCRIBERS: usize = 8;
-const LOLA_LISTENER_STABILIZATION_MS: u64 = 500;
-const LOLA_ROW_COOLDOWN_MS: u64 = 1_000;
 const LOLA_ROW_RETRIES: usize = 1;
 const ZENOH_ROW_COOLDOWN_MS: u64 = 500;
 const ZENOH_ROW_RETRIES: usize = 0;
@@ -56,8 +57,8 @@ const ICEORYX2_ROOT_PATH: &str = "/tmp/up-streamer-iceoryx2";
 const NAMESPACE_TMP_SIZE: &str = "1g";
 const NAMESPACE_SHM_SIZE: &str = "2g";
 const MQTT_BROKER_PORT: u16 = 1883;
-const ZENOH_LISTENER_STABILIZATION_MS: u64 = 1_000;
-const VSOMEIP_LISTENER_STABILIZATION_MS: u64 = 1_000;
+const DEFAULT_MQTT_READINESS_TIMEOUT_MS: u64 = 250;
+const DEFAULT_LOLA_FAILED_RETRY_BACKOFF_MS: u64 = 1_000;
 const VSOMEIP_DUMMY_SERVICE_ID: u16 = 0x7ffe;
 const VSOMEIP_DUMMY_INSTANCE_ID: u16 = 0x0001;
 const NOTIFICATION_RESOURCE_ID: u16 = 0x8000;
@@ -65,7 +66,7 @@ const DDS_PORT_BASE: i32 = 7_400;
 const DDS_DOMAIN_GAIN: i32 = 250;
 const DDS_MIN_UNPRIVILEGED_PORT: i32 = 1_024;
 const DDS_PORT_MODULUS: i32 = 65_536;
-const SUMMARY_SCHEMA_VERSION: &str = "3.0";
+const SUMMARY_SCHEMA_VERSION: &str = "4.0";
 const CHECKPOINT_SCHEMA_VERSION: &str = "1.0";
 const BUNDLE_SCHEMA_VERSION: &str = "1.0";
 const RESOURCE_SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
@@ -93,6 +94,9 @@ static PROCESS_GROUP_LEAKS: AtomicU64 = AtomicU64::new(0);
     about = "Endpoint-profile matrix orchestrator for configurable-streamer plus role binaries"
 )]
 struct Cli {
+    #[arg(long, hide = true)]
+    mqtt_connect_probe: Option<u16>,
+
     #[arg(long)]
     list: bool,
 
@@ -114,8 +118,26 @@ struct Cli {
     #[arg(long, default_value_t = 1)]
     send_count: usize,
 
-    #[arg(long, default_value_t = 200)]
+    #[arg(long, default_value_t = 50)]
     send_interval_ms: u64,
+
+    #[arg(long, default_value_t = DEFAULT_MQTT_READINESS_TIMEOUT_MS)]
+    mqtt_readiness_timeout_ms: u64,
+
+    #[arg(long, default_value_t = 0)]
+    lola_pre_active_stabilization_ms: u64,
+
+    #[arg(long, default_value_t = 0)]
+    zenoh_sink_stabilization_ms: u64,
+
+    #[arg(long, default_value_t = 0)]
+    vsomeip_sink_stabilization_ms: u64,
+
+    #[arg(long, default_value_t = 0)]
+    lola_success_cooldown_ms: u64,
+
+    #[arg(long, default_value_t = DEFAULT_LOLA_FAILED_RETRY_BACKOFF_MS)]
+    lola_failed_retry_backoff_ms: u64,
 
     #[arg(long, default_value_t = 5_000)]
     timeout_ms: u64,
@@ -602,13 +624,35 @@ struct AttemptTimingSummary {
     config_us: u64,
     streamer_readiness_us: u64,
     passive_readiness_us: u64,
+    readiness: Vec<ReadinessEvidence>,
     stabilization: Vec<StabilizationTiming>,
     active_us: u64,
     passive_observation_or_completion_us: u64,
     validation_us: u64,
     teardown_us: u64,
     cooldown_us: u64,
+    cooldown: Vec<CooldownEvidence>,
     total_us: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ReadinessEvidence {
+    phase: &'static str,
+    contract: &'static str,
+    target: String,
+    timeout_ms: Option<u64>,
+    checks: u64,
+    configured_stabilization_ms: u64,
+    duration_us: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct CooldownEvidence {
+    phase: &'static str,
+    contract: &'static str,
+    configured_ms: u64,
+    observed_us: Option<u64>,
+    capacity_scope: &'static str,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -853,6 +897,7 @@ impl Drop for ArtifactRootLock {
 struct ScheduledTask<T> {
     slot: usize,
     resources: BTreeSet<ResourceClass>,
+    post_completion_holds: BTreeMap<ResourceClass, Duration>,
     payload: T,
 }
 
@@ -866,6 +911,7 @@ struct SchedulerState<T> {
     pending: VecDeque<ScheduledTask<T>>,
     active: usize,
     active_resources: BTreeMap<ResourceClass, usize>,
+    resource_holds: Vec<ResourceHold>,
     permit_wait_started: BTreeMap<(usize, ResourceClass), Instant>,
     events: Vec<SchedulerEvent>,
     stopped: bool,
@@ -876,6 +922,14 @@ struct SchedulerState<T> {
 enum SchedulerEventKind {
     Dispatch,
     Complete,
+    ResourceHoldComplete,
+}
+
+#[derive(Clone, Copy)]
+struct ResourceHold {
+    class: ResourceClass,
+    slot: usize,
+    deadline: Instant,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -890,6 +944,7 @@ struct SchedulerEvent {
     global_permits_available: usize,
     lola_permits_available: usize,
     active_resources: BTreeMap<ResourceClass, usize>,
+    resource_holds: BTreeMap<ResourceClass, usize>,
     resource_permits_available: BTreeMap<ResourceClass, usize>,
 }
 
@@ -999,7 +1054,12 @@ impl ResourcePeaks {
 }
 
 fn main() -> Result<()> {
-    let succeeded = run(Cli::parse())?;
+    let cli = Cli::parse();
+    if let Some(port) = cli.mqtt_connect_probe {
+        mqtt_connect_probe(port)?;
+        return Ok(());
+    }
+    let succeeded = run(cli)?;
     if !succeeded {
         std::process::exit(1);
     }
@@ -1050,7 +1110,12 @@ fn run(cli: Cli) -> Result<bool> {
     if selected_rows.is_empty() {
         return Err(anyhow!("no matrix rows matched the requested selection"));
     }
-    let plan = plan_rows(&selected_rows, cli.iterations, cli.max_runnable_rows);
+    let plan = plan_rows(
+        &selected_rows,
+        cli.iterations,
+        cli.max_runnable_rows,
+        cli.lola_success_cooldown_ms,
+    );
     let artifacts_root_requested = cli
         .artifacts_root
         .clone()
@@ -1308,6 +1373,16 @@ fn validate_cli(cli: &Cli) -> Result<()> {
         return Err(anyhow!("--iterations must be greater than zero"));
     }
     validate_concurrency(cli.jobs, cli.lola_jobs)?;
+    if cli.mqtt_readiness_timeout_ms == 0 {
+        return Err(anyhow!(
+            "--mqtt-readiness-timeout-ms must be greater than zero"
+        ));
+    }
+    if cli.lola_failed_retry_backoff_ms == 0 {
+        return Err(anyhow!(
+            "--lola-failed-retry-backoff-ms must be greater than zero"
+        ));
+    }
     if cli.hard_max_jobs == 0 {
         return Err(anyhow!("--hard-max-jobs must be greater than zero"));
     }
@@ -1649,6 +1724,7 @@ fn plan_rows(
     rows: &[MatrixRow],
     iterations: usize,
     max_runnable_rows: Option<usize>,
+    lola_success_cooldown_ms: u64,
 ) -> MatrixPlan {
     let mut runnable = Vec::new();
     let mut completed = Vec::new();
@@ -1689,6 +1765,15 @@ fn plan_rows(
                     runnable.push(ScheduledTask {
                         slot,
                         resources: row_resource_classes(row),
+                        post_completion_holds: row
+                            .uses_lola()
+                            .then_some((
+                                ResourceClass::Lola,
+                                Duration::from_millis(lola_success_cooldown_ms),
+                            ))
+                            .into_iter()
+                            .filter(|(_, duration)| !duration.is_zero())
+                            .collect(),
                         payload: RowExecution {
                             row: row.clone(),
                             iteration,
@@ -1765,6 +1850,7 @@ where
             pending: tasks.into(),
             active: 0,
             active_resources: BTreeMap::new(),
+            resource_holds: Vec::new(),
             permit_wait_started: BTreeMap::new(),
             events: Vec::with_capacity(initial_queued.saturating_mul(2)),
             stopped: false,
@@ -1785,11 +1871,29 @@ where
                     let (state_lock, wake) = &*shared;
                     let mut state = state_lock.lock().expect("scheduler state mutex poisoned");
                     loop {
+                        expire_resource_holds(&mut state, started, effective_jobs, limits);
                         if cancellation.is_cancelled() {
                             state.stopped = true;
                         }
-                        if state.stopped || state.pending.is_empty() {
+                        if state.stopped {
                             return;
+                        }
+                        if state.pending.is_empty() {
+                            if state.resource_holds.is_empty() {
+                                return;
+                            }
+                            let wait_duration = state
+                                .resource_holds
+                                .iter()
+                                .map(|hold| hold.deadline.saturating_duration_since(Instant::now()))
+                                .min()
+                                .unwrap_or_default()
+                                .min(Duration::from_millis(50));
+                            let (next_state, _) = wake
+                                .wait_timeout(state, wait_duration)
+                                .expect("scheduler state mutex poisoned");
+                            state = next_state;
+                            continue;
                         }
                         let now = Instant::now();
                         let blocked: Vec<_> = state
@@ -1869,6 +1973,7 @@ where
                 let (task, dispatch) = task;
                 let lola_sensitive = task.uses(ResourceClass::Lola);
                 let resources = task.resources.clone();
+                let post_completion_holds = task.post_completion_holds.clone();
                 let slot = task.slot;
                 let result = catch_unwind(AssertUnwindSafe(|| run_task(task.payload, dispatch)))
                     .unwrap_or_else(|_| Err(anyhow!("matrix scheduler task panicked")));
@@ -1877,11 +1982,23 @@ where
                     let (state_lock, wake) = &*shared;
                     let mut state = state_lock.lock().expect("scheduler state mutex poisoned");
                     for class in resources {
-                        let active = state
-                            .active_resources
-                            .get_mut(&class)
-                            .expect("active resource permit disappeared");
-                        *active -= 1;
+                        if !failed
+                            && post_completion_holds
+                                .get(&class)
+                                .is_some_and(|duration| !duration.is_zero())
+                        {
+                            state.resource_holds.push(ResourceHold {
+                                class,
+                                slot,
+                                deadline: Instant::now() + post_completion_holds[&class],
+                            });
+                        } else {
+                            let active = state
+                                .active_resources
+                                .get_mut(&class)
+                                .expect("active resource permit disappeared");
+                            *active -= 1;
+                        }
                     }
                     state.active -= 1;
                     record_scheduler_event(
@@ -1948,6 +2065,36 @@ where
     })
 }
 
+fn expire_resource_holds<T>(
+    state: &mut SchedulerState<T>,
+    started: Instant,
+    jobs: usize,
+    resource_limits: &BTreeMap<ResourceClass, usize>,
+) {
+    let now = Instant::now();
+    let (expired, retained): (Vec<_>, Vec<_>) = state
+        .resource_holds
+        .drain(..)
+        .partition(|hold| hold.deadline <= now);
+    state.resource_holds = retained;
+    for hold in expired {
+        let active = state
+            .active_resources
+            .get_mut(&hold.class)
+            .expect("held resource permit disappeared");
+        *active -= 1;
+        record_scheduler_event(
+            state,
+            started,
+            SchedulerEventKind::ResourceHoldComplete,
+            hold.slot,
+            hold.class == ResourceClass::Lola,
+            jobs,
+            resource_limits,
+        );
+    }
+}
+
 fn record_scheduler_event<T>(
     state: &mut SchedulerState<T>,
     started: Instant,
@@ -1976,6 +2123,19 @@ fn record_scheduler_event<T>(
             )
         })
         .collect();
+    let resource_holds = ResourceClass::ORDERED
+        .into_iter()
+        .map(|class| {
+            (
+                class,
+                state
+                    .resource_holds
+                    .iter()
+                    .filter(|hold| hold.class == class)
+                    .count(),
+            )
+        })
+        .collect();
     state.events.push(SchedulerEvent {
         elapsed_us: duration_us(started.elapsed()),
         kind,
@@ -1991,6 +2151,7 @@ fn record_scheduler_event<T>(
             .unwrap_or(jobs)
             .saturating_sub(active_lola),
         active_resources: state.active_resources.clone(),
+        resource_holds,
         resource_permits_available: available,
     });
 }
@@ -2518,10 +2679,13 @@ fn run_row(
                 execution_started.elapsed(),
             );
             write_row_checkpoint(artifacts_root, dispatch.slot, &result)?;
-            let cooldown_ms = if row.uses_lola() {
-                LOLA_ROW_COOLDOWN_MS
+            let (cooldown_ms, contract) = if row.uses_lola() {
+                (
+                    cli.lola_failed_retry_backoff_ms,
+                    "bounded_lola_failed_retry_backoff",
+                )
             } else {
-                ZENOH_ROW_COOLDOWN_MS
+                (ZENOH_ROW_COOLDOWN_MS, "bounded_zenoh_failed_retry_backoff")
             };
             let cooldown_started = Instant::now();
             cancellable_sleep(Duration::from_millis(cooldown_ms), cancellation)?;
@@ -2531,6 +2695,13 @@ fn run_row(
                 last_attempt.timings.cooldown_us.saturating_add(cooldown_us);
             last_attempt.timings.total_us =
                 last_attempt.timings.total_us.saturating_add(cooldown_us);
+            last_attempt.timings.cooldown.push(CooldownEvidence {
+                phase: "failed_retry_backoff",
+                contract,
+                configured_ms: cooldown_ms,
+                observed_us: Some(cooldown_us),
+                capacity_scope: "row_retry_envelope",
+            });
             retry_reason = Some(reason);
             populate_row_timings(
                 &mut result,
@@ -2646,8 +2817,16 @@ fn run_row_attempt(
 
     let mut mqtt_broker = if row.uses_mqtt5() {
         let broker_started = Instant::now();
-        let broker = start_mqtt_broker(bundle, &row_dir, &process_env, &namespace, cancellation)?;
+        let (broker, readiness) = start_mqtt_broker(
+            bundle,
+            &row_dir,
+            &process_env,
+            &namespace,
+            cli.mqtt_readiness_timeout_ms,
+            cancellation,
+        )?;
         timings.broker_us = duration_us(broker_started.elapsed());
+        timings.readiness.push(readiness);
         logs.insert(
             "mqtt_broker".to_string(),
             broker.log_path.display().to_string(),
@@ -2706,7 +2885,16 @@ fn run_row_attempt(
             cancellation,
         );
         timings.streamer_readiness_us = duration_us(streamer_started.elapsed());
-        readiness?;
+        let readiness = readiness?;
+        timings.readiness.push(ReadinessEvidence {
+            phase: "streamer_readiness",
+            contract: "streamer_initialized_marker",
+            target: READY_STREAMER.to_string(),
+            timeout_ms: Some(10_000),
+            checks: readiness.checks,
+            configured_stabilization_ms: 0,
+            duration_us: readiness.duration_us,
+        });
 
         let passive_started = Instant::now();
         let passive_spec = role_command(
@@ -2732,49 +2920,58 @@ fn run_row_attempt(
             "passive".to_string(),
             passive.log_path.display().to_string(),
         );
+        let (passive_marker, passive_contract) = passive_readiness_contract(row);
         let readiness = wait_for_marker(
             &mut passive,
-            READY_LISTENER,
+            passive_marker,
             Duration::from_secs(10),
             cancellation,
         );
         timings.passive_readiness_us = duration_us(passive_started.elapsed());
-        readiness?;
+        let readiness = readiness?;
+        timings.readiness.push(ReadinessEvidence {
+            phase: "passive_readiness",
+            contract: passive_contract,
+            target: passive_marker.to_string(),
+            timeout_ms: Some(10_000),
+            checks: readiness.checks,
+            configured_stabilization_ms: 0,
+            duration_us: readiness.duration_us,
+        });
         if row.uses_lola() {
-            let stabilization_started = Instant::now();
-            let stabilization = cancellable_sleep(
-                Duration::from_millis(LOLA_LISTENER_STABILIZATION_MS),
+            record_post_ready_gate(
+                &mut timings,
+                "lola_listener",
+                "role_ready_plus_configurable_pre_active_gate",
+                cli.lola_pre_active_stabilization_ms,
                 cancellation,
-            );
-            timings.stabilization.push(StabilizationTiming {
-                reason: "lola_listener",
-                duration_us: duration_us(stabilization_started.elapsed()),
-            });
-            stabilization?;
+            )?;
         }
         if row.sink.physical == PhysicalTransport::Zenoh {
-            let stabilization_started = Instant::now();
-            let stabilization = cancellable_sleep(
-                Duration::from_millis(ZENOH_LISTENER_STABILIZATION_MS),
+            record_post_ready_gate(
+                &mut timings,
+                "zenoh_sink_listener",
+                if row.sink.kind == EndpointKind::Classic {
+                    "awaited_listener_registration"
+                } else {
+                    "awaited_session_establishment"
+                },
+                cli.zenoh_sink_stabilization_ms,
                 cancellation,
-            );
-            timings.stabilization.push(StabilizationTiming {
-                reason: "zenoh_sink_listener",
-                duration_us: duration_us(stabilization_started.elapsed()),
-            });
-            stabilization?;
+            )?;
         }
         if row.sink.physical == PhysicalTransport::Vsomeip {
-            let stabilization_started = Instant::now();
-            let stabilization = cancellable_sleep(
-                Duration::from_millis(VSOMEIP_LISTENER_STABILIZATION_MS),
+            record_post_ready_gate(
+                &mut timings,
+                "vsomeip_sink_listener",
+                if row.role == RoleStyle::PublisherSubscriber {
+                    "awaited_subscription_acceptance"
+                } else {
+                    "awaited_listener_registration"
+                },
+                cli.vsomeip_sink_stabilization_ms,
                 cancellation,
-            );
-            timings.stabilization.push(StabilizationTiming {
-                reason: "vsomeip_sink_listener",
-                duration_us: duration_us(stabilization_started.elapsed()),
-            });
-            stabilization?;
+            )?;
         }
 
         let active_started = Instant::now();
@@ -2798,6 +2995,28 @@ fn run_row_attempt(
             Some(&namespace),
         )?;
         logs.insert("active".to_string(), active.log_path.display().to_string());
+
+        if requires_vsomeip_subscription_acceptance(row) {
+            let readiness = wait_for_marker(
+                &mut passive,
+                READY_VSOMEIP_SUBSCRIPTION,
+                remaining_timeout(
+                    started,
+                    cli.scenario_timeout_secs,
+                    "vSomeIP subscription acceptance",
+                )?,
+                cancellation,
+            )?;
+            timings.readiness.push(ReadinessEvidence {
+                phase: "active_readiness",
+                contract: "vsomeip_subscription_acknowledged_after_provider_first_send",
+                target: READY_VSOMEIP_SUBSCRIPTION.to_string(),
+                timeout_ms: Some(cli.scenario_timeout_secs.saturating_mul(1_000)),
+                checks: readiness.checks,
+                configured_stabilization_ms: 0,
+                duration_us: readiness.duration_us,
+            });
+        }
 
         let active_completion = wait_for_exit(
             &mut active,
@@ -2854,13 +3073,16 @@ fn run_row_attempt(
     timings.teardown_us = timings
         .teardown_us
         .saturating_add(duration_us(teardown_started.elapsed()));
-    if row.uses_lola() {
-        let cooldown_started = Instant::now();
-        cancellable_sleep(Duration::from_millis(LOLA_ROW_COOLDOWN_MS), cancellation)?;
-        timings.cooldown_us = duration_us(cooldown_started.elapsed());
-    }
-
     let result = result.and(cleanup_result);
+    if row.uses_lola() && result.is_ok() {
+        timings.cooldown.push(CooldownEvidence {
+            phase: "post_success_quiescence",
+            contract: "lola_resource_permit_hold_after_process_teardown",
+            configured_ms: cli.lola_success_cooldown_ms,
+            observed_us: (cli.lola_success_cooldown_ms == 0).then_some(0),
+            capacity_scope: "lola_permit_only_no_global_worker",
+        });
+    }
     let mut result = match result {
         Ok(()) => row_result(
             row,
@@ -2944,6 +3166,12 @@ fn build_required_binaries(
                 &example_features,
                 "--no-default-features",
             ],
+            &common_args,
+        )?,
+        run_cargo(
+            "streamer_transport_test_orchestrator",
+            repo_root,
+            ["build", "-p", "streamer-transport-test-orchestrator"],
             &common_args,
         )?,
     ];
@@ -4566,8 +4794,9 @@ fn start_mqtt_broker(
     artifact_dir: &Path,
     env: &[(String, String)],
     namespace: &RunningProcess,
+    readiness_timeout_ms: u64,
     cancellation: &Cancellation,
-) -> Result<RunningProcess> {
+) -> Result<(RunningProcess, ReadinessEvidence)> {
     let config_path = artifact_dir.join("mosquitto.conf");
     fs::write(
         &config_path,
@@ -4586,14 +4815,141 @@ fn start_mqtt_broker(
         artifact_dir,
         Some(namespace),
     )?;
-    cancellable_sleep(Duration::from_millis(250), cancellation)?;
-    if let Some(status) = broker.child.try_wait()? {
+    let target = format!("127.0.0.1:{MQTT_BROKER_PORT}");
+    let log_path = broker.log_path.clone();
+    let readiness = wait_for_readiness_probe(
+        "mqtt_broker_readiness",
+        "mqtt5_connect_connack",
+        &target,
+        Duration::from_millis(readiness_timeout_ms),
+        cancellation,
+        || {
+            broker
+                .child
+                .try_wait()
+                .map(|status| status.map(|status| status.to_string()))
+                .map_err(Into::into)
+        },
+        || probe_mqtt_connect_in_namespace(bundle, namespace, MQTT_BROKER_PORT),
+    )
+    .with_context(|| format!("MQTT broker log={}", log_path.display()))?;
+    Ok((broker, readiness))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn wait_for_readiness_probe(
+    phase: &'static str,
+    contract: &'static str,
+    target: &str,
+    timeout: Duration,
+    cancellation: &Cancellation,
+    mut process_exit: impl FnMut() -> Result<Option<String>>,
+    mut probe: impl FnMut() -> Result<bool>,
+) -> Result<ReadinessEvidence> {
+    let started = Instant::now();
+    let deadline = started + timeout;
+    let mut checks = 0_u64;
+    loop {
+        cancellation.check()?;
+        if let Some(status) = process_exit()? {
+            return Err(anyhow!(
+                "{phase}: process exited with {status} before {contract} target {target}; checks={checks}"
+            ));
+        }
+        checks += 1;
+        if probe().with_context(|| format!("{phase}: {contract} probe failed for {target}"))? {
+            return Ok(ReadinessEvidence {
+                phase,
+                contract,
+                target: target.to_string(),
+                timeout_ms: Some(timeout.as_millis().min(u128::from(u64::MAX)) as u64),
+                checks,
+                configured_stabilization_ms: 0,
+                duration_us: duration_us(started.elapsed()),
+            });
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(anyhow!(
+                "{phase}: timed out after {timeout:?} waiting for {contract} target {target}; checks={checks}"
+            ));
+        }
+        thread::sleep(remaining.min(Duration::from_millis(10)));
+    }
+}
+
+fn probe_mqtt_connect_in_namespace(
+    bundle: &RunBundle,
+    namespace: &RunningProcess,
+    port: u16,
+) -> Result<bool> {
+    let status = Command::new(bundle.executable("nsenter")?)
+        .args(["-t", &namespace.child.id().to_string()])
+        .args(["-U", "--preserve-credentials", "-m", "-n", "-i", "--"])
+        .arg(bundle.executable("streamer-transport-test-orchestrator")?)
+        .args(["--mqtt-connect-probe", &port.to_string()])
+        .env_clear()
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .context("unable to execute namespaced MQTT CONNECT probe")?;
+    Ok(status.success())
+}
+
+fn mqtt_connect_probe(port: u16) -> Result<()> {
+    let timeout = Duration::from_millis(100);
+    let address = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    let mut stream = TcpStream::connect_timeout(&address.into(), timeout)
+        .with_context(|| format!("unable to connect to MQTT broker at {address}"))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+
+    // MQTT 5 CONNECT with Clean Start and an empty client ID.
+    stream.write_all(&[
+        0x10, 0x0d, 0x00, 0x04, b'M', b'Q', b'T', b'T', 0x05, 0x02, 0x00, 0x3c, 0x00, 0x00, 0x00,
+    ])?;
+    let mut packet_type = [0_u8; 1];
+    stream.read_exact(&mut packet_type)?;
+    if packet_type[0] != 0x20 {
         return Err(anyhow!(
-            "MQTT broker exited before readiness with {status}; see {}",
-            broker.log_path.display()
+            "MQTT broker returned packet type 0x{:02x} instead of CONNACK",
+            packet_type[0]
         ));
     }
-    Ok(broker)
+
+    let remaining_len = read_mqtt_remaining_length(&mut stream)?;
+    if remaining_len < 2 {
+        return Err(anyhow!("MQTT CONNACK is shorter than two bytes"));
+    }
+    let mut connack = vec![0_u8; remaining_len];
+    stream.read_exact(&mut connack)?;
+    if connack[1] != 0 {
+        return Err(anyhow!(
+            "MQTT CONNECT was rejected with reason code 0x{:02x}",
+            connack[1]
+        ));
+    }
+    let _ = stream.write_all(&[0xe0, 0x00]);
+    Ok(())
+}
+
+fn read_mqtt_remaining_length(stream: &mut TcpStream) -> Result<usize> {
+    let mut value = 0_usize;
+    let mut multiplier = 1_usize;
+    for _ in 0..4 {
+        let mut encoded = [0_u8; 1];
+        stream.read_exact(&mut encoded)?;
+        value = value
+            .checked_add(usize::from(encoded[0] & 0x7f).saturating_mul(multiplier))
+            .ok_or_else(|| anyhow!("MQTT remaining length overflow"))?;
+        if encoded[0] & 0x80 == 0 {
+            return Ok(value);
+        }
+        multiplier = multiplier
+            .checked_mul(128)
+            .ok_or_else(|| anyhow!("MQTT remaining length multiplier overflow"))?;
+    }
+    Err(anyhow!("MQTT remaining length exceeds four bytes"))
 }
 
 fn wait_for_path_or_exit(
@@ -4636,18 +4992,29 @@ fn log_file(path: &Path) -> Result<File> {
         .with_context(|| format!("unable to open {}", path.display()))
 }
 
+struct ReadinessObservation {
+    checks: u64,
+    duration_us: u64,
+}
+
 fn wait_for_marker(
     process: &mut RunningProcess,
     marker: &str,
     timeout: Duration,
     cancellation: &Cancellation,
-) -> Result<()> {
+) -> Result<ReadinessObservation> {
+    let started = Instant::now();
     let deadline = Instant::now() + timeout;
+    let mut checks = 0_u64;
     loop {
         cancellation.check()?;
+        checks += 1;
         let contents = fs::read_to_string(&process.log_path).unwrap_or_default();
         if contents.contains(marker) {
-            return Ok(());
+            return Ok(ReadinessObservation {
+                checks,
+                duration_us: duration_us(started.elapsed()),
+            });
         }
         if let Some(status) = process.child.try_wait()? {
             return Err(anyhow!(
@@ -4664,6 +5031,47 @@ fn wait_for_marker(
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+fn passive_readiness_contract(row: &MatrixRow) -> (&'static str, &'static str) {
+    if row.sink.physical == PhysicalTransport::Zenoh && row.sink.kind != EndpointKind::Classic {
+        (
+            READY_ZENOH_LISTENER,
+            "selected_wire_zenoh_listener_registered_marker",
+        )
+    } else {
+        (READY_LISTENER, "listener_registered_marker")
+    }
+}
+
+fn requires_vsomeip_subscription_acceptance(row: &MatrixRow) -> bool {
+    row.sink.physical == PhysicalTransport::Vsomeip && row.role == RoleStyle::PublisherSubscriber
+}
+
+fn record_post_ready_gate(
+    timings: &mut AttemptTimingSummary,
+    reason: &'static str,
+    contract: &'static str,
+    configured_ms: u64,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    let started = Instant::now();
+    cancellable_sleep(Duration::from_millis(configured_ms), cancellation)?;
+    let elapsed_us = duration_us(started.elapsed());
+    timings.stabilization.push(StabilizationTiming {
+        reason,
+        duration_us: elapsed_us,
+    });
+    timings.readiness.push(ReadinessEvidence {
+        phase: "post_passive_ready_gate",
+        contract,
+        target: reason.to_string(),
+        timeout_ms: None,
+        checks: 1,
+        configured_stabilization_ms: configured_ms,
+        duration_us: elapsed_us,
+    });
+    Ok(())
 }
 
 fn wait_for_any_marker(
@@ -5309,7 +5717,10 @@ fn stage_bundle_file(
 }
 
 fn required_matrix_executables(rows: &[MatrixRow]) -> BTreeSet<String> {
-    let mut names = BTreeSet::from(["configurable-streamer".to_string()]);
+    let mut names = BTreeSet::from([
+        "configurable-streamer".to_string(),
+        "streamer-transport-test-orchestrator".to_string(),
+    ]);
     for row in rows {
         if support_status(row).classification != RowClassification::Pass {
             continue;
@@ -5946,6 +6357,7 @@ mod tests {
                 .then_some(ResourceClass::Lola)
                 .into_iter()
                 .collect(),
+            post_completion_holds: BTreeMap::new(),
             payload,
         }
     }
@@ -6055,7 +6467,7 @@ mod tests {
         );
 
         let value = serde_json::to_value(&summary).expect("summary serializes");
-        assert_eq!(value["schema_version"], "3.0");
+        assert_eq!(value["schema_version"], "4.0");
         assert_eq!(value["options"]["only"][0], "matrix-row");
         assert_eq!(value["options"]["jobs"], 7);
         assert_eq!(value["options"]["lola_jobs"], 2);
@@ -6071,10 +6483,16 @@ mod tests {
     }
 
     #[test]
-    fn default_concurrency_options_remain_four_and_one() {
+    fn default_concurrency_and_evidence_backed_timing_options_are_stable() {
         let cli = Cli::try_parse_from(["orchestrator"]).expect("default CLI parses");
         assert_eq!(cli.jobs, 4);
         assert_eq!(cli.lola_jobs, 1);
+        assert_eq!(cli.send_interval_ms, 50);
+        assert_eq!(cli.mqtt_readiness_timeout_ms, 250);
+        assert_eq!(cli.lola_pre_active_stabilization_ms, 0);
+        assert_eq!(cli.zenoh_sink_stabilization_ms, 0);
+        assert_eq!(cli.vsomeip_sink_stabilization_ms, 0);
+        assert_eq!(cli.lola_success_cooldown_ms, 0);
     }
 
     #[test]
@@ -6178,6 +6596,7 @@ mod tests {
             global_permits_available: 2_usize.saturating_sub(active),
             lola_permits_available: 1_usize.saturating_sub(active_lola),
             active_resources: BTreeMap::from([(ResourceClass::Lola, active_lola)]),
+            resource_holds: BTreeMap::from([(ResourceClass::Lola, 0)]),
             resource_permits_available: BTreeMap::from([(
                 ResourceClass::Lola,
                 1_usize.saturating_sub(active_lola),
@@ -6246,6 +6665,48 @@ mod tests {
     }
 
     #[test]
+    fn post_completion_hold_releases_worker_but_retains_lola_permit() {
+        let mut first = synthetic_task(0, true, 0_usize);
+        first
+            .post_completion_holds
+            .insert(ResourceClass::Lola, Duration::from_millis(30));
+        let second = synthetic_task(1, true, 1_usize);
+        let started = Instant::now();
+        let dispatches = Arc::new(Mutex::new(BTreeMap::new()));
+        let worker_dispatches = Arc::clone(&dispatches);
+
+        let run = run_bounded_instrumented(
+            vec![first, second],
+            2,
+            2,
+            &test_resource_limits(2, 1),
+            &Cancellation::default(),
+            move |slot, _| {
+                worker_dispatches
+                    .lock()
+                    .expect("dispatch mutex poisoned")
+                    .insert(slot, started.elapsed());
+                Ok(())
+            },
+        )
+        .expect("held scheduler completes");
+
+        let dispatches = dispatches.lock().expect("dispatch mutex poisoned");
+        assert!(dispatches[&1] >= Duration::from_millis(25));
+        assert!(run.summary.events.iter().any(|event| {
+            event.kind == SchedulerEventKind::Complete
+                && event.slot == 0
+                && event.active == 0
+                && event.resource_holds[&ResourceClass::Lola] == 1
+        }));
+        assert!(run
+            .summary
+            .events
+            .iter()
+            .any(|event| event.kind == SchedulerEventKind::ResourceHoldComplete));
+    }
+
+    #[test]
     fn atomic_checkpoint_has_canonical_name_and_replaces_content() {
         let root = std::env::temp_dir().join(format!(
             "streamer-orchestrator-checkpoint-test-{}-{}",
@@ -6297,7 +6758,7 @@ mod tests {
             .expect("matrix has unsupported rows")
             .clone();
         let runnable = representative_row();
-        let plan = plan_rows(&[unsupported, runnable.clone(), runnable], 1, Some(1));
+        let plan = plan_rows(&[unsupported, runnable.clone(), runnable], 1, Some(1), 0);
         for (_, result) in plan.completed {
             assert!(result.attempts.is_empty());
             assert_eq!(result.attempts_used, 0);
@@ -6363,7 +6824,7 @@ mod tests {
             .find(|row| support_status(row).classification == RowClassification::Pass)
             .expect("matrix has runnable rows")
             .clone();
-        let plan = plan_rows(&[unsupported, runnable], 3, Some(1));
+        let plan = plan_rows(&[unsupported, runnable], 3, Some(1), 0);
 
         assert_eq!(plan.slot_count, 6);
         assert_eq!(plan.runnable.len(), 1);
@@ -6388,7 +6849,7 @@ mod tests {
 
     #[test]
     fn full_matrix_plan_derives_r11_profile_wire_compatibility_counts() {
-        let plan = plan_rows(&matrix_rows(), 1, None);
+        let plan = plan_rows(&matrix_rows(), 1, None, 0);
         assert_eq!(plan.slot_count, 2160);
         assert_eq!(plan.runnable.len(), 1728);
         assert_eq!(plan.completed.len(), 432);
@@ -6396,6 +6857,46 @@ mod tests {
             .completed
             .iter()
             .all(|(_, result)| result.classification == RowClassification::Unsupported));
+    }
+
+    #[test]
+    fn passive_readiness_uses_transport_specific_evidence() {
+        let rows = matrix_rows();
+        let selected_zenoh = rows
+            .iter()
+            .find(|row| {
+                row.sink.id == "zenoh-owned-frame" && row.role == RoleStyle::PublisherSubscriber
+            })
+            .expect("selected-wire Zenoh sink exists");
+        assert_eq!(
+            passive_readiness_contract(selected_zenoh),
+            (
+                READY_ZENOH_LISTENER,
+                "selected_wire_zenoh_listener_registered_marker"
+            )
+        );
+
+        let vsomeip_publish = rows
+            .iter()
+            .find(|row| {
+                row.sink.id == "vsomeip-classic" && row.role == RoleStyle::PublisherSubscriber
+            })
+            .expect("vSomeIP publish sink exists");
+        assert_eq!(
+            passive_readiness_contract(vsomeip_publish),
+            (READY_LISTENER, "listener_registered_marker")
+        );
+        assert!(requires_vsomeip_subscription_acceptance(vsomeip_publish));
+
+        let vsomeip_rpc = rows
+            .iter()
+            .find(|row| row.sink.id == "vsomeip-classic" && row.role == RoleStyle::ClientServerRpc)
+            .expect("vSomeIP RPC sink exists");
+        assert_eq!(
+            passive_readiness_contract(vsomeip_rpc),
+            (READY_LISTENER, "listener_registered_marker")
+        );
+        assert!(!requires_vsomeip_subscription_acceptance(vsomeip_rpc));
     }
 
     #[test]
@@ -7010,6 +7511,7 @@ mod tests {
                 slot,
                 payload: resources.clone(),
                 resources,
+                post_completion_holds: BTreeMap::new(),
             })
             .collect();
         let limits: BTreeMap<_, _> = ResourceClass::ORDERED

@@ -13,18 +13,20 @@
 
 mod common;
 
+use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use common::cli;
 use common::PublishReceiver;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::sync::mpsc;
 use tracing::info;
 use up_rust::selected_wire_user_api::{ProtobufWire, StableContainerWireFormat};
 use up_rust::{
-    UCode, UFrameView, UListener, UOwnedFrame, UOwnedTransport, UStatus, UTransport, UUri,
-    UZeroCopyRxLease, UZeroCopyTransport,
+    UCode, UFrameView, UListener, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus,
+    UTransport, UUri, UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport,
 };
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
@@ -186,7 +188,7 @@ async fn run_selected_wire_subscriber(
                     .await?
                     .with_selected_wire(StableContainerWireFormat),
             ) as Arc<dyn UOwnedTransport>;
-            println!("READY listener_registered");
+            print_selected_wire_ready();
             receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
         }
         (RouteFamily::OwnedFrame, Encoding::Protobuf) => {
@@ -195,7 +197,7 @@ async fn run_selected_wire_subscriber(
                     .await?
                     .with_selected_wire(ProtobufWire),
             ) as Arc<dyn UOwnedTransport>;
-            println!("READY listener_registered");
+            print_selected_wire_ready();
             receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
         }
         (RouteFamily::OwnedFrame, Encoding::Xcdrv2) => {
@@ -204,7 +206,7 @@ async fn run_selected_wire_subscriber(
                     .await?
                     .with_selected_wire(XcdrV2Wire),
             ) as Arc<dyn UOwnedTransport>;
-            println!("READY listener_registered");
+            print_selected_wire_ready();
             receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
         }
         (RouteFamily::OwnedFrame, Encoding::Arrow) => {
@@ -213,7 +215,7 @@ async fn run_selected_wire_subscriber(
                     .await?
                     .with_selected_wire(ArrowWire),
             ) as Arc<dyn UOwnedTransport>;
-            println!("READY listener_registered");
+            print_selected_wire_ready();
             receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
         }
         (RouteFamily::OwnedFrame, Encoding::Omgidl) => {
@@ -222,7 +224,7 @@ async fn run_selected_wire_subscriber(
                     .await?
                     .with_selected_wire(OmgIdlWire),
             ) as Arc<dyn UOwnedTransport>;
-            println!("READY listener_registered");
+            print_selected_wire_ready();
             receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Native) => {
@@ -231,7 +233,7 @@ async fn run_selected_wire_subscriber(
                     .await?
                     .with_selected_wire(StableContainerWireFormat),
             );
-            println!("READY listener_registered");
+            print_selected_wire_ready();
             receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Protobuf) => {
@@ -240,7 +242,7 @@ async fn run_selected_wire_subscriber(
                     .await?
                     .with_selected_wire(ProtobufWire),
             );
-            println!("READY listener_registered");
+            print_selected_wire_ready();
             receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Xcdrv2) => {
@@ -249,7 +251,7 @@ async fn run_selected_wire_subscriber(
                     .await?
                     .with_selected_wire(XcdrV2Wire),
             );
-            println!("READY listener_registered");
+            print_selected_wire_ready();
             receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Arrow) => {
@@ -258,7 +260,7 @@ async fn run_selected_wire_subscriber(
                     .await?
                     .with_selected_wire(ArrowWire),
             );
-            println!("READY listener_registered");
+            print_selected_wire_ready();
             receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Omgidl) => {
@@ -267,7 +269,7 @@ async fn run_selected_wire_subscriber(
                     .await?
                     .with_selected_wire(OmgIdlWire),
             );
-            println!("READY listener_registered");
+            print_selected_wire_ready();
             receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
         }
     };
@@ -277,6 +279,10 @@ async fn run_selected_wire_subscriber(
         payload.len()
     );
     Ok(())
+}
+
+fn print_selected_wire_ready() {
+    println!("READY session_established");
 }
 
 fn zenoh_config_from_endpoint(endpoint: &str) -> Config {
@@ -320,24 +326,12 @@ async fn receive_owned_frame(
     source_filter: &UUri,
     timeout_ms: u64,
 ) -> Result<UOwnedFrame, UStatus> {
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(UStatus::fail_with_code(
-                UCode::DeadlineExceeded,
-                "timed out waiting for owned frame",
-            ));
-        }
-        match tokio::time::timeout(remaining, transport.receive_owned(source_filter, None)).await {
-            Ok(Ok(frame)) => return Ok(frame),
-            Ok(Err(error)) if error.get_code() == UCode::NotFound => {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Ok(Err(error)) => return Err(error),
-            Err(_) => {}
-        }
-    }
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    transport
+        .register_owned_listener(source_filter, None, Arc::new(OwnedListener(tx)))
+        .await?;
+    print_zenoh_listener_ready();
+    receive(&mut rx, timeout_ms, "owned frame").await
 }
 
 async fn receive_zero_copy_payload<T>(
@@ -349,24 +343,56 @@ where
     T: UZeroCopyTransport + Send + Sync + 'static,
     T::Rx: UZeroCopyRxLease,
 {
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(UStatus::fail_with_code(
-                UCode::DeadlineExceeded,
-                "timed out waiting for zero-copy frame",
-            ));
-        }
-        match tokio::time::timeout(remaining, transport.receive_zero_copy(source_filter, None))
-            .await
-        {
-            Ok(Ok(frame)) => return Ok(frame.try_contiguous_payload().unwrap_or(&[]).to_vec()),
-            Ok(Err(error)) if error.get_code() == UCode::NotFound => {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Ok(Err(error)) => return Err(error),
-            Err(_) => {}
-        }
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    transport
+        .register_zero_copy_listener(source_filter, None, Arc::new(ZeroCopyListener(tx)))
+        .await?;
+    print_zenoh_listener_ready();
+    receive(&mut rx, timeout_ms, "zero-copy frame")
+        .await
+        .map(|frame| frame.try_contiguous_payload().unwrap_or(&[]).to_vec())
+}
+
+struct OwnedListener(mpsc::UnboundedSender<UOwnedFrame>);
+
+#[async_trait]
+impl UOwnedListener for OwnedListener {
+    async fn on_receive_owned(&self, frame: UOwnedFrame) {
+        let _ = self.0.send(frame);
     }
+}
+
+struct ZeroCopyListener<Rx>(mpsc::UnboundedSender<Rx>);
+
+#[async_trait]
+impl<Rx> UZeroCopyListener<Rx> for ZeroCopyListener<Rx>
+where
+    Rx: UZeroCopyRxLease + Send + 'static,
+{
+    async fn on_receive_zero_copy(&self, frame: Rx) {
+        let _ = self.0.send(frame);
+    }
+}
+
+fn print_zenoh_listener_ready() {
+    println!("READY zenoh_listener_registered");
+    println!("READY listener_registered");
+}
+
+async fn receive<T>(
+    receiver: &mut mpsc::UnboundedReceiver<T>,
+    timeout_ms: u64,
+    what: &str,
+) -> Result<T, UStatus> {
+    tokio::time::timeout(Duration::from_millis(timeout_ms), receiver.recv())
+        .await
+        .map_err(|_| {
+            UStatus::fail_with_code(
+                UCode::DeadlineExceeded,
+                format!("timed out waiting for {what}"),
+            )
+        })?
+        .ok_or_else(|| {
+            UStatus::fail_with_code(UCode::Unavailable, format!("{what} channel closed"))
+        })
 }
