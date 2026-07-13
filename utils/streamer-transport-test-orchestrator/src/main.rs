@@ -16,6 +16,7 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use signal_hook::consts::{SIGINT, SIGTERM};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::CString;
@@ -66,9 +67,11 @@ const DDS_PORT_BASE: i32 = 7_400;
 const DDS_DOMAIN_GAIN: i32 = 250;
 const DDS_MIN_UNPRIVILEGED_PORT: i32 = 1_024;
 const DDS_PORT_MODULUS: i32 = 65_536;
-const SUMMARY_SCHEMA_VERSION: &str = "4.0";
+const SUMMARY_SCHEMA_VERSION: &str = "5.0";
 const CHECKPOINT_SCHEMA_VERSION: &str = "1.0";
-const BUNDLE_SCHEMA_VERSION: &str = "1.0";
+const BUNDLE_SCHEMA_VERSION: &str = "2.0";
+const SHARD_MANIFEST_SCHEMA_VERSION: &str = "1.0";
+const MERGED_SUMMARY_SCHEMA_VERSION: &str = "1.0";
 const RESOURCE_SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
 const DEFAULT_HARD_MAX_JOBS: usize = 16;
 const DEFAULT_TOKIO_WORKER_THREADS: usize = 2;
@@ -88,7 +91,7 @@ static PROCESS_GROUPS_STARTED: AtomicU64 = AtomicU64::new(0);
 static PROCESS_GROUP_LEAK_CHECKS: AtomicU64 = AtomicU64::new(0);
 static PROCESS_GROUP_LEAKS: AtomicU64 = AtomicU64::new(0);
 
-#[derive(Clone, Debug, Parser, Serialize)]
+#[derive(Clone, Debug, Deserialize, Parser, Serialize)]
 #[command(name = "streamer-transport-test-orchestrator")]
 #[command(
     about = "Endpoint-profile matrix orchestrator for configurable-streamer plus role binaries"
@@ -198,9 +201,30 @@ struct Cli {
 
     #[arg(long)]
     criteria: Option<PathBuf>,
+
+    #[arg(long)]
+    shard_count: Option<usize>,
+
+    #[arg(long)]
+    shard_index: Option<usize>,
+
+    #[arg(long)]
+    prepare_shards: bool,
+
+    #[arg(long, value_name = "DIR")]
+    run_bundle: Option<PathBuf>,
+
+    #[arg(long, value_name = "FILE")]
+    shard_manifest: Option<PathBuf>,
+
+    #[arg(long = "merge-shard-root", value_name = "DIR")]
+    merge_shard_roots: Vec<PathBuf>,
+
+    #[arg(long, value_name = "FILE")]
+    merge_output: Option<PathBuf>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum PhysicalTransport {
     Zenoh,
@@ -211,7 +235,7 @@ enum PhysicalTransport {
     Dds,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum EndpointKind {
     Classic,
@@ -219,7 +243,7 @@ enum EndpointKind {
     CopyMinimized,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum RoleStyle {
     PublisherSubscriber,
@@ -227,7 +251,7 @@ enum RoleStyle {
     ClientServerRpc,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum WireEncoding {
     Native,
@@ -237,7 +261,7 @@ enum WireEncoding {
     Omgidl,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum RowClassification {
     Pass,
@@ -387,6 +411,9 @@ struct MatrixSummary {
     completion_boundary: &'static str,
     command: CommandSummary,
     options: Cli,
+    identities: ExecutionIdentities,
+    bundle: BundleManifest,
+    shard: Option<ShardRunSummary>,
     provenance: ProvenanceSummary,
     host_resources: HostResourcesSummary,
     preflight: PreflightSummary,
@@ -553,7 +580,7 @@ struct RunTimingSummary {
     summary_generation_us: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct RetryPolicySummary {
     disabled: bool,
     lola_max_retries: usize,
@@ -573,6 +600,8 @@ struct RowResult {
     role: RoleStyle,
     encoding: WireEncoding,
     iteration: usize,
+    scheduling_priority: Option<usize>,
+    estimated_cost_units: u32,
     attempts_used: usize,
     retries_consumed: usize,
     classification: RowClassification,
@@ -661,14 +690,14 @@ struct StabilizationTiming {
     duration_us: u64,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct MatrixCriteria {
     expected: ExpectedCounts,
     unsupported_reason_allowlist: Vec<String>,
     retry: RetryCriteria,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct ExpectedCounts {
     pass: usize,
     unsupported: usize,
@@ -676,7 +705,7 @@ struct ExpectedCounts {
     failed: usize,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct RetryCriteria {
     max_retries_lola_rows: usize,
     max_retries_zenoh_rows: usize,
@@ -693,17 +722,167 @@ struct CriteriaResult {
     errors: Vec<String>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct ExecutionIdentities {
+    matrix_sha256: String,
+    selection_sha256: String,
+    criteria_sha256: String,
+    orchestrator_sha256: String,
+    dependency_sha256: String,
+    bundle_sha256: String,
+    binaries_sha256: String,
+    native_libraries_sha256: String,
+    options_sha256: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct ExpectedShardRow {
+    canonical_slot: usize,
+    row_id: String,
+    iteration: usize,
+    classification: RowClassification,
+    estimated_cost_units: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct ShardManifest {
+    schema_version: String,
+    shard_count: usize,
+    shard_index: usize,
+    identities: ExecutionIdentities,
+    selection_row_count: usize,
+    selection_rows: Vec<ExpectedShardRow>,
+    expected_row_count: usize,
+    expected_counts: ExpectedCounts,
+    expected_cost_units: u64,
+    expected_lola_cost_units: u64,
+    expected_rows: Vec<ExpectedShardRow>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ShardRunSummary {
+    shard_count: usize,
+    shard_index: usize,
+    manifest_path: String,
+    manifest_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MergeSummaryInput {
+    schema_version: String,
+    options: Cli,
+    identities: ExecutionIdentities,
+    bundle: BundleManifest,
+    shard: Option<MergeShardRunInput>,
+    provenance: MergeProvenanceInput,
+    build: MergeBuildInput,
+    row_count: usize,
+    pass_count: usize,
+    unsupported_count: usize,
+    blocked_count: usize,
+    failed_count: usize,
+    iterations: usize,
+    retry_policy: RetryPolicySummary,
+    retried_row_count: usize,
+    max_retries_consumed: usize,
+    rows: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MergeShardRunInput {
+    shard_count: usize,
+    shard_index: usize,
+    manifest_sha256: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MergeProvenanceInput {
+    binaries: Vec<FileProvenance>,
+    native_libraries: Vec<FileProvenance>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MergeBuildInput {
+    skipped: bool,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    duration_us: u64,
+    phases: Vec<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MergeRowInput {
+    row_id: String,
+    source_profile: String,
+    sink_profile: String,
+    source_transport: PhysicalTransport,
+    sink_transport: PhysicalTransport,
+    source_endpoint_kind: EndpointKind,
+    sink_endpoint_kind: EndpointKind,
+    role: RoleStyle,
+    encoding: WireEncoding,
+    iteration: usize,
+    attempts_used: usize,
+    estimated_cost_units: u32,
+    retries_consumed: usize,
+    classification: RowClassification,
+    failure_phase: Option<String>,
+    reason: String,
+    attempts: Vec<MergeAttemptInput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MergeAttemptInput {
+    attempt_number: usize,
+    is_retry: bool,
+    retry_reason: Option<String>,
+    retry_scheduled: bool,
+    classification: RowClassification,
+    failure_phase: Option<String>,
+}
+
+#[derive(Serialize)]
+struct MergedMatrixSummary {
+    schema_version: &'static str,
+    source_summary_schema_version: &'static str,
+    generated_at: String,
+    identities: ExecutionIdentities,
+    shard_count: usize,
+    source_shards: Vec<MergedShardSource>,
+    row_count: usize,
+    pass_count: usize,
+    unsupported_count: usize,
+    blocked_count: usize,
+    failed_count: usize,
+    iterations: usize,
+    retry_policy: RetryPolicySummary,
+    retried_row_count: usize,
+    max_retries_consumed: usize,
+    criteria_verdict: &'static str,
+    rows: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct MergedShardSource {
+    shard_index: usize,
+    manifest_path: String,
+    summary_path: String,
+    row_count: usize,
+}
+
 #[derive(Serialize)]
 struct CheckpointEnvelope<'a> {
     schema_version: &'static str,
     row: &'a RowResult,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct BundleManifest {
     schema_version: String,
     created_at: String,
     target_directory: String,
+    orchestrator_commit: Option<String>,
+    dependency_sha256: String,
     files: Vec<BundleFile>,
 }
 
@@ -715,7 +894,7 @@ enum BundleFileKind {
     NativeLibrary,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 struct BundleFile {
     kind: BundleFileKind,
     name: String,
@@ -754,7 +933,7 @@ impl RunBundle {
             .files
             .iter()
             .find(|file| file.name == name && kinds.contains(&file.kind))
-            .map(|file| PathBuf::from(&file.bundle_path))
+            .map(|file| self.root.join(&file.bundle_path))
             .ok_or_else(|| anyhow!("run bundle does not contain {name}"))
     }
 
@@ -898,6 +1077,9 @@ struct ScheduledTask<T> {
     slot: usize,
     resources: BTreeSet<ResourceClass>,
     post_completion_holds: BTreeMap<ResourceClass, Duration>,
+    lane: ScheduleLane,
+    scheduling_priority: usize,
+    estimated_cost_units: u32,
     payload: T,
 }
 
@@ -905,6 +1087,13 @@ impl<T> ScheduledTask<T> {
     fn uses(&self, class: ResourceClass) -> bool {
         self.resources.contains(&class)
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+struct ScheduleLane {
+    source: PhysicalTransport,
+    sink: PhysicalTransport,
+    role: RoleStyle,
 }
 
 struct SchedulerState<T> {
@@ -929,6 +1118,8 @@ enum SchedulerEventKind {
 struct ResourceHold {
     class: ResourceClass,
     slot: usize,
+    scheduling_priority: usize,
+    estimated_cost_units: u32,
     deadline: Instant,
 }
 
@@ -937,6 +1128,8 @@ struct SchedulerEvent {
     elapsed_us: u64,
     kind: SchedulerEventKind,
     slot: usize,
+    scheduling_priority: usize,
+    estimated_cost_units: u32,
     lola_sensitive: bool,
     queued: usize,
     active: usize,
@@ -953,6 +1146,9 @@ struct SchedulerSummary {
     started_at: Option<String>,
     completed_at: Option<String>,
     duration_us: u64,
+    policy: String,
+    estimated_cost_units: u64,
+    estimated_lola_cost_units: u64,
     configured_jobs: usize,
     effective_jobs: usize,
     configured_lola_jobs: usize,
@@ -970,6 +1166,8 @@ struct SchedulerSummary {
 #[derive(Clone, Debug, Default)]
 struct TaskDispatchTiming {
     slot: usize,
+    scheduling_priority: usize,
+    estimated_cost_units: u32,
     queue_wait: Duration,
     permit_wait: Option<Duration>,
     resource_permit_waits: BTreeMap<ResourceClass, Duration>,
@@ -1059,7 +1257,13 @@ fn main() -> Result<()> {
         mqtt_connect_probe(port)?;
         return Ok(());
     }
-    let succeeded = run(cli)?;
+    let succeeded = if !cli.merge_shard_roots.is_empty() {
+        merge_shards(&cli)?
+    } else if cli.prepare_shards {
+        prepare_shards(&cli)?
+    } else {
+        run(cli)?
+    };
     if !succeeded {
         std::process::exit(1);
     }
@@ -1107,8 +1311,23 @@ fn run(cli: Cli) -> Result<bool> {
 
     let mut selected_rows = select_rows(rows, &cli.only)?;
     selected_rows = filter_copy_minimized_sinks(selected_rows, cli.copy_minimized_sinks_only);
+    if cli.shard_count.is_some() {
+        selected_rows.sort_by_key(|row| row.ordinal);
+    }
     if selected_rows.is_empty() {
         return Err(anyhow!("no matrix rows matched the requested selection"));
+    }
+    let all_selected_rows = selected_rows.clone();
+    let shard_assignments = cli
+        .shard_count
+        .map(|count| assign_shards(&all_selected_rows, count))
+        .transpose()?;
+    if let (Some(assignments), Some(index)) = (&shard_assignments, cli.shard_index) {
+        selected_rows = selected_rows
+            .into_iter()
+            .zip(assignments)
+            .filter_map(|(row, assigned)| (*assigned == index).then_some(row))
+            .collect();
     }
     let plan = plan_rows(
         &selected_rows,
@@ -1134,27 +1353,50 @@ fn run(cli: Cli) -> Result<bool> {
     if let Some(criteria_path) = &cli.criteria {
         reject_private_mount_path("criteria", &fs::canonicalize(criteria_path)?)?;
     }
-    let target_root = resolve_target_directory(&repo_root)?;
-    reject_private_mount_path(
-        "Cargo target directory",
-        &canonicalize_allow_missing(&target_root)?,
-    )?;
-    let target_directory = target_root.join("debug");
+    let imported_bundle = cli
+        .run_bundle
+        .as_ref()
+        .map(|path| load_run_bundle(path))
+        .transpose()?;
+    let (target_root, target_directory) = if let Some(bundle) = &imported_bundle {
+        let target_directory = PathBuf::from(&bundle.manifest.target_directory);
+        let target_root = target_directory
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| target_directory.clone());
+        (target_root, target_directory)
+    } else {
+        let target_root = resolve_target_directory(&repo_root)?;
+        reject_private_mount_path(
+            "Cargo target directory",
+            &canonicalize_allow_missing(&target_root)?,
+        )?;
+        let target_directory = target_root.join("debug");
+        (target_root, target_directory)
+    };
     let artifacts_root = artifacts_root_requested;
     if let Some(parent) = artifacts_root.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("unable to create {}", parent.display()))?;
     }
     let _artifact_lock = ArtifactRootLock::acquire(&artifacts_root)?;
-    let _build_lock = BuildLock::acquire(&target_root)?;
-    let host_before = capture_host_snapshot(&[&artifacts_root, &target_directory]);
+    let _build_lock = imported_bundle
+        .is_none()
+        .then(|| BuildLock::acquire(&target_root))
+        .transpose()?;
+    let host_before = capture_host_snapshot(&[
+        &artifacts_root,
+        imported_bundle
+            .as_ref()
+            .map_or(&target_directory, |bundle| &bundle.root),
+    ]);
     let resource_monitor = ResourceMonitor::start();
 
     for (slot, result) in &plan.completed {
         write_row_checkpoint(&artifacts_root, *slot, result)?;
     }
 
-    let build = if cli.skip_build {
+    let build = if imported_bundle.is_some() || cli.skip_build {
         skipped_build_summary(&target_directory, &selected_rows)
     } else {
         build_required_binaries(
@@ -1165,8 +1407,62 @@ fn run(cli: Cli) -> Result<bool> {
         )?
     };
     cancellation.check()?;
-    let bundle = stage_run_bundle(&target_directory, &artifacts_root, &selected_rows)?;
+    let bundle = if let Some(bundle) = imported_bundle {
+        validate_current_orchestrator(&bundle)?;
+        bundle
+    } else {
+        stage_run_bundle(
+            &repo_root,
+            &target_directory,
+            &artifacts_root,
+            &selected_rows,
+        )?
+    };
     validate_run_bundle(&bundle)?;
+    let criteria = load_criteria(cli.criteria.as_deref())?;
+    let identities = execution_identities(
+        &repo_root,
+        &matrix_rows(),
+        &all_selected_rows,
+        &cli,
+        &criteria,
+        &bundle,
+    )?;
+    let shard = if let (Some(count), Some(index), Some(assignments)) =
+        (cli.shard_count, cli.shard_index, shard_assignments.as_ref())
+    {
+        let manifests = shard_manifests(
+            &all_selected_rows,
+            cli.iterations,
+            count,
+            assignments,
+            &identities,
+        );
+        let manifest = manifests
+            .get(index)
+            .ok_or_else(|| anyhow!("--shard-index={index} is outside --shard-count={count}"))?;
+        if let Some(path) = &cli.shard_manifest {
+            let supplied: ShardManifest = serde_json::from_slice(&fs::read(path)?)
+                .with_context(|| format!("invalid shard manifest {}", path.display()))?;
+            if supplied != *manifest {
+                return Err(anyhow!(
+                    "supplied shard manifest {} does not match deterministic shard {}",
+                    path.display(),
+                    index
+                ));
+            }
+        }
+        let path = artifacts_root.join("shard-manifest.json");
+        atomic_write_json(&path, manifest)?;
+        Some(ShardRunSummary {
+            shard_count: count,
+            shard_index: index,
+            manifest_path: path.display().to_string(),
+            manifest_sha256: sha256_file(&path)?,
+        })
+    } else {
+        None
+    };
     let user_namespace_probe = probe_user_namespaces(&bundle).map_err(|error| error.to_string());
 
     let MatrixPlan {
@@ -1175,7 +1471,7 @@ fn run(cli: Cli) -> Result<bool> {
         mut completed,
     } = plan;
     let runnable_count = runnable.len();
-    let preflight_snapshot = capture_host_snapshot(&[&artifacts_root, &target_directory]);
+    let preflight_snapshot = capture_host_snapshot(&[&artifacts_root, &bundle.root]);
     let preflight = run_preflight(
         &cli,
         runnable_count,
@@ -1198,6 +1494,7 @@ fn run(cli: Cli) -> Result<bool> {
     let resource_limits = configured_resource_limits(&cli);
     let scheduler = if runnable.is_empty() {
         SchedulerSummary {
+            policy: "deterministic_weighted_transport_role_lane_fair_v1".to_string(),
             configured_jobs: cli.jobs,
             effective_jobs: 0,
             configured_lola_jobs: cli.lola_jobs,
@@ -1234,9 +1531,10 @@ fn run(cli: Cli) -> Result<bool> {
         executed.summary
     };
     let results = canonical_order(slot_count, completed)?;
+    validate_run_bundle(&bundle).context("run bundle changed during matrix execution")?;
     let provenance = capture_provenance(&repo_root, &target_directory, &bundle)?;
     let resource_peaks = resource_monitor.finish();
-    let host_after = capture_host_snapshot(&[&artifacts_root, &target_directory]);
+    let host_after = capture_host_snapshot(&[&artifacts_root, &bundle.root]);
 
     let retried_row_count = results
         .iter()
@@ -1255,6 +1553,9 @@ fn run(cli: Cli) -> Result<bool> {
         completion_boundary: FINALIZATION_BOUNDARY,
         command,
         options: cli.clone(),
+        identities,
+        bundle: bundle.manifest.clone(),
+        shard: shard.clone(),
         provenance,
         host_resources: HostResourcesSummary {
             before: host_before,
@@ -1309,12 +1610,23 @@ fn run(cli: Cli) -> Result<bool> {
 
     let mut criteria_failed = false;
     let criteria_started = Instant::now();
-    if let Some(criteria_path) = &cli.criteria {
-        let criteria: MatrixCriteria = serde_json::from_slice(
-            &fs::read(criteria_path)
-                .with_context(|| format!("unable to read {}", criteria_path.display()))?,
-        )
-        .with_context(|| format!("invalid matrix criteria {}", criteria_path.display()))?;
+    if let Some(shard) = &shard {
+        let manifest: ShardManifest = serde_json::from_slice(&fs::read(&shard.manifest_path)?)?;
+        let errors = validate_shard_summary(&summary, &manifest);
+        criteria_failed = !errors.is_empty();
+        let result = CriteriaResult {
+            schema_version: SUMMARY_SCHEMA_VERSION,
+            verdict: if criteria_failed { "FAIL" } else { "PASS" },
+            criteria_path: shard.manifest_path.clone(),
+            errors,
+        };
+        let result_path = artifacts_root.join("shard-criteria-result.json");
+        atomic_write_json(&result_path, &result)?;
+        println!(
+            "STREAMER_TRANSPORT_TEST_CRITERIA_JSON={}",
+            result_path.display()
+        );
+    } else if let Some(criteria_path) = &cli.criteria {
         let errors = validate_criteria(&summary, &criteria);
         criteria_failed = !errors.is_empty();
         let result = CriteriaResult {
@@ -1358,6 +1670,748 @@ fn run(cli: Cli) -> Result<bool> {
     );
 
     Ok(summary.failed_count == 0 && summary.blocked_count == 0 && !criteria_failed)
+}
+
+fn prepare_shards(cli: &Cli) -> Result<bool> {
+    validate_cli(cli)?;
+    let repo_root = fs::canonicalize(repo_root()?)?;
+    let mut rows = select_rows(matrix_rows(), &cli.only)?;
+    rows = filter_copy_minimized_sinks(rows, cli.copy_minimized_sinks_only);
+    rows.sort_by_key(|row| row.ordinal);
+    if rows.is_empty() {
+        return Err(anyhow!("no matrix rows matched the requested selection"));
+    }
+    let shard_count = cli
+        .shard_count
+        .expect("validated shard preparation has a shard count");
+    let assignments = assign_shards(&rows, shard_count)?;
+    let artifacts_root = cli
+        .artifacts_root
+        .clone()
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root.join(path)
+            }
+        })
+        .unwrap_or_else(|| generated_artifacts_root(&repo_root, Utc::now(), std::process::id()));
+    reject_private_mount_path(
+        "artifact root",
+        &canonicalize_allow_missing(&artifacts_root)?,
+    )?;
+    let target_root = resolve_target_directory(&repo_root)?;
+    reject_private_mount_path(
+        "Cargo target directory",
+        &canonicalize_allow_missing(&target_root)?,
+    )?;
+    let target_directory = target_root.join("debug");
+    if let Some(parent) = artifacts_root.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let _artifact_lock = ArtifactRootLock::acquire(&artifacts_root)?;
+    let _build_lock = BuildLock::acquire(&target_root)?;
+    let build = build_required_binaries(
+        &repo_root,
+        &target_directory,
+        &rows,
+        cli.use_local_sibling_patches,
+    )?;
+    atomic_write_json(&artifacts_root.join("build.json"), &build)?;
+    let bundle = stage_run_bundle(&repo_root, &target_directory, &artifacts_root, &rows)?;
+    let criteria = load_criteria(cli.criteria.as_deref())?;
+    let identities =
+        execution_identities(&repo_root, &matrix_rows(), &rows, cli, &criteria, &bundle)?;
+    let manifests = shard_manifests(
+        &rows,
+        cli.iterations,
+        shard_count,
+        &assignments,
+        &identities,
+    );
+    let manifest_root = artifacts_root.join("shard-manifests");
+    for manifest in &manifests {
+        let path = manifest_root.join(format!(
+            "shard-{:05}-of-{:05}.json",
+            manifest.shard_index, manifest.shard_count
+        ));
+        atomic_write_json(&path, manifest)?;
+        println!("STREAMER_TRANSPORT_TEST_SHARD_MANIFEST={}", path.display());
+    }
+    println!(
+        "STREAMER_TRANSPORT_TEST_RUN_BUNDLE={}",
+        bundle.root.display()
+    );
+    Ok(true)
+}
+
+fn merge_shards(cli: &Cli) -> Result<bool> {
+    validate_cli(cli)?;
+    let criteria = load_criteria(cli.criteria.as_deref())?;
+    let criteria_sha256 = sha256_serializable(&criteria)?;
+    let canonical_matrix = matrix_rows();
+    let canonical_matrix_sha256 = matrix_identity_sha256(&canonical_matrix)?;
+    let mut reference_manifest: Option<ShardManifest> = None;
+    let mut reference_retry_policy: Option<RetryPolicySummary> = None;
+    let mut reference_iterations = None;
+    let mut seen_shards = BTreeSet::new();
+    let mut expected_rows = BTreeMap::new();
+    let mut actual_rows = BTreeMap::new();
+    let mut sources = Vec::new();
+
+    for root in &cli.merge_shard_roots {
+        let manifest_path = root.join("shard-manifest.json");
+        let summary_path = root.join("matrix-summary.json");
+        let manifest: ShardManifest = serde_json::from_slice(
+            &fs::read(&manifest_path)
+                .with_context(|| format!("unable to read {}", manifest_path.display()))?,
+        )
+        .with_context(|| format!("invalid shard manifest {}", manifest_path.display()))?;
+        if manifest.schema_version != SHARD_MANIFEST_SCHEMA_VERSION {
+            return Err(anyhow!(
+                "incompatible shard manifest schema {} in {}",
+                manifest.schema_version,
+                manifest_path.display()
+            ));
+        }
+        let summary: MergeSummaryInput = serde_json::from_slice(
+            &fs::read(&summary_path)
+                .with_context(|| format!("unable to read {}", summary_path.display()))?,
+        )
+        .with_context(|| format!("invalid shard summary {}", summary_path.display()))?;
+        if summary.schema_version != SUMMARY_SCHEMA_VERSION {
+            return Err(anyhow!(
+                "incompatible shard summary schema {} in {}",
+                summary.schema_version,
+                summary_path.display()
+            ));
+        }
+        if !summary.build.skipped
+            || summary.build.started_at.is_some()
+            || summary.build.completed_at.is_some()
+            || summary.build.duration_us != 0
+            || !summary.build.phases.is_empty()
+        {
+            return Err(anyhow!(
+                "shard {} was not executed with a zero-build imported bundle",
+                manifest.shard_index
+            ));
+        }
+        let shard = summary
+            .shard
+            .as_ref()
+            .ok_or_else(|| anyhow!("summary {} is not a shard summary", summary_path.display()))?;
+        if summary.options.prepare_shards
+            || summary.options.shard_count != Some(manifest.shard_count)
+            || summary.options.shard_index != Some(manifest.shard_index)
+            || summary.options.run_bundle.is_none()
+            || summary.options.skip_build
+        {
+            return Err(anyhow!(
+                "shard {} summary contains incompatible execution options",
+                manifest.shard_index
+            ));
+        }
+        if shard.shard_count != manifest.shard_count || shard.shard_index != manifest.shard_index {
+            return Err(anyhow!(
+                "summary and manifest shard identities differ in {}",
+                root.display()
+            ));
+        }
+        if shard.manifest_sha256 != sha256_file(&manifest_path)? {
+            return Err(anyhow!(
+                "shard manifest hash mismatch in {}",
+                root.display()
+            ));
+        }
+        ensure_identity_match(&manifest.identities, &summary.identities)?;
+        if summary.identities.matrix_sha256 != canonical_matrix_sha256 {
+            return Err(anyhow!("mismatched matrix identity"));
+        }
+        if manifest.identities.criteria_sha256 != criteria_sha256 {
+            return Err(anyhow!("mismatched criteria identity"));
+        }
+        if summary.iterations != summary.options.iterations {
+            return Err(anyhow!(
+                "shard {} summary iteration count differs from its options",
+                manifest.shard_index
+            ));
+        }
+        if summary.identities.options_sha256 != normalized_options_sha256(&summary.options)? {
+            return Err(anyhow!("mismatched options identity"));
+        }
+        validate_summary_bundle_identity(
+            &summary.identities,
+            &summary.bundle,
+            &summary.provenance,
+        )?;
+        validate_canonical_shard_manifest(&manifest, summary.iterations, &canonical_matrix)?;
+        if let Some(reference) = &reference_manifest {
+            ensure_identity_match(&reference.identities, &manifest.identities)?;
+            if reference.shard_count != manifest.shard_count
+                || reference.selection_row_count != manifest.selection_row_count
+                || reference.selection_rows != manifest.selection_rows
+            {
+                return Err(anyhow!("mismatched shard-set selection identity"));
+            }
+        } else {
+            reference_manifest = Some(manifest.clone());
+        }
+        if !seen_shards.insert(manifest.shard_index) {
+            return Err(anyhow!("duplicate shard index {}", manifest.shard_index));
+        }
+        if manifest.shard_index >= manifest.shard_count {
+            return Err(anyhow!(
+                "invalid shard index {} for count {}",
+                manifest.shard_index,
+                manifest.shard_count
+            ));
+        }
+        if counts_for_expected_rows(&manifest.expected_rows) != manifest.expected_counts
+            || manifest.expected_cost_units
+                != manifest
+                    .expected_rows
+                    .iter()
+                    .map(|row| u64::from(row.estimated_cost_units))
+                    .sum::<u64>()
+        {
+            return Err(anyhow!(
+                "shard {} manifest expected counts/cost are inconsistent",
+                manifest.shard_index
+            ));
+        }
+        if summary.row_count != summary.rows.len()
+            || summary.row_count != manifest.expected_row_count
+            || (
+                summary.pass_count,
+                summary.unsupported_count,
+                summary.blocked_count,
+                summary.failed_count,
+            ) != (
+                manifest.expected_counts.pass,
+                manifest.expected_counts.unsupported,
+                manifest.expected_counts.blocked,
+                manifest.expected_counts.failed,
+            )
+        {
+            return Err(anyhow!(
+                "shard {} declared counts do not match its manifest",
+                manifest.shard_index
+            ));
+        }
+        if summary.retried_row_count != 0 || summary.max_retries_consumed != 0 {
+            return Err(anyhow!("shard {} consumed retries", manifest.shard_index));
+        }
+        if let Some(policy) = &reference_retry_policy {
+            if *policy != summary.retry_policy {
+                return Err(anyhow!("mismatched retry policy"));
+            }
+        } else {
+            reference_retry_policy = Some(summary.retry_policy.clone());
+        }
+        if reference_iterations.is_some_and(|iterations| iterations != summary.iterations) {
+            return Err(anyhow!("mismatched iteration count"));
+        }
+        reference_iterations = Some(summary.iterations);
+        let expected_for_shard: BTreeMap<_, _> = manifest
+            .expected_rows
+            .iter()
+            .map(|row| ((row.row_id.clone(), row.iteration), row))
+            .collect();
+        if expected_for_shard.len() != manifest.expected_rows.len() {
+            return Err(anyhow!(
+                "duplicate expected row in shard {} manifest",
+                manifest.shard_index
+            ));
+        }
+        for expected in &manifest.expected_rows {
+            let key = (expected.row_id.clone(), expected.iteration);
+            if expected_rows
+                .insert(key.clone(), expected.clone())
+                .is_some()
+            {
+                return Err(anyhow!(
+                    "duplicate row {} iteration {} across shard manifests",
+                    key.0,
+                    key.1
+                ));
+            }
+        }
+        for (position, value) in summary.rows.into_iter().enumerate() {
+            let row: MergeRowInput = serde_json::from_value(value.clone())?;
+            let key = (row.row_id.clone(), row.iteration);
+            if actual_rows.contains_key(&key) {
+                return Err(anyhow!(
+                    "duplicate row {} iteration {} across shard summaries",
+                    key.0,
+                    key.1
+                ));
+            }
+            let ordered_expected = manifest.expected_rows.get(position).ok_or_else(|| {
+                anyhow!(
+                    "unexpected row {} iteration {} in shard {}",
+                    row.row_id,
+                    row.iteration,
+                    manifest.shard_index
+                )
+            })?;
+            if ordered_expected.row_id != row.row_id || ordered_expected.iteration != row.iteration
+            {
+                return Err(anyhow!(
+                    "shard {} rows are not in canonical shard order at position {}",
+                    manifest.shard_index,
+                    position
+                ));
+            }
+            let expected = expected_for_shard.get(&key).ok_or_else(|| {
+                anyhow!(
+                    "unexpected row {} iteration {} in shard {}",
+                    row.row_id,
+                    row.iteration,
+                    manifest.shard_index
+                )
+            })?;
+            if row.classification != expected.classification {
+                return Err(anyhow!(
+                    "row {} iteration {} classification differs from its manifest",
+                    row.row_id,
+                    row.iteration
+                ));
+            }
+            if row.estimated_cost_units != expected.estimated_cost_units {
+                return Err(anyhow!(
+                    "row {} iteration {} cost differs from its manifest",
+                    row.row_id,
+                    row.iteration
+                ));
+            }
+            if row.retries_consumed != 0 {
+                return Err(anyhow!(
+                    "row {} iteration {} consumed retries",
+                    row.row_id,
+                    row.iteration
+                ));
+            }
+            let canonical = canonical_matrix
+                .iter()
+                .find(|canonical| canonical.id == row.row_id)
+                .ok_or_else(|| anyhow!("row {} is not in the canonical matrix", row.row_id))?;
+            validate_merged_row(&row, canonical)?;
+            if matches!(
+                row.classification,
+                RowClassification::Failed | RowClassification::Blocked
+            ) {
+                return Err(anyhow!(
+                    "row {} iteration {} is failed or blocked",
+                    row.row_id,
+                    row.iteration
+                ));
+            }
+            if actual_rows.insert(key.clone(), value).is_some() {
+                return Err(anyhow!(
+                    "duplicate row {} iteration {} across shard summaries",
+                    key.0,
+                    key.1
+                ));
+            }
+        }
+        sources.push(MergedShardSource {
+            shard_index: manifest.shard_index,
+            manifest_path: manifest_path.display().to_string(),
+            summary_path: summary_path.display().to_string(),
+            row_count: manifest.expected_row_count,
+        });
+    }
+
+    let reference = reference_manifest.ok_or_else(|| anyhow!("no shard inputs supplied"))?;
+    let expected_indices: BTreeSet<_> = (0..reference.shard_count).collect();
+    if seen_shards != expected_indices {
+        return Err(anyhow!(
+            "missing shards: expected {:?}, received {:?}",
+            expected_indices,
+            seen_shards
+        ));
+    }
+    let selection_keys: Vec<_> = reference
+        .selection_rows
+        .iter()
+        .map(|row| (row.row_id.clone(), row.iteration))
+        .collect();
+    if selection_keys.len() != reference.selection_row_count
+        || selection_keys.iter().collect::<BTreeSet<_>>().len() != selection_keys.len()
+    {
+        return Err(anyhow!(
+            "selection manifest contains duplicate or invalid rows"
+        ));
+    }
+    let expected_keys: BTreeSet<_> = expected_rows.keys().cloned().collect();
+    let selection_key_set: BTreeSet<_> = selection_keys.iter().cloned().collect();
+    if expected_keys != selection_key_set {
+        return Err(anyhow!("missing rows across shard manifests"));
+    }
+    for expected in expected_rows.values() {
+        let selection = reference
+            .selection_rows
+            .iter()
+            .find(|row| row.row_id == expected.row_id && row.iteration == expected.iteration)
+            .expect("validated selection key exists");
+        if selection != expected {
+            return Err(anyhow!(
+                "shard assignment for {} iteration {} differs from the canonical selection",
+                expected.row_id,
+                expected.iteration
+            ));
+        }
+    }
+    let actual_keys: BTreeSet<_> = actual_rows.keys().cloned().collect();
+    if actual_keys != selection_key_set {
+        return Err(anyhow!("missing rows across shard summaries"));
+    }
+    let rows: Vec<_> = selection_keys
+        .iter()
+        .map(|key| {
+            actual_rows
+                .remove(key)
+                .expect("validated canonical row is present")
+        })
+        .collect();
+    let parsed_rows: Vec<MergeRowInput> = rows
+        .iter()
+        .cloned()
+        .map(serde_json::from_value)
+        .collect::<std::result::Result<_, _>>()?;
+    let counts = counts_for_merged_rows(&parsed_rows);
+    let retry_policy = reference_retry_policy.expect("a shard supplied a retry policy");
+    let criteria_errors = validate_criteria_subject(
+        counts,
+        rows.len(),
+        rows.len(),
+        parsed_rows
+            .iter()
+            .map(|row| (row.classification, row.row_id.as_str(), row.reason.as_str())),
+        &retry_policy,
+        0,
+        0,
+        &criteria,
+        rows.len()
+            == criteria.expected.pass
+                + criteria.expected.unsupported
+                + criteria.expected.blocked
+                + criteria.expected.failed,
+    );
+    if !criteria_errors.is_empty() {
+        return Err(anyhow!(
+            "merged criteria validation failed: {}",
+            criteria_errors.join("; ")
+        ));
+    }
+    sources.sort_by_key(|source| source.shard_index);
+    let summary = MergedMatrixSummary {
+        schema_version: MERGED_SUMMARY_SCHEMA_VERSION,
+        source_summary_schema_version: SUMMARY_SCHEMA_VERSION,
+        generated_at: Utc::now().to_rfc3339(),
+        identities: reference.identities,
+        shard_count: reference.shard_count,
+        source_shards: sources,
+        row_count: rows.len(),
+        pass_count: counts.pass,
+        unsupported_count: counts.unsupported,
+        blocked_count: counts.blocked,
+        failed_count: counts.failed,
+        iterations: reference_iterations.expect("a shard supplied an iteration count"),
+        retry_policy,
+        retried_row_count: 0,
+        max_retries_consumed: 0,
+        criteria_verdict: "PASS",
+        rows,
+    };
+    let output = cli
+        .merge_output
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("merged-matrix-summary.json"));
+    atomic_write_json(&output, &summary)?;
+    println!(
+        "STREAMER_TRANSPORT_TEST_MERGED_SUMMARY_JSON={}",
+        output.display()
+    );
+    println!(
+        "STREAMER_TRANSPORT_TEST_COUNTS pass={} unsupported={} blocked={} failed={} retried_rows=0 max_retries_consumed=0",
+        summary.pass_count,
+        summary.unsupported_count,
+        summary.blocked_count,
+        summary.failed_count
+    );
+    Ok(true)
+}
+
+fn ensure_identity_match(
+    expected: &ExecutionIdentities,
+    actual: &ExecutionIdentities,
+) -> Result<()> {
+    for (label, expected, actual) in [
+        ("matrix", &expected.matrix_sha256, &actual.matrix_sha256),
+        (
+            "selection",
+            &expected.selection_sha256,
+            &actual.selection_sha256,
+        ),
+        (
+            "criteria",
+            &expected.criteria_sha256,
+            &actual.criteria_sha256,
+        ),
+        (
+            "orchestrator",
+            &expected.orchestrator_sha256,
+            &actual.orchestrator_sha256,
+        ),
+        (
+            "dependencies",
+            &expected.dependency_sha256,
+            &actual.dependency_sha256,
+        ),
+        ("bundle", &expected.bundle_sha256, &actual.bundle_sha256),
+        (
+            "binaries",
+            &expected.binaries_sha256,
+            &actual.binaries_sha256,
+        ),
+        (
+            "native libraries",
+            &expected.native_libraries_sha256,
+            &actual.native_libraries_sha256,
+        ),
+        ("options", &expected.options_sha256, &actual.options_sha256),
+    ] {
+        if expected != actual {
+            return Err(anyhow!("mismatched {label} identity"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_summary_bundle_identity(
+    identities: &ExecutionIdentities,
+    bundle: &BundleManifest,
+    provenance: &MergeProvenanceInput,
+) -> Result<()> {
+    validate_bundle_manifest_structure(bundle)?;
+    let orchestrator_sha256 = bundle_orchestrator_sha256(bundle)?;
+    let bundle_sha256 = bundle_files_sha256(bundle, |_| true)?;
+    let binaries_sha256 =
+        bundle_files_sha256(bundle, |kind| kind != BundleFileKind::NativeLibrary)?;
+    let native_libraries_sha256 =
+        bundle_files_sha256(bundle, |kind| kind == BundleFileKind::NativeLibrary)?;
+    let expected = [
+        (
+            "dependencies",
+            identities.dependency_sha256.as_str(),
+            bundle.dependency_sha256.as_str(),
+        ),
+        (
+            "orchestrator",
+            identities.orchestrator_sha256.as_str(),
+            orchestrator_sha256.as_str(),
+        ),
+        (
+            "bundle",
+            identities.bundle_sha256.as_str(),
+            bundle_sha256.as_str(),
+        ),
+        (
+            "binaries",
+            identities.binaries_sha256.as_str(),
+            binaries_sha256.as_str(),
+        ),
+        (
+            "native libraries",
+            identities.native_libraries_sha256.as_str(),
+            native_libraries_sha256.as_str(),
+        ),
+    ];
+    for (label, identity, actual) in expected {
+        if identity != actual {
+            return Err(anyhow!("mismatched {label} identity"));
+        }
+    }
+    validate_provenance_files(
+        "binary",
+        bundle
+            .files
+            .iter()
+            .filter(|file| file.kind != BundleFileKind::NativeLibrary),
+        &provenance.binaries,
+    )?;
+    validate_provenance_files(
+        "native library",
+        bundle
+            .files
+            .iter()
+            .filter(|file| file.kind == BundleFileKind::NativeLibrary),
+        &provenance.native_libraries,
+    )?;
+    Ok(())
+}
+
+fn validate_provenance_files<'a, I>(
+    label: &str,
+    expected: I,
+    actual: &[FileProvenance],
+) -> Result<()>
+where
+    I: Iterator<Item = &'a BundleFile>,
+{
+    let expected: BTreeMap<_, _> = expected.map(|file| (file.name.as_str(), file)).collect();
+    let actual_by_name: BTreeMap<_, _> = actual
+        .iter()
+        .map(|file| (file.name.as_str(), file))
+        .collect();
+    if actual_by_name.len() != actual.len()
+        || actual_by_name.keys().copied().collect::<BTreeSet<_>>()
+            != expected.keys().copied().collect::<BTreeSet<_>>()
+    {
+        return Err(anyhow!("{label} provenance file set differs from bundle"));
+    }
+    for (name, expected_file) in expected {
+        let actual_file = actual_by_name[name];
+        if !actual_file.exists
+            || actual_file.size_bytes != Some(expected_file.size_bytes)
+            || actual_file.sha256.as_deref() != Some(expected_file.sha256.as_str())
+            || actual_file.observation_error.is_some()
+        {
+            return Err(anyhow!("{label} provenance mismatch for {name}"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_canonical_shard_manifest(
+    manifest: &ShardManifest,
+    iterations: usize,
+    matrix: &[MatrixRow],
+) -> Result<()> {
+    if iterations == 0 || manifest.shard_count == 0 || manifest.shard_index >= manifest.shard_count
+    {
+        return Err(anyhow!("invalid shard count, index, or iteration count"));
+    }
+    let matrix_by_id: BTreeMap<_, _> = matrix.iter().map(|row| (row.id.as_str(), row)).collect();
+    let first_iteration: Vec<_> = manifest
+        .selection_rows
+        .iter()
+        .filter(|row| row.iteration == 1)
+        .collect();
+    if first_iteration.is_empty() {
+        return Err(anyhow!("shard selection contains no first iteration"));
+    }
+    let mut seen = BTreeSet::new();
+    let mut selected = Vec::with_capacity(first_iteration.len());
+    for expected in first_iteration {
+        let row = matrix_by_id
+            .get(expected.row_id.as_str())
+            .ok_or_else(|| anyhow!("unknown selected row {}", expected.row_id))?;
+        if !seen.insert(expected.row_id.as_str()) {
+            return Err(anyhow!("duplicate selected row {}", expected.row_id));
+        }
+        selected.push((*row).clone());
+    }
+    if !selected
+        .windows(2)
+        .all(|pair| pair[0].ordinal < pair[1].ordinal)
+    {
+        return Err(anyhow!("shard selection is not in canonical matrix order"));
+    }
+    if manifest.identities.selection_sha256 != selection_identity_sha256(&selected, iterations)? {
+        return Err(anyhow!("mismatched selection identity"));
+    }
+    let assignments = assign_shards(&selected, manifest.shard_count)?;
+    let expected = shard_manifests(
+        &selected,
+        iterations,
+        manifest.shard_count,
+        &assignments,
+        &manifest.identities,
+    );
+    if expected.get(manifest.shard_index) != Some(manifest) {
+        return Err(anyhow!(
+            "shard {} manifest differs from deterministic canonical assignment (duplicate, missing, cost, or assignment drift)",
+            manifest.shard_index
+        ));
+    }
+    Ok(())
+}
+
+fn validate_merged_row(row: &MergeRowInput, canonical: &MatrixRow) -> Result<()> {
+    if row.source_profile != canonical.source.id
+        || row.sink_profile != canonical.sink.id
+        || row.source_transport != canonical.source.physical
+        || row.sink_transport != canonical.sink.physical
+        || row.source_endpoint_kind != canonical.source.kind
+        || row.sink_endpoint_kind != canonical.sink.kind
+        || row.role != canonical.role
+        || row.encoding != canonical.encoding
+    {
+        return Err(anyhow!(
+            "row {} metadata differs from the canonical matrix",
+            row.row_id
+        ));
+    }
+    if row.attempts_used != row.attempts.len() {
+        return Err(anyhow!("row {} attempt count is inconsistent", row.row_id));
+    }
+    match row.classification {
+        RowClassification::Pass => {
+            if row.attempts_used != 1 || row.failure_phase.is_some() {
+                return Err(anyhow!(
+                    "row {} has invalid pass attempt history",
+                    row.row_id
+                ));
+            }
+            let attempt = &row.attempts[0];
+            if attempt.attempt_number != 1
+                || attempt.is_retry
+                || attempt.retry_reason.is_some()
+                || attempt.retry_scheduled
+                || attempt.classification != RowClassification::Pass
+                || attempt.failure_phase.is_some()
+            {
+                return Err(anyhow!(
+                    "row {} contains retry or failure evidence",
+                    row.row_id
+                ));
+            }
+        }
+        RowClassification::Unsupported => {
+            let expected = support_status(canonical);
+            if row.attempts_used != 0
+                || !row.attempts.is_empty()
+                || row.failure_phase.is_some()
+                || row.reason != expected.reason
+            {
+                return Err(anyhow!(
+                    "row {} has invalid unsupported evidence",
+                    row.row_id
+                ));
+            }
+        }
+        RowClassification::Blocked | RowClassification::Failed => {
+            return Err(anyhow!("row {} is failed or blocked", row.row_id));
+        }
+    }
+    Ok(())
+}
+
+fn counts_for_merged_rows(rows: &[MergeRowInput]) -> ExpectedCounts {
+    let count = |classification| {
+        rows.iter()
+            .filter(|row| row.classification == classification)
+            .count()
+    };
+    ExpectedCounts {
+        pass: count(RowClassification::Pass),
+        unsupported: count(RowClassification::Unsupported),
+        blocked: count(RowClassification::Blocked),
+        failed: count(RowClassification::Failed),
+    }
 }
 
 fn install_signal_handlers(cancellation: &Cancellation) -> Result<()> {
@@ -1416,6 +2470,77 @@ fn validate_cli(cli: &Cli) -> Result<()> {
         if !seen.insert(id) {
             return Err(anyhow!("duplicate --only matrix row id {id}"));
         }
+    }
+    if cli.shard_count == Some(0) {
+        return Err(anyhow!("--shard-count must be greater than zero"));
+    }
+    if let (Some(count), Some(index)) = (cli.shard_count, cli.shard_index) {
+        if index >= count {
+            return Err(anyhow!(
+                "--shard-index={index} must be less than --shard-count={count}"
+            ));
+        }
+    }
+    if cli.prepare_shards {
+        if cli.shard_count.is_none() || cli.shard_index.is_some() {
+            return Err(anyhow!(
+                "--prepare-shards requires --shard-count and forbids --shard-index"
+            ));
+        }
+        if cli.skip_build || cli.run_bundle.is_some() || cli.shard_manifest.is_some() {
+            return Err(anyhow!(
+                "--prepare-shards builds and stages once; it forbids --skip-build, --run-bundle, and --shard-manifest"
+            ));
+        }
+        if cli.list || cli.generate_criteria.is_some() || cli.max_runnable_rows.is_some() {
+            return Err(anyhow!(
+                "--prepare-shards forbids --list, --generate-criteria, and --max-runnable-rows"
+            ));
+        }
+    } else if cli.shard_count.is_some() || cli.shard_index.is_some() {
+        if cli.shard_count.is_none() || cli.shard_index.is_none() {
+            return Err(anyhow!(
+                "shard execution requires both --shard-count and --shard-index"
+            ));
+        }
+        if cli.run_bundle.is_none() {
+            return Err(anyhow!(
+                "shard execution requires --run-bundle from a completed --prepare-shards command"
+            ));
+        }
+        if cli.skip_build
+            || cli.max_runnable_rows.is_some()
+            || cli.list
+            || cli.generate_criteria.is_some()
+        {
+            return Err(anyhow!(
+                "shard execution forbids --skip-build, --max-runnable-rows, --list, and --generate-criteria"
+            ));
+        }
+    } else if cli.run_bundle.is_some() || cli.shard_manifest.is_some() {
+        return Err(anyhow!(
+            "--run-bundle and --shard-manifest are valid only for shard execution"
+        ));
+    }
+    if cli.merge_shard_roots.is_empty() && cli.merge_output.is_some() {
+        return Err(anyhow!(
+            "--merge-output requires at least one --merge-shard-root"
+        ));
+    }
+    if !cli.merge_shard_roots.is_empty()
+        && (cli.prepare_shards
+            || cli.shard_count.is_some()
+            || cli.shard_index.is_some()
+            || cli.run_bundle.is_some()
+            || cli.shard_manifest.is_some()
+            || cli.skip_build
+            || cli.list
+            || cli.generate_criteria.is_some()
+            || !cli.only.is_empty())
+    {
+        return Err(anyhow!(
+            "merge mode cannot be combined with build, selection, listing, or shard execution options"
+        ));
     }
     Ok(())
 }
@@ -1720,6 +2845,220 @@ fn available_task_capacity(host: &HostSnapshot) -> Option<u64> {
     }
 }
 
+// Units are rounded from the accepted R11-XI 4/2 endpoint and role class means.
+// Endpoint weights are half of the observed decisecond-scale class cost so two
+// endpoints reconstruct the row estimate; RPC's measured delta adds four units.
+fn transport_cost_units(transport: PhysicalTransport) -> u32 {
+    match transport {
+        PhysicalTransport::Dds => 12,
+        PhysicalTransport::Iceoryx2 => 14,
+        PhysicalTransport::Mqtt5 => 19,
+        PhysicalTransport::Zenoh => 20,
+        PhysicalTransport::Lola => 21,
+        PhysicalTransport::Vsomeip => 22,
+    }
+}
+
+fn row_estimated_cost_units(row: &MatrixRow) -> u32 {
+    if support_status(row).classification != RowClassification::Pass {
+        return 0;
+    }
+    let role = match row.role {
+        RoleStyle::PublisherSubscriber | RoleStyle::NotifierNotifyee => 0,
+        RoleStyle::ClientServerRpc => 4,
+    };
+    transport_cost_units(row.source.physical)
+        .saturating_add(transport_cost_units(row.sink.physical))
+        .saturating_add(role)
+}
+
+fn schedule_lane(row: &MatrixRow) -> ScheduleLane {
+    ScheduleLane {
+        source: row.source.physical,
+        sink: row.sink.physical,
+        role: row.role,
+    }
+}
+
+fn lanes_overlap(left: ScheduleLane, right: ScheduleLane) -> bool {
+    [left.source, left.sink]
+        .into_iter()
+        .any(|transport| transport == right.source || transport == right.sink)
+}
+
+fn resource_aware_order<T>(tasks: Vec<ScheduledTask<T>>) -> Vec<ScheduledTask<T>> {
+    let mut lanes: BTreeMap<ScheduleLane, VecDeque<ScheduledTask<T>>> = BTreeMap::new();
+    let mut totals = BTreeMap::new();
+    for task in tasks {
+        *totals.entry(task.lane).or_insert(0_u64) += u64::from(task.estimated_cost_units);
+        lanes.entry(task.lane).or_default().push_back(task);
+    }
+    let mut served: BTreeMap<ScheduleLane, u64> =
+        lanes.keys().copied().map(|lane| (lane, 0)).collect();
+    let task_count = lanes.values().map(VecDeque::len).sum();
+    let mut ordered = Vec::with_capacity(task_count);
+    let mut previous = None;
+
+    while ordered.len() < task_count {
+        let lane = lanes
+            .iter()
+            .filter(|(_, queue)| !queue.is_empty())
+            .map(|(lane, _)| *lane)
+            .min_by(|left, right| {
+                let left_fraction = served[left].saturating_mul(totals[right]);
+                let right_fraction = served[right].saturating_mul(totals[left]);
+                left_fraction
+                    .cmp(&right_fraction)
+                    .then_with(|| {
+                        let burst = |lane| previous.is_some_and(|last| lanes_overlap(last, lane));
+                        burst(*left).cmp(&burst(*right))
+                    })
+                    .then_with(|| left.cmp(right))
+            })
+            .expect("a scheduling lane exists while work remains");
+        let mut task = lanes
+            .get_mut(&lane)
+            .expect("selected scheduling lane exists")
+            .pop_front()
+            .expect("selected scheduling lane is non-empty");
+        task.scheduling_priority = ordered.len();
+        served
+            .entry(lane)
+            .and_modify(|cost| *cost += u64::from(task.estimated_cost_units));
+        previous = Some(lane);
+        ordered.push(task);
+    }
+    ordered
+}
+
+#[derive(Clone, Copy, Default)]
+struct ShardLoad {
+    rows: usize,
+    cost: u64,
+    lola_cost: u64,
+}
+
+fn assign_shards(rows: &[MatrixRow], shard_count: usize) -> Result<Vec<usize>> {
+    if shard_count == 0 || shard_count > rows.len() {
+        return Err(anyhow!(
+            "--shard-count={shard_count} must be between 1 and the {} selected canonical rows",
+            rows.len()
+        ));
+    }
+    let mut order: Vec<_> = (0..rows.len()).collect();
+    order.sort_by(|left, right| {
+        let left_row = &rows[*left];
+        let right_row = &rows[*right];
+        right_row
+            .uses_lola()
+            .cmp(&left_row.uses_lola())
+            .then_with(|| {
+                row_estimated_cost_units(right_row).cmp(&row_estimated_cost_units(left_row))
+            })
+            .then_with(|| left_row.ordinal.cmp(&right_row.ordinal))
+    });
+
+    let mut assignments = vec![usize::MAX; rows.len()];
+    let mut loads = vec![ShardLoad::default(); shard_count];
+    for row_index in order {
+        let row = &rows[row_index];
+        let cost = u64::from(row_estimated_cost_units(row));
+        let shard = (0..shard_count)
+            .min_by_key(|index| {
+                let load = loads[*index];
+                if cost == 0 {
+                    (load.rows as u64, load.cost, load.lola_cost, *index as u64)
+                } else if row.uses_lola() {
+                    (load.lola_cost, load.cost, load.rows as u64, *index as u64)
+                } else {
+                    (load.cost, load.rows as u64, load.lola_cost, *index as u64)
+                }
+            })
+            .expect("positive shard count has a destination");
+        assignments[row_index] = shard;
+        loads[shard].rows += 1;
+        loads[shard].cost = loads[shard].cost.saturating_add(cost);
+        if row.uses_lola() {
+            loads[shard].lola_cost = loads[shard].lola_cost.saturating_add(cost);
+        }
+    }
+    Ok(assignments)
+}
+
+fn shard_manifests(
+    rows: &[MatrixRow],
+    iterations: usize,
+    shard_count: usize,
+    assignments: &[usize],
+    identities: &ExecutionIdentities,
+) -> Vec<ShardManifest> {
+    let mut selection_rows = Vec::with_capacity(rows.len().saturating_mul(iterations));
+    let mut expected_by_shard = vec![Vec::new(); shard_count];
+    let mut canonical_slot = 0;
+    for iteration in 1..=iterations {
+        for (row, shard) in rows.iter().zip(assignments) {
+            let expected = ExpectedShardRow {
+                canonical_slot,
+                row_id: row.id.clone(),
+                iteration,
+                classification: support_status(row).classification,
+                estimated_cost_units: row_estimated_cost_units(row),
+            };
+            selection_rows.push(expected.clone());
+            expected_by_shard[*shard].push(expected);
+            canonical_slot += 1;
+        }
+    }
+
+    expected_by_shard
+        .into_iter()
+        .enumerate()
+        .map(|(shard_index, expected_rows)| {
+            let expected_counts = counts_for_expected_rows(&expected_rows);
+            let expected_cost_units = expected_rows
+                .iter()
+                .map(|row| u64::from(row.estimated_cost_units))
+                .sum();
+            let expected_lola_cost_units = expected_rows
+                .iter()
+                .filter(|expected| {
+                    rows.iter()
+                        .find(|row| row.id == expected.row_id)
+                        .is_some_and(MatrixRow::uses_lola)
+                })
+                .map(|row| u64::from(row.estimated_cost_units))
+                .sum();
+            ShardManifest {
+                schema_version: SHARD_MANIFEST_SCHEMA_VERSION.to_string(),
+                shard_count,
+                shard_index,
+                identities: identities.clone(),
+                selection_row_count: selection_rows.len(),
+                selection_rows: selection_rows.clone(),
+                expected_row_count: expected_rows.len(),
+                expected_counts,
+                expected_cost_units,
+                expected_lola_cost_units,
+                expected_rows,
+            }
+        })
+        .collect()
+}
+
+fn counts_for_expected_rows(rows: &[ExpectedShardRow]) -> ExpectedCounts {
+    let count = |classification| {
+        rows.iter()
+            .filter(|row| row.classification == classification)
+            .count()
+    };
+    ExpectedCounts {
+        pass: count(RowClassification::Pass),
+        unsupported: count(RowClassification::Unsupported),
+        blocked: count(RowClassification::Blocked),
+        failed: count(RowClassification::Failed),
+    }
+}
+
 fn plan_rows(
     rows: &[MatrixRow],
     iterations: usize,
@@ -1774,6 +3113,9 @@ fn plan_rows(
                             .into_iter()
                             .filter(|(_, duration)| !duration.is_zero())
                             .collect(),
+                        lane: schedule_lane(row),
+                        scheduling_priority: 0,
+                        estimated_cost_units: row_estimated_cost_units(row),
                         payload: RowExecution {
                             row: row.clone(),
                             iteration,
@@ -1787,7 +3129,7 @@ fn plan_rows(
 
     MatrixPlan {
         slot_count: slot,
-        runnable,
+        runnable: resource_aware_order(runnable),
         completed,
     }
 }
@@ -1837,6 +3179,15 @@ where
     let started_at = Utc::now().to_rfc3339();
     let started = Instant::now();
     let initial_queued = tasks.len();
+    let estimated_cost_units = tasks
+        .iter()
+        .map(|task| u64::from(task.estimated_cost_units))
+        .sum();
+    let estimated_lola_cost_units = tasks
+        .iter()
+        .filter(|task| task.uses(ResourceClass::Lola))
+        .map(|task| u64::from(task.estimated_cost_units))
+        .sum();
     let resource_task_counts: BTreeMap<_, _> = ResourceClass::ORDERED
         .into_iter()
         .map(|class| {
@@ -1912,21 +3263,7 @@ where
                             blocked_resource_classes(task, &state, effective_jobs, limits)
                                 .is_empty()
                         };
-                        let eligible = if effective_jobs == 1 {
-                            state.pending.iter().position(is_eligible)
-                        } else {
-                            state
-                                .pending
-                                .iter()
-                                .position(|task| {
-                                    task.uses(ResourceClass::Lola) && is_eligible(task)
-                                })
-                                .or_else(|| {
-                                    state.pending.iter().position(|task| {
-                                        !task.uses(ResourceClass::Lola) && is_eligible(task)
-                                    })
-                                })
-                        };
+                        let eligible = state.pending.iter().position(is_eligible);
                         if let Some(index) = eligible {
                             let task = state
                                 .pending
@@ -1948,6 +3285,8 @@ where
                                 .collect();
                             let dispatch = TaskDispatchTiming {
                                 slot: task.slot,
+                                scheduling_priority: task.scheduling_priority,
+                                estimated_cost_units: task.estimated_cost_units,
                                 queue_wait: started.elapsed(),
                                 permit_wait: resource_permit_waits.values().copied().max(),
                                 resource_permit_waits,
@@ -1957,6 +3296,8 @@ where
                                 started,
                                 SchedulerEventKind::Dispatch,
                                 task.slot,
+                                task.scheduling_priority,
+                                task.estimated_cost_units,
                                 task.uses(ResourceClass::Lola),
                                 effective_jobs,
                                 limits,
@@ -1975,6 +3316,8 @@ where
                 let resources = task.resources.clone();
                 let post_completion_holds = task.post_completion_holds.clone();
                 let slot = task.slot;
+                let scheduling_priority = task.scheduling_priority;
+                let estimated_cost_units = task.estimated_cost_units;
                 let result = catch_unwind(AssertUnwindSafe(|| run_task(task.payload, dispatch)))
                     .unwrap_or_else(|_| Err(anyhow!("matrix scheduler task panicked")));
                 let failed = result.is_err();
@@ -1990,6 +3333,8 @@ where
                             state.resource_holds.push(ResourceHold {
                                 class,
                                 slot,
+                                scheduling_priority,
+                                estimated_cost_units,
                                 deadline: Instant::now() + post_completion_holds[&class],
                             });
                         } else {
@@ -2006,6 +3351,8 @@ where
                         started,
                         SchedulerEventKind::Complete,
                         slot,
+                        scheduling_priority,
+                        estimated_cost_units,
                         lola_sensitive,
                         effective_jobs,
                         limits,
@@ -2059,6 +3406,8 @@ where
             effective_jobs,
             resource_limits,
             initial_queued,
+            estimated_cost_units,
+            estimated_lola_cost_units,
             &resource_task_counts,
             events,
         ),
@@ -2088,6 +3437,8 @@ fn expire_resource_holds<T>(
             started,
             SchedulerEventKind::ResourceHoldComplete,
             hold.slot,
+            hold.scheduling_priority,
+            hold.estimated_cost_units,
             hold.class == ResourceClass::Lola,
             jobs,
             resource_limits,
@@ -2095,11 +3446,14 @@ fn expire_resource_holds<T>(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record_scheduler_event<T>(
     state: &mut SchedulerState<T>,
     started: Instant,
     kind: SchedulerEventKind,
     slot: usize,
+    scheduling_priority: usize,
+    estimated_cost_units: u32,
     lola_sensitive: bool,
     jobs: usize,
     resource_limits: &BTreeMap<ResourceClass, usize>,
@@ -2140,6 +3494,8 @@ fn record_scheduler_event<T>(
         elapsed_us: duration_us(started.elapsed()),
         kind,
         slot,
+        scheduling_priority,
+        estimated_cost_units,
         lola_sensitive,
         queued: state.pending.len(),
         active: state.active,
@@ -2213,6 +3569,8 @@ fn aggregate_scheduler_events(
     effective_jobs: usize,
     resource_limits: &BTreeMap<ResourceClass, usize>,
     initial_queued: usize,
+    estimated_cost_units: u64,
+    estimated_lola_cost_units: u64,
     resource_task_counts: &BTreeMap<ResourceClass, usize>,
     events: Vec<SchedulerEvent>,
 ) -> SchedulerSummary {
@@ -2247,6 +3605,9 @@ fn aggregate_scheduler_events(
         started_at,
         completed_at,
         duration_us,
+        policy: "deterministic_weighted_transport_role_lane_fair_v1".to_string(),
+        estimated_cost_units,
+        estimated_lola_cost_units,
         configured_jobs,
         effective_jobs: effective_jobs.min(initial_queued),
         configured_lola_jobs: resource_limits
@@ -2305,12 +3666,48 @@ fn canonical_order<T>(slot_count: usize, completed: Vec<(usize, T)>) -> Result<V
 }
 
 fn validate_criteria(summary: &MatrixSummary, criteria: &MatrixCriteria) -> Vec<String> {
+    validate_criteria_subject(
+        ExpectedCounts {
+            pass: summary.pass_count,
+            unsupported: summary.unsupported_count,
+            blocked: summary.blocked_count,
+            failed: summary.failed_count,
+        },
+        summary.row_count,
+        summary.rows.len(),
+        summary
+            .rows
+            .iter()
+            .map(|row| (row.classification, row.row_id.as_str(), row.reason.as_str())),
+        &summary.retry_policy,
+        summary.retried_row_count,
+        summary.max_retries_consumed,
+        criteria,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_criteria_subject<'a, I>(
+    actual_counts: ExpectedCounts,
+    declared_row_count: usize,
+    rows_length: usize,
+    rows: I,
+    retry_policy: &RetryPolicySummary,
+    retried_row_count: usize,
+    max_retries_consumed: usize,
+    criteria: &MatrixCriteria,
+    enforce_expected_counts: bool,
+) -> Vec<String>
+where
+    I: IntoIterator<Item = (RowClassification, &'a str, &'a str)>,
+{
     let mut errors = Vec::new();
     let actual = (
-        summary.pass_count,
-        summary.unsupported_count,
-        summary.blocked_count,
-        summary.failed_count,
+        actual_counts.pass,
+        actual_counts.unsupported,
+        actual_counts.blocked,
+        actual_counts.failed,
     );
     let expected = (
         criteria.expected.pass,
@@ -2318,60 +3715,109 @@ fn validate_criteria(summary: &MatrixSummary, criteria: &MatrixCriteria) -> Vec<
         criteria.expected.blocked,
         criteria.expected.failed,
     );
-    if actual != expected {
+    if enforce_expected_counts && actual != expected {
         errors.push(format!(
             "classification counts {actual:?} do not match expected {expected:?}"
         ));
     }
-    if summary.row_count != summary.rows.len() {
+    if declared_row_count != rows_length {
         errors.push(format!(
             "declared row_count {} does not match rows length {}",
-            summary.row_count,
-            summary.rows.len()
+            declared_row_count, rows_length
         ));
     }
-    for row in summary
-        .rows
-        .iter()
-        .filter(|row| row.classification == RowClassification::Unsupported)
-    {
+    for (classification, row_id, reason) in rows {
+        if classification != RowClassification::Unsupported {
+            continue;
+        }
         if !criteria
             .unsupported_reason_allowlist
             .iter()
-            .any(|allowed| row.reason.contains(allowed))
+            .any(|allowed| reason.contains(allowed))
         {
             errors.push(format!(
                 "unsupported row {} has unapproved reason: {}",
-                row.row_id, row.reason
+                row_id, reason
             ));
         }
     }
     let retry = &criteria.retry;
-    if summary.retry_policy.lola_max_retries != retry.max_retries_lola_rows
-        || summary.retry_policy.zenoh_max_retries != retry.max_retries_zenoh_rows
-        || summary.retry_policy.default_max_retries != retry.all_other_rows
+    if retry_policy.lola_max_retries != retry.max_retries_lola_rows
+        || retry_policy.zenoh_max_retries != retry.max_retries_zenoh_rows
+        || retry_policy.default_max_retries != retry.all_other_rows
     {
         errors.push(format!(
             "configured retry policy lola/zenoh/default={}/{}/{} does not match criteria {}/{}/{}",
-            summary.retry_policy.lola_max_retries,
-            summary.retry_policy.zenoh_max_retries,
-            summary.retry_policy.default_max_retries,
+            retry_policy.lola_max_retries,
+            retry_policy.zenoh_max_retries,
+            retry_policy.default_max_retries,
             retry.max_retries_lola_rows,
             retry.max_retries_zenoh_rows,
             retry.all_other_rows
         ));
     }
-    if summary.retried_row_count > retry.max_retried_rows {
+    if retried_row_count > retry.max_retried_rows {
         errors.push(format!(
             "retried row count {} exceeds criteria maximum {}",
-            summary.retried_row_count, retry.max_retried_rows
+            retried_row_count, retry.max_retried_rows
         ));
     }
-    if summary.max_retries_consumed > retry.max_retries_consumed {
+    if max_retries_consumed > retry.max_retries_consumed {
         errors.push(format!(
             "maximum retries consumed {} exceeds criteria maximum {}",
-            summary.max_retries_consumed, retry.max_retries_consumed
+            max_retries_consumed, retry.max_retries_consumed
         ));
+    }
+    errors
+}
+
+fn validate_shard_summary(summary: &MatrixSummary, manifest: &ShardManifest) -> Vec<String> {
+    let mut errors = Vec::new();
+    if summary.identities != manifest.identities {
+        errors.push("summary identities do not match shard manifest".to_string());
+    }
+    if summary.row_count != manifest.expected_row_count
+        || summary.rows.len() != manifest.expected_row_count
+    {
+        errors.push(format!(
+            "shard row count {}/{} does not match expected {}",
+            summary.row_count,
+            summary.rows.len(),
+            manifest.expected_row_count
+        ));
+    }
+    let actual_counts = ExpectedCounts {
+        pass: summary.pass_count,
+        unsupported: summary.unsupported_count,
+        blocked: summary.blocked_count,
+        failed: summary.failed_count,
+    };
+    if actual_counts != manifest.expected_counts {
+        errors.push(format!(
+            "shard counts {:?} do not match expected {:?}",
+            actual_counts, manifest.expected_counts
+        ));
+    }
+    if summary.retried_row_count != 0 || summary.max_retries_consumed != 0 {
+        errors.push("shard consumed retries".to_string());
+    }
+    for (actual, expected) in summary.rows.iter().zip(&manifest.expected_rows) {
+        if actual.row_id != expected.row_id
+            || actual.iteration != expected.iteration
+            || actual.classification != expected.classification
+            || actual.estimated_cost_units != expected.estimated_cost_units
+        {
+            errors.push(format!(
+                "shard row {} iteration {} does not match its expected manifest entry",
+                actual.row_id, actual.iteration
+            ));
+        }
+        if actual.retries_consumed != 0 {
+            errors.push(format!(
+                "shard row {} iteration {} consumed retries",
+                actual.row_id, actual.iteration
+            ));
+        }
     }
     errors
 }
@@ -5268,6 +6714,8 @@ fn populate_row_timings(
     let queue_wait_us = duration_us(dispatch.queue_wait);
     let execution_us = duration_us(execution);
     result.attempts = attempts.to_vec();
+    result.scheduling_priority = Some(dispatch.scheduling_priority);
+    result.estimated_cost_units = dispatch.estimated_cost_units;
     result.timings = RowTimingSummary {
         queue_wait_us,
         permit_wait_us: dispatch.permit_wait.map(duration_us),
@@ -5374,6 +6822,8 @@ fn row_result(
         role: row.role,
         encoding: row.encoding,
         iteration: 1,
+        scheduling_priority: None,
+        estimated_cost_units: row_estimated_cost_units(row),
         attempts_used: 0,
         retries_consumed: 0,
         classification,
@@ -5518,6 +6968,7 @@ fn newest_native_directory(mut candidates: Vec<PathBuf>, library: &str) -> Optio
 }
 
 fn stage_run_bundle(
+    repo_root: &Path,
     target_directory: &Path,
     artifacts_root: &Path,
     rows: &[MatrixRow],
@@ -5624,6 +7075,8 @@ fn stage_run_bundle(
         schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
         created_at: Utc::now().to_rfc3339(),
         target_directory: target_directory.display().to_string(),
+        orchestrator_commit: git_output(repo_root, &["rev-parse", "HEAD"]),
+        dependency_sha256: dependency_sha256(repo_root)?,
         files,
     };
     let manifest_path = root.join("manifest.json");
@@ -5665,31 +7118,27 @@ fn stage_bundle_file(
     } else {
         bundle_root.join("bin")
     };
-    let object = bundle_root.join("objects").join(&hash_before);
+    let mode = if kind == BundleFileKind::NativeLibrary {
+        0o444
+    } else {
+        0o555
+    };
+    let object_name = format!("{hash_before}-{mode:03o}");
+    let object = bundle_root.join("objects").join(object_name);
     let transfer = if object.exists() {
         if sha256_file(&object)? != hash_before {
             return Err(anyhow!("bundle object hash collision for {hash_before}"));
         }
         "deduplicated"
     } else {
-        match fs::hard_link(source, &object) {
-            Ok(()) => "hard_link",
-            Err(_) => {
-                fs::copy(source, &object).with_context(|| {
-                    format!(
-                        "unable to copy bundle input {} to {}",
-                        source.display(),
-                        object.display()
-                    )
-                })?;
-                "copy"
-            }
-        }
-    };
-    let mode = if kind == BundleFileKind::NativeLibrary {
-        0o444
-    } else {
-        0o555
+        fs::copy(source, &object).with_context(|| {
+            format!(
+                "unable to copy bundle input {} to {}",
+                source.display(),
+                object.display()
+            )
+        })?;
+        "copy"
     };
     fs::set_permissions(&object, fs::Permissions::from_mode(mode))?;
     let destination = destination_directory.join(name);
@@ -5708,7 +7157,11 @@ fn stage_bundle_file(
         kind,
         name: name.to_string(),
         source_path: source.display().to_string(),
-        bundle_path: destination.display().to_string(),
+        bundle_path: destination
+            .strip_prefix(bundle_root)
+            .expect("bundle destination is below bundle root")
+            .display()
+            .to_string(),
         size_bytes: metadata.len(),
         sha256: hash_before,
         mode,
@@ -5758,16 +7211,44 @@ fn validate_run_bundle(bundle: &RunBundle) -> Result<()> {
         .with_context(|| format!("unable to read {}", bundle.manifest_path.display()))?;
     let manifest: BundleManifest = serde_json::from_slice(&payload)
         .with_context(|| format!("invalid bundle manifest {}", bundle.manifest_path.display()))?;
-    if manifest.schema_version != BUNDLE_SCHEMA_VERSION {
+    if manifest != bundle.manifest {
         return Err(anyhow!(
-            "unsupported bundle schema {}, expected {}",
-            manifest.schema_version,
-            BUNDLE_SCHEMA_VERSION
+            "bundle manifest {} changed after it was loaded",
+            bundle.manifest_path.display()
         ));
     }
+    validate_bundle_manifest_structure(&manifest)?;
     let canonical_root = fs::canonicalize(&bundle.root)?;
+    if canonical_root != bundle.root {
+        return Err(anyhow!("run bundle root is not canonical"));
+    }
+    let canonical_manifest = fs::canonicalize(&bundle.manifest_path)?;
+    if canonical_manifest != canonical_root.join("manifest.json") {
+        return Err(anyhow!("run bundle manifest is outside the bundle root"));
+    }
+    validate_bundle_mode(&canonical_root, 0o555, true)?;
+    validate_bundle_mode(&canonical_root.join("bin"), 0o555, true)?;
+    validate_bundle_mode(&canonical_root.join("lib"), 0o555, true)?;
+    validate_bundle_mode(&canonical_root.join("objects"), 0o555, true)?;
+    validate_bundle_mode(&canonical_manifest, 0o444, false)?;
+
+    let mut expected_bin = BTreeSet::new();
+    let mut expected_lib = BTreeSet::new();
+    let mut expected_objects = BTreeSet::new();
     for file in &manifest.files {
-        let path = fs::canonicalize(&file.bundle_path)
+        let relative = Path::new(&file.bundle_path);
+        let expected_relative = if file.kind == BundleFileKind::NativeLibrary {
+            expected_lib.insert(file.name.clone());
+            Path::new("lib").join(&file.name)
+        } else {
+            expected_bin.insert(file.name.clone());
+            Path::new("bin").join(&file.name)
+        };
+        if relative != expected_relative {
+            return Err(anyhow!("invalid bundle path for {}", file.name));
+        }
+        let unresolved_path = bundle.root.join(relative);
+        let path = fs::canonicalize(&unresolved_path)
             .with_context(|| format!("bundle file {} is missing", file.bundle_path))?;
         if !path.starts_with(&canonical_root) {
             return Err(anyhow!(
@@ -5775,7 +7256,13 @@ fn validate_run_bundle(bundle: &RunBundle) -> Result<()> {
                 path.display()
             ));
         }
-        let metadata = fs::metadata(&path)?;
+        let metadata = fs::symlink_metadata(&unresolved_path)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() {
+            return Err(anyhow!(
+                "bundle file {} is not a regular file",
+                path.display()
+            ));
+        }
         if metadata.len() != file.size_bytes || sha256_file(&path)? != file.sha256 {
             return Err(anyhow!("bundle hash/size mismatch for {}", path.display()));
         }
@@ -5787,6 +7274,134 @@ fn validate_run_bundle(bundle: &RunBundle) -> Result<()> {
                 file.mode
             ));
         }
+        let object_name = format!("{}-{:03o}", file.sha256, file.mode);
+        expected_objects.insert(object_name.clone());
+        let object = canonical_root.join("objects").join(object_name);
+        let object_metadata = fs::symlink_metadata(&object)
+            .with_context(|| format!("bundle object for {} is missing", file.name))?;
+        if !object_metadata.is_file()
+            || object_metadata.file_type().is_symlink()
+            || object_metadata.len() != file.size_bytes
+            || object_metadata.permissions().mode() & 0o777 != file.mode
+            || sha256_file(&object)? != file.sha256
+        {
+            return Err(anyhow!("bundle object for {} is invalid", file.name));
+        }
+    }
+    validate_directory_entries(
+        &canonical_root,
+        &BTreeSet::from([
+            "bin".to_string(),
+            "lib".to_string(),
+            "manifest.json".to_string(),
+            "objects".to_string(),
+        ]),
+    )?;
+    validate_directory_entries(&canonical_root.join("bin"), &expected_bin)?;
+    validate_directory_entries(&canonical_root.join("lib"), &expected_lib)?;
+    validate_directory_entries(&canonical_root.join("objects"), &expected_objects)?;
+    Ok(())
+}
+
+fn validate_bundle_manifest_structure(manifest: &BundleManifest) -> Result<()> {
+    if manifest.schema_version != BUNDLE_SCHEMA_VERSION {
+        return Err(anyhow!(
+            "unsupported bundle schema {}, expected {}",
+            manifest.schema_version,
+            BUNDLE_SCHEMA_VERSION
+        ));
+    }
+    validate_sha256("bundle dependency", &manifest.dependency_sha256)?;
+    if manifest.files.is_empty() {
+        return Err(anyhow!("bundle manifest contains no files"));
+    }
+    let mut names = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    for file in &manifest.files {
+        validate_sha256(&format!("bundle file {}", file.name), &file.sha256)?;
+        if file.name.is_empty()
+            || Path::new(&file.name)
+                .file_name()
+                .and_then(|name| name.to_str())
+                != Some(file.name.as_str())
+        {
+            return Err(anyhow!("invalid bundle file name {}", file.name));
+        }
+        if !names.insert(file.name.as_str()) {
+            return Err(anyhow!("duplicate bundle file name {}", file.name));
+        }
+        if !paths.insert(file.bundle_path.as_str()) {
+            return Err(anyhow!("duplicate bundle path {}", file.bundle_path));
+        }
+        let expected_mode = if file.kind == BundleFileKind::NativeLibrary {
+            0o444
+        } else {
+            0o555
+        };
+        if file.mode != expected_mode || !matches!(file.transfer.as_str(), "copy" | "deduplicated")
+        {
+            return Err(anyhow!("invalid bundle metadata for {}", file.name));
+        }
+    }
+    Ok(())
+}
+
+fn validate_bundle_mode(path: &Path, expected_mode: u32, directory: bool) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || (directory && !metadata.is_dir())
+        || (!directory && !metadata.is_file())
+        || metadata.permissions().mode() & 0o777 != expected_mode
+    {
+        return Err(anyhow!(
+            "bundle path {} is not immutable with mode {expected_mode:o}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn validate_directory_entries(directory: &Path, expected: &BTreeSet<String>) -> Result<()> {
+    let actual: BTreeSet<_> = fs::read_dir(directory)?
+        .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
+        .collect::<std::io::Result<_>>()?;
+    if actual != *expected {
+        return Err(anyhow!(
+            "bundle directory {} entries differ: expected {:?}, actual {:?}",
+            directory.display(),
+            expected,
+            actual
+        ));
+    }
+    Ok(())
+}
+
+fn load_run_bundle(root: &Path) -> Result<RunBundle> {
+    let root = fs::canonicalize(root)
+        .with_context(|| format!("unable to canonicalize run bundle {}", root.display()))?;
+    let manifest_path = root.join("manifest.json");
+    let manifest: BundleManifest = serde_json::from_slice(
+        &fs::read(&manifest_path)
+            .with_context(|| format!("unable to read {}", manifest_path.display()))?,
+    )
+    .with_context(|| format!("invalid bundle manifest {}", manifest_path.display()))?;
+    let bundle = RunBundle {
+        root,
+        manifest_path,
+        manifest,
+    };
+    validate_run_bundle(&bundle)?;
+    Ok(bundle)
+}
+
+fn validate_current_orchestrator(bundle: &RunBundle) -> Result<()> {
+    let current = fs::canonicalize(std::env::current_exe()?)?;
+    let bundled = fs::canonicalize(bundle.executable("streamer-transport-test-orchestrator")?)?;
+    if current != bundled {
+        return Err(anyhow!(
+            "shard execution must run the orchestrator binary from the immutable bundle: {}",
+            bundled.display()
+        ));
     }
     Ok(())
 }
@@ -5817,6 +7432,174 @@ fn sha256_file(path: &Path) -> Result<String> {
         ));
     }
     Ok(digest)
+}
+
+fn validate_sha256(label: &str, digest: &str) -> Result<()> {
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(anyhow!("{label} has invalid SHA-256 digest {digest}"));
+    }
+    Ok(())
+}
+
+fn sha256_bytes(payload: &[u8]) -> String {
+    let digest = Sha256::digest(payload);
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn sha256_serializable<T: Serialize>(value: &T) -> Result<String> {
+    Ok(sha256_bytes(&serde_json::to_vec(value)?))
+}
+
+fn dependency_sha256(repo_root: &Path) -> Result<String> {
+    let files = [
+        repo_root.join("Cargo.lock"),
+        repo_root.join("Cargo.toml"),
+        repo_root.join("utils/streamer-transport-test-orchestrator/Cargo.toml"),
+    ];
+    let identities: Vec<_> = files
+        .iter()
+        .map(|path| {
+            Ok((
+                path.strip_prefix(repo_root)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string(),
+                sha256_file(path)?,
+            ))
+        })
+        .collect::<Result<_>>()?;
+    sha256_serializable(&identities)
+}
+
+fn bundle_files_sha256<F>(manifest: &BundleManifest, include: F) -> Result<String>
+where
+    F: Fn(BundleFileKind) -> bool,
+{
+    let files: Vec<_> = manifest
+        .files
+        .iter()
+        .filter(|file| include(file.kind))
+        .map(|file| {
+            (
+                file.kind,
+                &file.name,
+                file.size_bytes,
+                &file.sha256,
+                file.mode,
+            )
+        })
+        .collect();
+    sha256_serializable(&files)
+}
+
+fn load_criteria(path: Option<&Path>) -> Result<MatrixCriteria> {
+    let payload = match path {
+        Some(path) => fs::read(path)
+            .with_context(|| format!("unable to read matrix criteria {}", path.display()))?,
+        None => include_bytes!("../matrix-criteria.json").to_vec(),
+    };
+    serde_json::from_slice(&payload).context("invalid matrix criteria")
+}
+
+fn execution_identities(
+    _repo_root: &Path,
+    matrix: &[MatrixRow],
+    selection: &[MatrixRow],
+    cli: &Cli,
+    criteria: &MatrixCriteria,
+    bundle: &RunBundle,
+) -> Result<ExecutionIdentities> {
+    let options_sha256 = normalized_options_sha256(cli)?;
+    let selection_sha256 = selection_identity_sha256(selection, cli.iterations)?;
+    let binaries_sha256 = bundle_files_sha256(&bundle.manifest, |kind| {
+        kind != BundleFileKind::NativeLibrary
+    })?;
+    let native_libraries_sha256 = bundle_files_sha256(&bundle.manifest, |kind| {
+        kind == BundleFileKind::NativeLibrary
+    })?;
+    let bundle_sha256 = bundle_files_sha256(&bundle.manifest, |_| true)?;
+    let orchestrator_sha256 = bundle_orchestrator_sha256(&bundle.manifest)?;
+    Ok(ExecutionIdentities {
+        matrix_sha256: matrix_identity_sha256(matrix)?,
+        selection_sha256,
+        criteria_sha256: sha256_serializable(criteria)?,
+        orchestrator_sha256,
+        dependency_sha256: bundle.manifest.dependency_sha256.clone(),
+        bundle_sha256,
+        binaries_sha256,
+        native_libraries_sha256,
+        options_sha256,
+    })
+}
+
+fn normalized_options_sha256(cli: &Cli) -> Result<String> {
+    let mut options = serde_json::to_value(cli)?;
+    let object = options
+        .as_object_mut()
+        .expect("serialized CLI options are an object");
+    for operational in [
+        "mqtt_connect_probe",
+        "list",
+        "generate_criteria",
+        "only",
+        "skip_build",
+        "artifacts_root",
+        "copy_minimized_sinks_only",
+        "criteria",
+        "shard_count",
+        "shard_index",
+        "prepare_shards",
+        "run_bundle",
+        "shard_manifest",
+        "merge_shard_roots",
+        "merge_output",
+    ] {
+        object.remove(operational);
+    }
+    sha256_serializable(&options)
+}
+
+fn selection_identity_sha256(selection: &[MatrixRow], iterations: usize) -> Result<String> {
+    sha256_serializable(&json!({
+        "iterations": iterations,
+        "rows": selection.iter().map(row_identity_value).collect::<Vec<_>>(),
+    }))
+}
+
+fn bundle_orchestrator_sha256(manifest: &BundleManifest) -> Result<String> {
+    let mut matches = manifest.files.iter().filter(|file| {
+        file.kind == BundleFileKind::MatrixExecutable
+            && file.name == "streamer-transport-test-orchestrator"
+    });
+    let orchestrator = matches
+        .next()
+        .ok_or_else(|| anyhow!("run bundle lacks the orchestrator identity"))?;
+    if matches.next().is_some() {
+        return Err(anyhow!("run bundle has duplicate orchestrator identities"));
+    }
+    Ok(orchestrator.sha256.clone())
+}
+
+fn row_identity_value(row: &MatrixRow) -> serde_json::Value {
+    let support = support_status(row);
+    json!({
+        "id": row.id,
+        "ordinal": row.ordinal,
+        "source": row.source.id,
+        "sink": row.sink.id,
+        "role": row.role,
+        "encoding": row.encoding,
+        "classification": support.classification,
+        "reason": support.reason,
+    })
+}
+
+fn matrix_identity_sha256(matrix: &[MatrixRow]) -> Result<String> {
+    sha256_serializable(&matrix.iter().map(row_identity_value).collect::<Vec<_>>())
 }
 
 fn probe_user_namespaces(bundle: &RunBundle) -> Result<()> {
@@ -5867,14 +7650,14 @@ fn capture_provenance(
         .files
         .iter()
         .filter(|file| file.kind != BundleFileKind::NativeLibrary)
-        .map(|file| file_provenance(file.name.clone(), PathBuf::from(&file.bundle_path)))
+        .map(|file| file_provenance(file.name.clone(), bundle.root.join(&file.bundle_path)))
         .collect();
     let native_libraries = bundle
         .manifest
         .files
         .iter()
         .filter(|file| file.kind == BundleFileKind::NativeLibrary)
-        .map(|file| file_provenance(file.name.clone(), PathBuf::from(&file.bundle_path)))
+        .map(|file| file_provenance(file.name.clone(), bundle.root.join(&file.bundle_path)))
         .collect();
     let status = git_output(repo_root, &["status", "--porcelain"]);
     Ok(ProvenanceSummary {
@@ -6358,8 +8141,86 @@ mod tests {
                 .into_iter()
                 .collect(),
             post_completion_holds: BTreeMap::new(),
+            lane: ScheduleLane {
+                source: if lola_sensitive {
+                    PhysicalTransport::Lola
+                } else {
+                    PhysicalTransport::Zenoh
+                },
+                sink: PhysicalTransport::Dds,
+                role: RoleStyle::PublisherSubscriber,
+            },
+            scheduling_priority: slot,
+            estimated_cost_units: 10,
             payload,
         }
+    }
+
+    fn test_identities() -> ExecutionIdentities {
+        ExecutionIdentities {
+            matrix_sha256: "matrix".to_string(),
+            selection_sha256: "selection".to_string(),
+            criteria_sha256: "criteria".to_string(),
+            orchestrator_sha256: "orchestrator".to_string(),
+            dependency_sha256: "dependencies".to_string(),
+            bundle_sha256: "bundle".to_string(),
+            binaries_sha256: "binaries".to_string(),
+            native_libraries_sha256: "native".to_string(),
+            options_sha256: "options".to_string(),
+        }
+    }
+
+    fn test_bundle_manifest() -> BundleManifest {
+        BundleManifest {
+            schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
+            created_at: "2026-07-13T00:00:00Z".to_string(),
+            target_directory: "/target/debug".to_string(),
+            orchestrator_commit: Some("commit".to_string()),
+            dependency_sha256: sha256_bytes(b"dependencies"),
+            files: vec![
+                BundleFile {
+                    kind: BundleFileKind::MatrixExecutable,
+                    name: "streamer-transport-test-orchestrator".to_string(),
+                    source_path: "/target/debug/orchestrator".to_string(),
+                    bundle_path: "bin/streamer-transport-test-orchestrator".to_string(),
+                    size_bytes: 12,
+                    sha256: sha256_bytes(b"orchestrator"),
+                    mode: 0o555,
+                    transfer: "copy".to_string(),
+                },
+                BundleFile {
+                    kind: BundleFileKind::NativeLibrary,
+                    name: "libnative.so".to_string(),
+                    source_path: "/target/debug/libnative.so".to_string(),
+                    bundle_path: "lib/libnative.so".to_string(),
+                    size_bytes: 6,
+                    sha256: sha256_bytes(b"native"),
+                    mode: 0o444,
+                    transfer: "copy".to_string(),
+                },
+            ],
+        }
+    }
+
+    fn test_file_provenance(bundle: &BundleManifest) -> (Vec<FileProvenance>, Vec<FileProvenance>) {
+        let mut binaries = Vec::new();
+        let mut native_libraries = Vec::new();
+        for file in &bundle.files {
+            let provenance = FileProvenance {
+                name: file.name.clone(),
+                path: format!("/bundle/{}", file.bundle_path),
+                exists: true,
+                size_bytes: Some(file.size_bytes),
+                sha256: Some(file.sha256.clone()),
+                observation_error: None,
+            };
+            if file.kind == BundleFileKind::NativeLibrary {
+                native_libraries.push(provenance);
+            } else {
+                binaries.push(provenance);
+            }
+        }
+        (binaries, native_libraries)
     }
 
     fn zero_criteria() -> MatrixCriteria {
@@ -6384,6 +8245,8 @@ mod tests {
     }
 
     fn empty_summary() -> MatrixSummary {
+        let bundle = test_bundle_manifest();
+        let (binaries, native_libraries) = test_file_provenance(&bundle);
         MatrixSummary {
             schema_version: SUMMARY_SCHEMA_VERSION,
             generated_at: String::new(),
@@ -6392,6 +8255,9 @@ mod tests {
             completion_boundary: FINALIZATION_BOUNDARY,
             command: command_summary(vec!["orchestrator".to_string()], PathBuf::from("/repo")),
             options: Cli::try_parse_from(["orchestrator"]).expect("default CLI parses"),
+            identities: test_identities(),
+            bundle,
+            shard: None,
             provenance: ProvenanceSummary {
                 repository_root: "/repo".to_string(),
                 target_directory: "/repo/target/debug".to_string(),
@@ -6400,8 +8266,8 @@ mod tests {
                 orchestrator_commit: Some("dc4c17f".to_string()),
                 orchestrator_branch: Some("test".to_string()),
                 worktree_dirty: Some(false),
-                binaries: Vec::new(),
-                native_libraries: Vec::new(),
+                binaries,
+                native_libraries,
             },
             host_resources: HostResourcesSummary {
                 before: HostSnapshot::default(),
@@ -6441,6 +8307,135 @@ mod tests {
             .expect("matrix has a runnable row")
     }
 
+    fn merge_fixture(label: &str) -> (PathBuf, Vec<PathBuf>, PathBuf, Vec<MatrixRow>) {
+        let base = std::env::temp_dir().join(format!(
+            "streamer-orchestrator-merge-{label}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().expect("timestamp fits")
+        ));
+        fs::create_dir(&base).expect("create merge fixture root");
+        let rows: Vec<_> = matrix_rows()
+            .into_iter()
+            .filter(|row| support_status(row).classification == RowClassification::Pass)
+            .take(4)
+            .collect();
+        let assignments = assign_shards(&rows, 2).expect("fixture rows shard");
+        let criteria = load_criteria(None).expect("accepted criteria loads");
+        let bundle = test_bundle_manifest();
+        let mut identities = test_identities();
+        identities.matrix_sha256 = matrix_identity_sha256(&matrix_rows()).unwrap();
+        identities.selection_sha256 = selection_identity_sha256(&rows, 1).unwrap();
+        identities.criteria_sha256 = sha256_serializable(&criteria).unwrap();
+        identities.orchestrator_sha256 = bundle_orchestrator_sha256(&bundle).unwrap();
+        identities.dependency_sha256 = bundle.dependency_sha256.clone();
+        identities.bundle_sha256 = bundle_files_sha256(&bundle, |_| true).unwrap();
+        identities.binaries_sha256 =
+            bundle_files_sha256(&bundle, |kind| kind != BundleFileKind::NativeLibrary).unwrap();
+        identities.native_libraries_sha256 =
+            bundle_files_sha256(&bundle, |kind| kind == BundleFileKind::NativeLibrary).unwrap();
+        let identity_options = Cli::try_parse_from([
+            "orchestrator",
+            "--shard-count",
+            "2",
+            "--shard-index",
+            "0",
+            "--run-bundle",
+            "/bundle",
+        ])
+        .unwrap();
+        identities.options_sha256 = normalized_options_sha256(&identity_options).unwrap();
+        let manifests = shard_manifests(&rows, 1, 2, &assignments, &identities);
+        let mut roots = Vec::new();
+        for manifest in manifests {
+            let root = base.join(format!("shard-{}", manifest.shard_index));
+            fs::create_dir(&root).expect("create shard root");
+            let manifest_path = root.join("shard-manifest.json");
+            atomic_write_json(&manifest_path, &manifest).expect("write fixture manifest");
+            let mut summary = empty_summary();
+            summary.options = Cli::try_parse_from([
+                "orchestrator",
+                "--shard-count",
+                &manifest.shard_count.to_string(),
+                "--shard-index",
+                &manifest.shard_index.to_string(),
+                "--run-bundle",
+                "/bundle",
+            ])
+            .unwrap();
+            summary.identities = identities.clone();
+            summary.bundle = bundle.clone();
+            let (binaries, native_libraries) = test_file_provenance(&bundle);
+            summary.provenance.binaries = binaries;
+            summary.provenance.native_libraries = native_libraries;
+            summary.build = skipped_build_summary(Path::new("/target/debug"), &rows);
+            summary.shard = Some(ShardRunSummary {
+                shard_count: manifest.shard_count,
+                shard_index: manifest.shard_index,
+                manifest_path: manifest_path.display().to_string(),
+                manifest_sha256: sha256_file(&manifest_path).unwrap(),
+            });
+            summary.rows = manifest
+                .expected_rows
+                .iter()
+                .map(|expected| {
+                    let row = rows
+                        .iter()
+                        .find(|row| row.id == expected.row_id)
+                        .expect("fixture expected row exists");
+                    let support = support_status(row);
+                    let mut result = row_result(
+                        row,
+                        support.classification,
+                        support.reason,
+                        None,
+                        None,
+                        None,
+                        BTreeMap::new(),
+                    );
+                    result.iteration = expected.iteration;
+                    result.estimated_cost_units = expected.estimated_cost_units;
+                    result.attempts_used = 1;
+                    result.attempts = vec![attempt_result(
+                        &result,
+                        1,
+                        None,
+                        AttemptTimingSummary::default(),
+                    )];
+                    result
+                })
+                .collect();
+            summary.row_count = summary.rows.len();
+            summary.pass_count = manifest.expected_counts.pass;
+            summary.unsupported_count = manifest.expected_counts.unsupported;
+            summary.blocked_count = manifest.expected_counts.blocked;
+            summary.failed_count = manifest.expected_counts.failed;
+            atomic_write_json(&root.join("matrix-summary.json"), &summary)
+                .expect("write fixture summary");
+            roots.push(root);
+        }
+        let output = base.join("merged.json");
+        (base, roots, output, rows)
+    }
+
+    fn merge_cli(roots: &[PathBuf], output: &Path) -> Cli {
+        let mut args = vec!["orchestrator".to_string()];
+        for root in roots {
+            args.push("--merge-shard-root".to_string());
+            args.push(root.display().to_string());
+        }
+        args.push("--merge-output".to_string());
+        args.push(output.display().to_string());
+        Cli::try_parse_from(args).expect("merge CLI parses")
+    }
+
+    fn mutate_json(path: &Path, mutate: impl FnOnce(&mut serde_json::Value)) {
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).expect("read mutation input"))
+                .expect("parse mutation input");
+        mutate(&mut value);
+        atomic_write_json(path, &value).expect("write mutation");
+    }
+
     #[test]
     fn summary_schema_contains_options_command_and_provenance() {
         let mut summary = empty_summary();
@@ -6467,7 +8462,7 @@ mod tests {
         );
 
         let value = serde_json::to_value(&summary).expect("summary serializes");
-        assert_eq!(value["schema_version"], "4.0");
+        assert_eq!(value["schema_version"], "5.0");
         assert_eq!(value["options"]["only"][0], "matrix-row");
         assert_eq!(value["options"]["jobs"], 7);
         assert_eq!(value["options"]["lola_jobs"], 2);
@@ -6512,6 +8507,8 @@ mod tests {
         );
         let dispatch = TaskDispatchTiming {
             slot: 4,
+            scheduling_priority: 2,
+            estimated_cost_units: 43,
             queue_wait: Duration::from_micros(2_000),
             permit_wait: Some(Duration::from_micros(700)),
             resource_permit_waits: BTreeMap::from([(
@@ -6589,6 +8586,8 @@ mod tests {
             elapsed_us,
             kind,
             slot,
+            scheduling_priority: slot,
+            estimated_cost_units: 10,
             lola_sensitive: active_lola > 0,
             queued: 0,
             active,
@@ -6612,6 +8611,8 @@ mod tests {
             2,
             &limits,
             2,
+            20,
+            10,
             &task_counts,
             vec![
                 event(10, SchedulerEventKind::Dispatch, 0, 1, 1),
@@ -6857,6 +8858,357 @@ mod tests {
             .completed
             .iter()
             .all(|(_, result)| result.classification == RowClassification::Unsupported));
+    }
+
+    #[test]
+    fn r11_baseline_cost_classes_and_scheduler_order_are_stable() {
+        assert_eq!(transport_cost_units(PhysicalTransport::Dds), 12);
+        assert_eq!(transport_cost_units(PhysicalTransport::Iceoryx2), 14);
+        assert_eq!(transport_cost_units(PhysicalTransport::Mqtt5), 19);
+        assert_eq!(transport_cost_units(PhysicalTransport::Zenoh), 20);
+        assert_eq!(transport_cost_units(PhysicalTransport::Lola), 21);
+        assert_eq!(transport_cost_units(PhysicalTransport::Vsomeip), 22);
+
+        let first = plan_rows(&matrix_rows(), 1, None, 0);
+        let second = plan_rows(&matrix_rows(), 1, None, 0);
+        let first_slots: Vec<_> = first.runnable.iter().map(|task| task.slot).collect();
+        let second_slots: Vec<_> = second.runnable.iter().map(|task| task.slot).collect();
+        assert_eq!(first_slots, second_slots);
+        assert!(first
+            .runnable
+            .iter()
+            .enumerate()
+            .all(|(priority, task)| task.scheduling_priority == priority));
+        let scheduled_bursts = first
+            .runnable
+            .windows(2)
+            .filter(|pair| lanes_overlap(pair[0].lane, pair[1].lane))
+            .count();
+        let canonical_lanes: Vec<_> = matrix_rows()
+            .iter()
+            .filter(|row| support_status(row).classification == RowClassification::Pass)
+            .map(schedule_lane)
+            .collect();
+        let canonical_bursts = canonical_lanes
+            .windows(2)
+            .filter(|pair| lanes_overlap(pair[0], pair[1]))
+            .count();
+        assert!(scheduled_bursts * 2 < canonical_bursts);
+        let quarter = first.runnable.len() / 4;
+        assert!(
+            (0..4).all(|part| first.runnable[part * quarter..(part + 1) * quarter]
+                .iter()
+                .any(|task| task.uses(ResourceClass::Lola)))
+        );
+    }
+
+    #[test]
+    fn deterministic_shards_cover_every_row_once_with_bounded_work_skew() {
+        let rows = matrix_rows();
+        let assignments = assign_shards(&rows, 7).expect("full matrix shards");
+        assert_eq!(assignments, assign_shards(&rows, 7).unwrap());
+        assert_eq!(assignments.len(), 2160);
+        assert!(assignments.iter().all(|shard| *shard < 7));
+
+        let mut loads = [ShardLoad::default(); 7];
+        for (row, shard) in rows.iter().zip(&assignments) {
+            let cost = u64::from(row_estimated_cost_units(row));
+            loads[*shard].rows += 1;
+            loads[*shard].cost += cost;
+            if row.uses_lola() {
+                loads[*shard].lola_cost += cost;
+            }
+        }
+        let skew = |values: Vec<u64>| values.iter().max().unwrap() - values.iter().min().unwrap();
+        let maximum_row_cost = rows.iter().map(row_estimated_cost_units).max().unwrap() as u64;
+        assert!(skew(loads.iter().map(|load| load.cost).collect()) <= maximum_row_cost);
+        assert!(skew(loads.iter().map(|load| load.lola_cost).collect()) <= maximum_row_cost);
+        assert!(
+            loads.iter().map(|load| load.rows).max().unwrap()
+                - loads.iter().map(|load| load.rows).min().unwrap()
+                <= 1
+        );
+
+        let manifests = shard_manifests(&rows, 1, 7, &assignments, &test_identities());
+        assert_eq!(
+            manifests
+                .iter()
+                .map(|manifest| manifest.expected_row_count)
+                .sum::<usize>(),
+            2160
+        );
+        assert_eq!(
+            manifests
+                .iter()
+                .map(|manifest| manifest.expected_counts.pass)
+                .sum::<usize>(),
+            1728
+        );
+        assert_eq!(
+            manifests
+                .iter()
+                .map(|manifest| manifest.expected_counts.unsupported)
+                .sum::<usize>(),
+            432
+        );
+        let keys: BTreeSet<_> = manifests
+            .iter()
+            .flat_map(|manifest| {
+                manifest
+                    .expected_rows
+                    .iter()
+                    .map(|row| (row.row_id.clone(), row.iteration))
+            })
+            .collect();
+        assert_eq!(keys.len(), 2160);
+    }
+
+    #[test]
+    fn shard_selection_and_immutable_bundle_cli_are_fail_closed() {
+        let rows: Vec<_> = matrix_rows().into_iter().take(17).collect();
+        let assignments = assign_shards(&rows, 3).expect("selected rows shard");
+        let manifests = shard_manifests(&rows, 2, 3, &assignments, &test_identities());
+        for manifest in manifests {
+            assert_eq!(manifest.expected_row_count, manifest.expected_rows.len());
+            assert!(manifest
+                .expected_rows
+                .iter()
+                .all(|expected| assignments[rows
+                    .iter()
+                    .position(|row| row.id == expected.row_id)
+                    .unwrap()]
+                    == manifest.shard_index));
+        }
+        let missing_bundle =
+            Cli::try_parse_from(["orchestrator", "--shard-count", "2", "--shard-index", "0"])
+                .unwrap();
+        assert!(validate_cli(&missing_bundle)
+            .unwrap_err()
+            .to_string()
+            .contains("requires --run-bundle"));
+        let mutable_build = Cli::try_parse_from([
+            "orchestrator",
+            "--shard-count",
+            "2",
+            "--shard-index",
+            "0",
+            "--run-bundle",
+            "/bundle",
+            "--skip-build",
+        ])
+        .unwrap();
+        assert!(validate_cli(&mutable_build).is_err());
+    }
+
+    #[test]
+    fn shard_merge_reconstructs_canonical_order_and_selected_criteria() {
+        let (base, roots, output, rows) = merge_fixture("happy");
+        assert!(merge_shards(&merge_cli(&roots, &output)).expect("merge succeeds"));
+        let merged: serde_json::Value =
+            serde_json::from_slice(&fs::read(&output).unwrap()).unwrap();
+        assert_eq!(merged["row_count"], 4);
+        assert_eq!(merged["pass_count"], 4);
+        assert_eq!(merged["retried_row_count"], 0);
+        assert_eq!(merged["criteria_verdict"], "PASS");
+        let merged_ids: Vec<_> = merged["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["row_id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            merged_ids,
+            rows.iter().map(|row| row.id.as_str()).collect::<Vec<_>>()
+        );
+        fs::remove_dir_all(base).expect("remove merge fixture");
+    }
+
+    #[test]
+    fn shard_merge_rejects_every_identity_mismatch_class() {
+        for (field, label) in [
+            ("matrix_sha256", "matrix"),
+            ("selection_sha256", "selection"),
+            ("criteria_sha256", "criteria"),
+            ("orchestrator_sha256", "orchestrator"),
+            ("dependency_sha256", "dependencies"),
+            ("bundle_sha256", "bundle"),
+            ("binaries_sha256", "binaries"),
+            ("native_libraries_sha256", "native libraries"),
+            ("options_sha256", "options"),
+        ] {
+            let (base, roots, output, _) = merge_fixture(field);
+            mutate_json(&roots[0].join("matrix-summary.json"), |summary| {
+                summary["identities"][field] = json!("different");
+            });
+            let error = merge_shards(&merge_cli(&roots, &output))
+                .expect_err("identity mismatch must fail")
+                .to_string();
+            assert!(error.contains(label), "{field}: {error}");
+            fs::remove_dir_all(base).expect("remove identity fixture");
+        }
+    }
+
+    #[test]
+    fn shard_merge_recomputes_options_bundle_and_provenance_identities() {
+        for (label, mutate) in [
+            ("actual-options", "options"),
+            ("actual-dependency", "dependency"),
+            ("actual-binary", "binary"),
+            ("actual-native", "native"),
+        ] {
+            let (base, roots, output, _) = merge_fixture(label);
+            mutate_json(
+                &roots[0].join("matrix-summary.json"),
+                |summary| match mutate {
+                    "options" => summary["options"]["jobs"] = json!(3),
+                    "dependency" => {
+                        summary["bundle"]["dependency_sha256"] = json!(sha256_bytes(b"changed"))
+                    }
+                    "binary" => {
+                        summary["provenance"]["binaries"][0]["sha256"] =
+                            json!(sha256_bytes(b"changed"))
+                    }
+                    "native" => {
+                        summary["provenance"]["native_libraries"][0]["sha256"] =
+                            json!(sha256_bytes(b"changed"))
+                    }
+                    _ => unreachable!(),
+                },
+            );
+            assert!(merge_shards(&merge_cli(&roots, &output)).is_err());
+            fs::remove_dir_all(base).expect("remove recomputation fixture");
+        }
+    }
+
+    #[test]
+    fn shard_merge_rejects_manifest_hash_and_canonical_cost_drift() {
+        let (base, roots, output, _) = merge_fixture("manifest-hash");
+        mutate_json(&roots[0].join("shard-manifest.json"), |manifest| {
+            manifest["expected_lola_cost_units"] = json!(1);
+        });
+        assert!(merge_shards(&merge_cli(&roots, &output))
+            .unwrap_err()
+            .to_string()
+            .contains("manifest hash mismatch"));
+        fs::remove_dir_all(base).unwrap();
+
+        let (base, roots, output, _) = merge_fixture("canonical-cost");
+        let manifest_path = roots[0].join("shard-manifest.json");
+        mutate_json(&manifest_path, |manifest| {
+            manifest["expected_lola_cost_units"] = json!(1);
+        });
+        let manifest_hash = sha256_file(&manifest_path).unwrap();
+        mutate_json(&roots[0].join("matrix-summary.json"), |summary| {
+            summary["shard"]["manifest_sha256"] = json!(manifest_hash);
+        });
+        assert!(merge_shards(&merge_cli(&roots, &output))
+            .unwrap_err()
+            .to_string()
+            .contains("deterministic canonical assignment"));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn shard_merge_rejects_hidden_retry_and_failure_attempt_history() {
+        for (label, field, value) in [
+            ("attempt-retry", "is_retry", json!(true)),
+            ("attempt-failure", "classification", json!("failed")),
+            ("attempt-retry-scheduled", "retry_scheduled", json!(true)),
+        ] {
+            let (base, roots, output, _) = merge_fixture(label);
+            mutate_json(&roots[0].join("matrix-summary.json"), |summary| {
+                summary["rows"][0]["attempts"][0][field] = value;
+            });
+            assert!(merge_shards(&merge_cli(&roots, &output)).is_err());
+            fs::remove_dir_all(base).expect("remove attempt-history fixture");
+        }
+    }
+
+    #[test]
+    fn shard_merge_rejects_incompatible_schema_retries_failed_and_blocked() {
+        for (label, mutate) in [
+            ("schema", "schema"),
+            ("retries", "retries"),
+            ("failed", "failed"),
+            ("blocked", "blocked"),
+        ] {
+            let (base, roots, output, _) = merge_fixture(label);
+            mutate_json(
+                &roots[0].join("matrix-summary.json"),
+                |summary| match mutate {
+                    "schema" => summary["schema_version"] = json!("0.0"),
+                    "retries" => summary["retried_row_count"] = json!(1),
+                    "failed" => summary["rows"][0]["classification"] = json!("failed"),
+                    "blocked" => summary["rows"][0]["classification"] = json!("blocked"),
+                    _ => unreachable!(),
+                },
+            );
+            assert!(merge_shards(&merge_cli(&roots, &output)).is_err());
+            fs::remove_dir_all(base).expect("remove rejection fixture");
+        }
+    }
+
+    #[test]
+    fn shard_merge_rejects_duplicate_and_missing_rows_and_shards() {
+        let (base, roots, output, _) = merge_fixture("duplicate-shard");
+        assert!(
+            merge_shards(&merge_cli(&[roots[0].clone(), roots[0].clone()], &output))
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate shard")
+        );
+        fs::remove_dir_all(base).unwrap();
+
+        let (base, roots, output, _) = merge_fixture("missing-shard");
+        assert!(merge_shards(&merge_cli(&roots[..1], &output))
+            .unwrap_err()
+            .to_string()
+            .contains("missing shards"));
+        fs::remove_dir_all(base).unwrap();
+
+        let (base, roots, output, _) = merge_fixture("duplicate-row");
+        mutate_json(&roots[0].join("matrix-summary.json"), |summary| {
+            summary["rows"][1] = summary["rows"][0].clone();
+        });
+        assert!(merge_shards(&merge_cli(&roots, &output))
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate row"));
+        fs::remove_dir_all(base).unwrap();
+
+        let (base, roots, output, _) = merge_fixture("missing-row");
+        let manifest_path = roots[0].join("shard-manifest.json");
+        let summary_path = roots[0].join("matrix-summary.json");
+        mutate_json(&manifest_path, |manifest| {
+            let removed = manifest["expected_rows"]
+                .as_array_mut()
+                .unwrap()
+                .pop()
+                .unwrap();
+            manifest["expected_row_count"] =
+                json!(manifest["expected_rows"].as_array().unwrap().len());
+            manifest["expected_counts"]["pass"] =
+                json!(manifest["expected_counts"]["pass"].as_u64().unwrap() - 1);
+            manifest["expected_cost_units"] = json!(
+                manifest["expected_cost_units"].as_u64().unwrap()
+                    - removed["estimated_cost_units"].as_u64().unwrap()
+            );
+        });
+        let manifest_hash = sha256_file(&manifest_path).unwrap();
+        mutate_json(&summary_path, |summary| {
+            summary["rows"].as_array_mut().unwrap().pop();
+            summary["row_count"] = json!(summary["rows"].as_array().unwrap().len());
+            summary["pass_count"] = json!(summary["pass_count"].as_u64().unwrap() - 1);
+            summary["shard"]["manifest_sha256"] = json!(manifest_hash);
+        });
+        let error = merge_shards(&merge_cli(&roots, &output))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("deterministic canonical assignment"),
+            "{error}"
+        );
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
@@ -7371,6 +9723,8 @@ mod tests {
                 schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
                 created_at: String::new(),
                 target_directory: "/target".to_string(),
+                orchestrator_commit: None,
+                dependency_sha256: "dependencies".to_string(),
                 files: Vec::new(),
             },
         };
@@ -7439,10 +9793,23 @@ mod tests {
             schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
             created_at: Utc::now().to_rfc3339(),
             target_directory: base.display().to_string(),
+            orchestrator_commit: None,
+            dependency_sha256: sha256_bytes(b"dependencies"),
             files: vec![staged.clone()],
         };
         let manifest_path = root.join("manifest.json");
         atomic_write_json(&manifest_path, &manifest).expect("write test manifest");
+        fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o444))
+            .expect("make test manifest immutable");
+        for directory in [
+            root.join("bin"),
+            root.join("lib"),
+            root.join("objects"),
+            root.clone(),
+        ] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o555))
+                .expect("make test bundle directory immutable");
+        }
         let bundle = RunBundle {
             root: fs::canonicalize(&root).expect("canonical bundle root"),
             manifest_path,
@@ -7450,23 +9817,39 @@ mod tests {
         };
         validate_run_bundle(&bundle).expect("fresh bundle validates");
 
+        fs::write(&source, b"in-place source mutation").expect("mutate source in place");
+        assert_eq!(
+            fs::read(root.join(&staged.bundle_path)).expect("read isolated bundle file"),
+            b"original executable"
+        );
+        validate_run_bundle(&bundle).expect("source mutation does not alter bundle");
+
         let replacement = base.join("replacement-bin");
         fs::write(&replacement, b"replacement executable").expect("write replacement");
         fs::rename(&replacement, &source).expect("atomically replace source");
         assert_eq!(
-            fs::read(&staged.bundle_path).expect("read isolated bundle file"),
+            fs::read(root.join(&staged.bundle_path)).expect("read isolated bundle file"),
             b"original executable"
         );
         validate_run_bundle(&bundle).expect("source replacement does not alter bundle");
 
-        let bundled_path = Path::new(&staged.bundle_path);
-        fs::set_permissions(bundled_path, fs::Permissions::from_mode(0o644))
+        let bundled_path = root.join(&staged.bundle_path);
+        fs::set_permissions(&bundled_path, fs::Permissions::from_mode(0o644))
             .expect("make bundled file mutable for corruption test");
-        fs::write(bundled_path, b"corrupt").expect("corrupt bundled file");
+        fs::write(&bundled_path, b"corrupt").expect("corrupt bundled file");
         assert!(validate_run_bundle(&bundle)
             .expect_err("bundle mutation must be rejected")
             .to_string()
             .contains("hash/size mismatch"));
+        for directory in [
+            root.join("bin"),
+            root.join("lib"),
+            root.join("objects"),
+            root.clone(),
+        ] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755))
+                .expect("make test bundle removable");
+        }
         fs::remove_dir_all(base).expect("remove bundle test root");
     }
 
@@ -7512,6 +9895,13 @@ mod tests {
                 payload: resources.clone(),
                 resources,
                 post_completion_holds: BTreeMap::new(),
+                lane: ScheduleLane {
+                    source: PhysicalTransport::Zenoh,
+                    sink: PhysicalTransport::Dds,
+                    role: RoleStyle::PublisherSubscriber,
+                },
+                scheduling_priority: slot,
+                estimated_cost_units: 10,
             })
             .collect();
         let limits: BTreeMap<_, _> = ResourceClass::ORDERED
@@ -7579,6 +9969,8 @@ mod tests {
                 schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
                 created_at: String::new(),
                 target_directory: String::new(),
+                orchestrator_commit: None,
+                dependency_sha256: "dependencies".to_string(),
                 files: Vec::new(),
             },
         };

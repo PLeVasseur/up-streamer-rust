@@ -90,6 +90,13 @@ cargo run -p streamer-transport-test-orchestrator -- \
 - `--copy-minimized-sinks-only`: retain only copy-minimized sink profiles.
 - `--criteria <FILE>`: validate final counts, unsupported reasons, and retry
   consumption against an accepted criteria file.
+- `--prepare-shards --shard-count <N>`: build once, stage one immutable bundle,
+  and generate all deterministic shard manifests without executing rows.
+- `--shard-count <N> --shard-index <I> --run-bundle <DIR>`: execute one
+  zero-based shard from a prepared bundle. `--shard-manifest <FILE>` additionally
+  verifies the generated preparation manifest byte-for-byte semantically.
+- `--merge-shard-root <DIR>`: merge a completed shard artifact root; repeat once
+  for every shard. `--merge-output <FILE>` selects the merged summary path.
 
 ## Resource And Input Safety
 
@@ -111,13 +118,15 @@ the configured `TOKIO_WORKER_THREADS`.
 
 After the single build, every executable used by row supervision and every
 selected LoLa/vSomeIP native library is staged once under
-`run-bundle/{bin,lib,objects}`. Content-addressed objects use hard links where
-possible and copy fallback otherwise; no binary is copied per row. Launch names
-are read-only hard links/copies, and `run-bundle/manifest.json` records source
-and bundle paths, kind, size, mode, transfer method, and SHA-256. The complete
-bundle is hash/permission validated before preflight, and rows launch project
-and supervision executables only from the bundle. Replacing a mutable target
-path after staging cannot redirect an active run.
+`run-bundle/{bin,lib,objects}`. Inputs are copied once into content-and-mode
+addressed objects so the immutable snapshot shares no inode with mutable target
+artifacts; no binary is copied per row. Launch names are read-only hard links or
+copies, and `run-bundle/manifest.json` records source and bundle paths, kind,
+size, mode, transfer method, and SHA-256. The complete bundle is checked for
+exact directory contents, hashes, permissions, and schema before preflight and
+again after execution, and rows launch project and supervision executables only
+from the bundle. Replacing or modifying a mutable target path after staging
+cannot alter or redirect an active run.
 
 Every child is a process-group leader. Teardown and cancellation signal the
 whole group with bounded SIGINT, SIGTERM, and SIGKILL escalation, reap the
@@ -125,9 +134,99 @@ leader, verify that no group descendants remain, and expose cleanup/leak counts
 in the summary. Both SIGINT and SIGTERM set the same cooperative cancellation
 flag.
 
+## Scheduling Policy
+
+Runnable rows use policy `deterministic_weighted_transport_role_lane_fair_v1`.
+Rows are grouped by ordered physical-transport pair and role. The scheduler
+repeatedly chooses the least-served lane by estimated work, prefers a lane that
+does not overlap the previous row's transports when fairness is tied, and uses
+the lane identity as the final deterministic tie-breaker. Dispatch still scans
+past a permit-blocked row, so it remains work-conserving with XR's atomic
+multi-resource permits. Results are restored to canonical matrix slots.
+
+The static estimates are rounded from the accepted R11-XI `4/2` equivalence
+endpoint/role class means. They are ordering units, not timeouts or performance
+claims:
+
+| Endpoint class | Pooled endpoint mean | Cost units |
+| --- | ---: | ---: |
+| DDS | 2.44 s | 12 |
+| iceoryx2 | 2.70 s | 14 |
+| MQTT5 | 3.80 s | 19 |
+| Zenoh | 3.86 s | 20 |
+| LoLa | 4.18 s | 21 |
+| vSomeIP | 4.27 s | 22 |
+
+A row adds its two endpoint weights. Client/server RPC adds four units for its
+measured class delta; publish/subscribe and notifier/notifyee add zero. A
+structurally unsupported row costs zero because it launches no work. Row
+results, scheduler events, shard manifests, and scheduler totals record the
+estimate; runnable rows also record their scheduling priority.
+
+Shard assignment is deterministic LoLa-first multidimensional longest-
+processing-time placement. LoLa rows choose the least-loaded LoLa shard, then
+total work; other runnable rows choose least total work; structural rows balance
+row counts. Canonical ordinal is the final tie-breaker. Tests require every row
+exactly once and bound total/LoLa estimate skew by one maximum row estimate.
+
+## Sharded Execution
+
+Shards never build or stage from mutable `target/`. Prepare once from the exact
+source and criteria:
+
+```bash
+target/debug/streamer-transport-test-orchestrator \
+  --prepare-shards \
+  --shard-count 2 \
+  --criteria utils/streamer-transport-test-orchestrator/matrix-criteria.json \
+  --artifacts-root target/streamer-transport-test/prepared-2
+```
+
+Preparation writes `run-bundle/` and
+`shard-manifests/shard-00000-of-00002.json` (and every other shard manifest).
+Run the staged orchestrator, not a mutable target binary. Repeat the same
+selection and execution-affecting options used at preparation:
+
+```bash
+PREP=target/streamer-transport-test/prepared-2
+"$PREP/run-bundle/bin/streamer-transport-test-orchestrator" \
+  --run-bundle "$PREP/run-bundle" \
+  --shard-count 2 \
+  --shard-index 0 \
+  --shard-manifest "$PREP/shard-manifests/shard-00000-of-00002.json" \
+  --criteria utils/streamer-transport-test-orchestrator/matrix-criteria.json \
+  --artifacts-root target/streamer-transport-test/shard-0
+```
+
+Run multiple shards sequentially on one host. Concurrent same-host shards are
+not authorized because their combined host envelope is not budgeted. For
+separate hosts, copy the complete read-only `run-bundle/` and that host's shard
+manifest while preserving permissions, use an identical source checkout for
+configuration inputs, validate the bundle by starting its staged orchestrator,
+and execute one shard per independently budgeted host. No host builds or stages.
+
+After collecting every complete shard artifact root, merge with the staged
+orchestrator:
+
+```bash
+"$PREP/run-bundle/bin/streamer-transport-test-orchestrator" \
+  --merge-shard-root target/streamer-transport-test/shard-0 \
+  --merge-shard-root target/streamer-transport-test/shard-1 \
+  --criteria utils/streamer-transport-test-orchestrator/matrix-criteria.json \
+  --merge-output target/streamer-transport-test/merged-matrix-summary.json
+```
+
+Merge rejects incompatible schemas; any matrix, selection, criteria,
+orchestrator, dependency, bundle, binary, native-library, or normalized-option
+identity mismatch; duplicate/missing shards or rows; manifest/count/cost drift;
+failed/blocked rows; and any consumed retry. A full selection is reconstructed
+in canonical 2160-row order and validated against the unchanged full criteria.
+Focused selections validate their exact generated counts and the same
+unsupported/retry policy but are not full-matrix acceptance evidence.
+
 ## Instrumentation
 
-Summary schema `4.0` is written to `matrix-summary.json`. Checkpoints use a
+Summary schema `5.0` is written to `matrix-summary.json`. Checkpoints use a
 versioned `1.0` envelope containing `schema_version` and `row`. The final
 summary, preflight, criteria result, manifest, and all checkpoints use
 same-directory temporary files, file fsync, atomic rename, and parent-directory
@@ -153,7 +252,7 @@ Run-level evidence includes:
   swap, open FDs, and host memory/swap use;
 - scheduler dispatch/completion/resource-hold-completion events with queued,
   active, LoLa-active, per-resource active/held/available permit counts, plus
-  concurrency-time aggregates;
+  scheduling priority/cost and concurrency-time aggregates;
 - criteria, summary-generation, scheduler, build, and total run durations.
 
 Every duration ending in `_us` is derived from `std::time::Instant`; RFC3339 UTC
