@@ -25,4 +25,5 @@ chrono = { version = "0.4.40", default-features = true, features = ["clock", "se
 clap = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
+libc = { version = "0.2.171" }
 signal-hook = "=0.3.18"

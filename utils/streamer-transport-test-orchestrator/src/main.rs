@@ -16,10 +16,14 @@ use chrono::{DateTime, Utc};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use signal_hook::consts::SIGINT;
+use signal_hook::consts::{SIGINT, SIGTERM};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -61,9 +65,27 @@ const DDS_PORT_BASE: i32 = 7_400;
 const DDS_DOMAIN_GAIN: i32 = 250;
 const DDS_MIN_UNPRIVILEGED_PORT: i32 = 1_024;
 const DDS_PORT_MODULUS: i32 = 65_536;
-const SUMMARY_SCHEMA_VERSION: &str = "2.0";
+const SUMMARY_SCHEMA_VERSION: &str = "3.0";
+const CHECKPOINT_SCHEMA_VERSION: &str = "1.0";
+const BUNDLE_SCHEMA_VERSION: &str = "1.0";
 const RESOURCE_SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
+const DEFAULT_HARD_MAX_JOBS: usize = 16;
+const DEFAULT_TOKIO_WORKER_THREADS: usize = 2;
+const DEFAULT_MEMORY_MIB_PER_JOB: u64 = 1_024;
+const DEFAULT_TASKS_PER_JOB: u64 = 512;
+const DEFAULT_FDS_PER_JOB: u64 = 1_024;
+const DEFAULT_DISK_MIB_PER_ROW: u64 = 1;
+const DEFAULT_INODES_PER_ROW: u64 = 32;
+const PREFLIGHT_MEMORY_RESERVE_MIB: u64 = 512;
+const PREFLIGHT_TASK_RESERVE: u64 = 128;
+const PREFLIGHT_FD_RESERVE: u64 = 128;
+const PREFLIGHT_DISK_RESERVE_MIB: u64 = 1_024;
+const PREFLIGHT_INODE_RESERVE: u64 = 1_024;
+const FINALIZATION_BOUNDARY: &str = "completed_at and total_us are sampled after a complete provisional summary serialize, file fsync, atomic rename, and parent-directory fsync; they exclude only the unavoidable final metadata refresh serialize/fsync/rename cycle and output printing";
 static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static PROCESS_GROUPS_STARTED: AtomicU64 = AtomicU64::new(0);
+static PROCESS_GROUP_LEAK_CHECKS: AtomicU64 = AtomicU64::new(0);
+static PROCESS_GROUP_LEAKS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Debug, Parser, Serialize)]
 #[command(name = "streamer-transport-test-orchestrator")]
@@ -109,6 +131,39 @@ struct Cli {
 
     #[arg(long, default_value_t = 1)]
     lola_jobs: usize,
+
+    #[arg(long)]
+    dds_jobs: Option<usize>,
+
+    #[arg(long)]
+    zenoh_shm_jobs: Option<usize>,
+
+    #[arg(long)]
+    vsomeip_jobs: Option<usize>,
+
+    #[arg(long)]
+    mqtt_jobs: Option<usize>,
+
+    #[arg(long, default_value_t = DEFAULT_HARD_MAX_JOBS)]
+    hard_max_jobs: usize,
+
+    #[arg(long, default_value_t = DEFAULT_TOKIO_WORKER_THREADS)]
+    tokio_worker_threads: usize,
+
+    #[arg(long, default_value_t = DEFAULT_MEMORY_MIB_PER_JOB)]
+    preflight_memory_mib_per_job: u64,
+
+    #[arg(long, default_value_t = DEFAULT_TASKS_PER_JOB)]
+    preflight_tasks_per_job: u64,
+
+    #[arg(long, default_value_t = DEFAULT_FDS_PER_JOB)]
+    preflight_fds_per_job: u64,
+
+    #[arg(long, default_value_t = DEFAULT_DISK_MIB_PER_ROW)]
+    preflight_disk_mib_per_row: u64,
+
+    #[arg(long, default_value_t = DEFAULT_INODES_PER_ROW)]
+    preflight_inodes_per_row: u64,
 
     #[arg(long, default_value_t = 1)]
     iterations: usize,
@@ -225,6 +280,8 @@ struct RunningProcess {
     name: String,
     log_path: PathBuf,
     child: Child,
+    process_group: i32,
+    terminated: bool,
 }
 
 struct ZenohConfigPaths {
@@ -295,7 +352,7 @@ impl ZenohConfigPaths {
 
 impl Drop for RunningProcess {
     fn drop(&mut self) {
-        terminate(self);
+        let _ = terminate(self);
     }
 }
 
@@ -305,12 +362,15 @@ struct MatrixSummary {
     generated_at: String,
     started_at: String,
     completed_at: String,
+    completion_boundary: &'static str,
     command: CommandSummary,
     options: Cli,
     provenance: ProvenanceSummary,
     host_resources: HostResourcesSummary,
+    preflight: PreflightSummary,
     build: BuildSummary,
     scheduler: SchedulerSummary,
+    cleanup: CleanupSummary,
     timings: RunTimingSummary,
     row_count: usize,
     pass_count: usize,
@@ -338,6 +398,8 @@ struct CommandSummary {
 struct ProvenanceSummary {
     repository_root: String,
     target_directory: String,
+    bundle_root: String,
+    bundle_manifest: String,
     orchestrator_commit: Option<String>,
     orchestrator_branch: Option<String>,
     worktree_dirty: Option<bool>,
@@ -345,7 +407,7 @@ struct ProvenanceSummary {
     native_libraries: Vec<FileProvenance>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct FileProvenance {
     name: String,
     path: String,
@@ -407,10 +469,47 @@ struct HostSnapshot {
 #[derive(Clone, Debug, Serialize)]
 struct FilesystemSnapshot {
     path: String,
+    block_size: Option<u64>,
     total_bytes: Option<u64>,
     available_bytes: Option<u64>,
     total_inodes: Option<u64>,
     available_inodes: Option<u64>,
+    inode_reporting_supported: bool,
+    observation_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct PreflightSummary {
+    verdict: &'static str,
+    configured_jobs: usize,
+    effective_jobs: usize,
+    available_cpus: usize,
+    runnable_tasks: usize,
+    required_memory_bytes: u64,
+    available_memory_bytes: Option<u64>,
+    available_swap_bytes: Option<u64>,
+    required_tasks: u64,
+    available_tasks: Option<u64>,
+    required_open_files: u64,
+    open_files_soft_limit: Option<u64>,
+    required_disk_bytes: u64,
+    required_inodes: u64,
+    user_namespaces_max: Option<u64>,
+    checks: Vec<PreflightCheck>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct PreflightCheck {
+    name: &'static str,
+    pass: bool,
+    detail: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct CleanupSummary {
+    process_groups_started: u64,
+    process_group_leak_checks: u64,
+    process_group_leaks: u64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -487,6 +586,7 @@ struct AttemptResult {
 struct RowTimingSummary {
     queue_wait_us: u64,
     permit_wait_us: Option<u64>,
+    resource_permit_wait_us: BTreeMap<ResourceClass, u64>,
     execution_us: u64,
     total_us: u64,
 }
@@ -495,6 +595,7 @@ struct RowTimingSummary {
 struct AttemptTimingSummary {
     queue_wait_us: u64,
     permit_wait_us: Option<u64>,
+    resource_permit_wait_us: BTreeMap<ResourceClass, u64>,
     preparation_us: u64,
     namespace_us: u64,
     broker_us: u64,
@@ -542,9 +643,84 @@ struct RetryCriteria {
 
 #[derive(Serialize)]
 struct CriteriaResult {
+    schema_version: &'static str,
     verdict: &'static str,
     criteria_path: String,
     errors: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct CheckpointEnvelope<'a> {
+    schema_version: &'static str,
+    row: &'a RowResult,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct BundleManifest {
+    schema_version: String,
+    created_at: String,
+    target_directory: String,
+    files: Vec<BundleFile>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BundleFileKind {
+    MatrixExecutable,
+    SystemExecutable,
+    NativeLibrary,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct BundleFile {
+    kind: BundleFileKind,
+    name: String,
+    source_path: String,
+    bundle_path: String,
+    size_bytes: u64,
+    sha256: String,
+    mode: u32,
+    transfer: String,
+}
+
+#[derive(Clone, Debug)]
+struct RunBundle {
+    root: PathBuf,
+    manifest_path: PathBuf,
+    manifest: BundleManifest,
+}
+
+impl RunBundle {
+    fn executable(&self, name: &str) -> Result<PathBuf> {
+        self.file_path(
+            name,
+            &[
+                BundleFileKind::MatrixExecutable,
+                BundleFileKind::SystemExecutable,
+            ],
+        )
+    }
+
+    fn native_library(&self, name: &str) -> Result<PathBuf> {
+        self.file_path(name, &[BundleFileKind::NativeLibrary])
+    }
+
+    fn file_path(&self, name: &str, kinds: &[BundleFileKind]) -> Result<PathBuf> {
+        self.manifest
+            .files
+            .iter()
+            .find(|file| file.name == name && kinds.contains(&file.kind))
+            .map(|file| PathBuf::from(&file.bundle_path))
+            .ok_or_else(|| anyhow!("run bundle does not contain {name}"))
+    }
+
+    fn bin_dir(&self) -> PathBuf {
+        self.root.join("bin")
+    }
+
+    fn lib_dir(&self) -> PathBuf {
+        self.root.join("lib")
+    }
 }
 
 #[derive(Clone, Default)]
@@ -572,6 +748,72 @@ impl Cancellation {
 struct ArtifactRootLock {
     path: PathBuf,
     _file: File,
+}
+
+struct BuildLock {
+    path: PathBuf,
+    file: File,
+}
+
+impl BuildLock {
+    fn acquire(target_directory: &Path) -> Result<Self> {
+        fs::create_dir_all(target_directory)
+            .with_context(|| format!("unable to create {}", target_directory.display()))?;
+        let path = target_directory.join(".streamer-transport-test.build.lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)
+            .with_context(|| format!("unable to open build lock {}", path.display()))?;
+        // SAFETY: flock only observes the valid descriptor owned by `file` and does not retain a pointer.
+        let result = unsafe {
+            libc::flock(
+                std::os::fd::AsRawFd::as_raw_fd(&file),
+                libc::LOCK_EX | libc::LOCK_NB,
+            )
+        };
+        if result != 0 {
+            return Err(anyhow!(
+                "target directory {} is locked by another matrix build/run: {}",
+                target_directory.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        file.set_len(0)?;
+        (&file).write_all(format!("pid={}\n", std::process::id()).as_bytes())?;
+        file.sync_all()?;
+        Ok(Self { path, file })
+    }
+}
+
+impl Drop for BuildLock {
+    fn drop(&mut self) {
+        // SAFETY: the descriptor remains valid until `self.file` is dropped after this method.
+        let _ = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&self.file), libc::LOCK_UN) };
+        let _ = &self.path;
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ResourceClass {
+    Lola,
+    DdsHeavy,
+    ZenohShm,
+    Vsomeip,
+    Mqtt,
+}
+
+impl ResourceClass {
+    const ORDERED: [Self; 5] = [
+        Self::Lola,
+        Self::DdsHeavy,
+        Self::ZenohShm,
+        Self::Vsomeip,
+        Self::Mqtt,
+    ];
 }
 
 impl ArtifactRootLock {
@@ -610,15 +852,21 @@ impl Drop for ArtifactRootLock {
 
 struct ScheduledTask<T> {
     slot: usize,
-    lola_sensitive: bool,
+    resources: BTreeSet<ResourceClass>,
     payload: T,
+}
+
+impl<T> ScheduledTask<T> {
+    fn uses(&self, class: ResourceClass) -> bool {
+        self.resources.contains(&class)
+    }
 }
 
 struct SchedulerState<T> {
     pending: VecDeque<ScheduledTask<T>>,
     active: usize,
-    active_lola: usize,
-    permit_wait_started: BTreeMap<usize, Instant>,
+    active_resources: BTreeMap<ResourceClass, usize>,
+    permit_wait_started: BTreeMap<(usize, ResourceClass), Instant>,
     events: Vec<SchedulerEvent>,
     stopped: bool,
 }
@@ -641,6 +889,8 @@ struct SchedulerEvent {
     active_lola: usize,
     global_permits_available: usize,
     lola_permits_available: usize,
+    active_resources: BTreeMap<ResourceClass, usize>,
+    resource_permits_available: BTreeMap<ResourceClass, usize>,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -652,6 +902,8 @@ struct SchedulerSummary {
     effective_jobs: usize,
     configured_lola_jobs: usize,
     effective_lola_jobs: usize,
+    configured_resource_limits: BTreeMap<ResourceClass, usize>,
+    effective_resource_limits: BTreeMap<ResourceClass, usize>,
     initial_queued: usize,
     peak_active: usize,
     peak_active_lola: usize,
@@ -660,11 +912,12 @@ struct SchedulerSummary {
     events: Vec<SchedulerEvent>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct TaskDispatchTiming {
     slot: usize,
     queue_wait: Duration,
     permit_wait: Option<Duration>,
+    resource_permit_waits: BTreeMap<ResourceClass, Duration>,
 }
 
 struct BoundedRun<R> {
@@ -764,10 +1017,13 @@ fn run(cli: Cli) -> Result<bool> {
     );
     validate_cli(&cli)?;
     let cancellation = Cancellation::default();
-    signal_hook::flag::register(SIGINT, Arc::clone(&cancellation.0))
-        .context("unable to install Ctrl-C handler")?;
+    install_signal_handlers(&cancellation)?;
+    PROCESS_GROUPS_STARTED.store(0, Ordering::SeqCst);
+    PROCESS_GROUP_LEAK_CHECKS.store(0, Ordering::SeqCst);
+    PROCESS_GROUP_LEAKS.store(0, Ordering::SeqCst);
 
-    let repo_root = repo_root()?;
+    let repo_root = fs::canonicalize(repo_root()?)?;
+    reject_private_mount_path("repository", &repo_root)?;
     let rows = matrix_rows();
 
     if let Some(path) = &cli.generate_criteria {
@@ -795,7 +1051,7 @@ fn run(cli: Cli) -> Result<bool> {
         return Err(anyhow!("no matrix rows matched the requested selection"));
     }
     let plan = plan_rows(&selected_rows, cli.iterations, cli.max_runnable_rows);
-    let artifacts_root = cli
+    let artifacts_root_requested = cli
         .artifacts_root
         .clone()
         .map(|path| {
@@ -806,12 +1062,26 @@ fn run(cli: Cli) -> Result<bool> {
             }
         })
         .unwrap_or_else(|| generated_artifacts_root(&repo_root, Utc::now(), std::process::id()));
+    reject_private_mount_path(
+        "artifact root",
+        &canonicalize_allow_missing(&artifacts_root_requested)?,
+    )?;
+    if let Some(criteria_path) = &cli.criteria {
+        reject_private_mount_path("criteria", &fs::canonicalize(criteria_path)?)?;
+    }
+    let target_root = resolve_target_directory(&repo_root)?;
+    reject_private_mount_path(
+        "Cargo target directory",
+        &canonicalize_allow_missing(&target_root)?,
+    )?;
+    let target_directory = target_root.join("debug");
+    let artifacts_root = artifacts_root_requested;
     if let Some(parent) = artifacts_root.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("unable to create {}", parent.display()))?;
     }
     let _artifact_lock = ArtifactRootLock::acquire(&artifacts_root)?;
-    let target_directory = repo_root.join("target/debug");
+    let _build_lock = BuildLock::acquire(&target_root)?;
     let host_before = capture_host_snapshot(&[&artifacts_root, &target_directory]);
     let resource_monitor = ResourceMonitor::start();
 
@@ -820,41 +1090,86 @@ fn run(cli: Cli) -> Result<bool> {
     }
 
     let build = if cli.skip_build {
-        skipped_build_summary(&repo_root, &selected_rows)
+        skipped_build_summary(&target_directory, &selected_rows)
     } else {
-        build_required_binaries(&repo_root, &selected_rows, cli.use_local_sibling_patches)?
+        build_required_binaries(
+            &repo_root,
+            &target_directory,
+            &selected_rows,
+            cli.use_local_sibling_patches,
+        )?
     };
     cancellation.check()?;
+    let bundle = stage_run_bundle(&target_directory, &artifacts_root, &selected_rows)?;
+    validate_run_bundle(&bundle)?;
+    let user_namespace_probe = probe_user_namespaces(&bundle).map_err(|error| error.to_string());
+
     let MatrixPlan {
         slot_count,
         runnable,
         mut completed,
     } = plan;
-    let executed = run_bounded_instrumented(
-        runnable,
-        cli.jobs,
-        cli.lola_jobs,
-        &cancellation,
-        |execution, dispatch| {
-            println!(
-                "RUNNING {} iteration={}",
-                execution.row.id, execution.iteration
-            );
-            run_row(
-                &repo_root,
-                &artifacts_root,
-                &execution.row,
-                &cli,
-                execution.iteration,
-                dispatch,
-                &cancellation,
-            )
-        },
-    )?;
-    let scheduler = executed.summary;
-    completed.extend(executed.completed);
+    let runnable_count = runnable.len();
+    let preflight_snapshot = capture_host_snapshot(&[&artifacts_root, &target_directory]);
+    let preflight = run_preflight(
+        &cli,
+        runnable_count,
+        &bundle,
+        &preflight_snapshot,
+        &artifacts_root,
+        &user_namespace_probe,
+    );
+    atomic_write_json(&artifacts_root.join("preflight.json"), &preflight)?;
+    if preflight.verdict != "PASS" {
+        let failures = preflight
+            .checks
+            .iter()
+            .filter(|check| !check.pass)
+            .map(|check| format!("{}: {}", check.name, check.detail))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(anyhow!("matrix host preflight failed: {failures}"));
+    }
+    let resource_limits = configured_resource_limits(&cli);
+    let scheduler = if runnable.is_empty() {
+        SchedulerSummary {
+            configured_jobs: cli.jobs,
+            effective_jobs: 0,
+            configured_lola_jobs: cli.lola_jobs,
+            effective_lola_jobs: 0,
+            configured_resource_limits: resource_limits.clone(),
+            effective_resource_limits: BTreeMap::new(),
+            ..SchedulerSummary::default()
+        }
+    } else {
+        let executed = run_bounded_instrumented(
+            runnable,
+            cli.jobs,
+            preflight.effective_jobs,
+            &resource_limits,
+            &cancellation,
+            |execution, dispatch| {
+                println!(
+                    "RUNNING {} iteration={}",
+                    execution.row.id, execution.iteration
+                );
+                run_row(
+                    &repo_root,
+                    &artifacts_root,
+                    &bundle,
+                    &execution.row,
+                    &cli,
+                    execution.iteration,
+                    dispatch,
+                    &cancellation,
+                )
+            },
+        )?;
+        completed.extend(executed.completed);
+        executed.summary
+    };
     let results = canonical_order(slot_count, completed)?;
-    let provenance = capture_provenance(&repo_root, &selected_rows, &results)?;
+    let provenance = capture_provenance(&repo_root, &target_directory, &bundle)?;
     let resource_peaks = resource_monitor.finish();
     let host_after = capture_host_snapshot(&[&artifacts_root, &target_directory]);
 
@@ -872,6 +1187,7 @@ fn run(cli: Cli) -> Result<bool> {
         generated_at: Utc::now().to_rfc3339(),
         started_at,
         completed_at: String::new(),
+        completion_boundary: FINALIZATION_BOUNDARY,
         command,
         options: cli.clone(),
         provenance,
@@ -880,8 +1196,10 @@ fn run(cli: Cli) -> Result<bool> {
             after: host_after,
             peaks: resource_peaks,
         },
+        preflight,
         build,
         scheduler,
+        cleanup: cleanup_summary(),
         timings: RunTimingSummary::default(),
         row_count: results.len(),
         pass_count: results
@@ -935,6 +1253,7 @@ fn run(cli: Cli) -> Result<bool> {
         let errors = validate_criteria(&summary, &criteria);
         criteria_failed = !errors.is_empty();
         let result = CriteriaResult {
+            schema_version: SUMMARY_SCHEMA_VERSION,
             verdict: if criteria_failed { "FAIL" } else { "PASS" },
             criteria_path: criteria_path.display().to_string(),
             errors,
@@ -947,13 +1266,16 @@ fn run(cli: Cli) -> Result<bool> {
         );
     }
     summary.timings.criteria_us = duration_us(criteria_started.elapsed());
+    let summary_started = Instant::now();
     summary.completed_at = Utc::now().to_rfc3339();
     summary.generated_at = summary.completed_at.clone();
     summary.timings.total_us = duration_us(run_started.elapsed());
-    let summary_started = Instant::now();
-    let _ = serde_json::to_vec_pretty(&summary)?;
+    atomic_write_json(&summary_path, &summary)?;
     summary.timings.summary_generation_us = duration_us(summary_started.elapsed());
+    summary.completed_at = Utc::now().to_rfc3339();
+    summary.generated_at = summary.completed_at.clone();
     summary.timings.total_us = duration_us(run_started.elapsed());
+    summary.cleanup = cleanup_summary();
     atomic_write_json(&summary_path, &summary)?;
 
     println!(
@@ -973,11 +1295,47 @@ fn run(cli: Cli) -> Result<bool> {
     Ok(summary.failed_count == 0 && summary.blocked_count == 0 && !criteria_failed)
 }
 
+fn install_signal_handlers(cancellation: &Cancellation) -> Result<()> {
+    for signal in [SIGINT, SIGTERM] {
+        signal_hook::flag::register(signal, Arc::clone(&cancellation.0))
+            .with_context(|| format!("unable to install signal handler for {signal}"))?;
+    }
+    Ok(())
+}
+
 fn validate_cli(cli: &Cli) -> Result<()> {
     if cli.iterations == 0 {
         return Err(anyhow!("--iterations must be greater than zero"));
     }
     validate_concurrency(cli.jobs, cli.lola_jobs)?;
+    if cli.hard_max_jobs == 0 {
+        return Err(anyhow!("--hard-max-jobs must be greater than zero"));
+    }
+    if cli.jobs > cli.hard_max_jobs {
+        return Err(anyhow!(
+            "--jobs={} exceeds configured --hard-max-jobs={}",
+            cli.jobs,
+            cli.hard_max_jobs
+        ));
+    }
+    if cli.tokio_worker_threads == 0 || cli.tokio_worker_threads > cli.hard_max_jobs {
+        return Err(anyhow!(
+            "--tokio-worker-threads must be between 1 and --hard-max-jobs"
+        ));
+    }
+    for (name, limit) in [
+        ("--dds-jobs", cli.dds_jobs),
+        ("--zenoh-shm-jobs", cli.zenoh_shm_jobs),
+        ("--vsomeip-jobs", cli.vsomeip_jobs),
+        ("--mqtt-jobs", cli.mqtt_jobs),
+    ] {
+        if limit == Some(0) {
+            return Err(anyhow!("{name} must be greater than zero"));
+        }
+        if limit.is_some_and(|limit| limit > cli.hard_max_jobs) {
+            return Err(anyhow!("{name} exceeds --hard-max-jobs"));
+        }
+    }
     let mut seen = BTreeSet::new();
     for id in &cli.only {
         if !seen.insert(id) {
@@ -1008,6 +1366,283 @@ fn generated_artifacts_root(repo_root: &Path, now: DateTime<Utc>, process_id: u3
             "{}-pid{process_id}",
             now.format("%Y%m%dT%H%M%S%.6fZ")
         ))
+}
+
+fn resolve_target_directory(repo_root: &Path) -> Result<PathBuf> {
+    if let Some(configured) = std::env::var_os("CARGO_TARGET_DIR") {
+        let path = PathBuf::from(configured);
+        return Ok(if path.is_absolute() {
+            path
+        } else {
+            repo_root.join(path)
+        });
+    }
+    let output = Command::new("cargo")
+        .current_dir(repo_root)
+        .args(["metadata", "--format-version=1", "--no-deps"])
+        .output()
+        .context("unable to run cargo metadata for target-directory resolution")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "cargo metadata failed while resolving target directory: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    metadata["target_directory"]
+        .as_str()
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("cargo metadata did not report target_directory"))
+}
+
+fn canonicalize_allow_missing(path: &Path) -> Result<PathBuf> {
+    if path.exists() {
+        return fs::canonicalize(path)
+            .with_context(|| format!("unable to canonicalize {}", path.display()));
+    }
+    let mut missing = Vec::new();
+    let mut cursor = path;
+    while !cursor.exists() {
+        let name = cursor
+            .file_name()
+            .ok_or_else(|| anyhow!("path {} has no existing ancestor", path.display()))?;
+        missing.push(name.to_os_string());
+        cursor = cursor
+            .parent()
+            .ok_or_else(|| anyhow!("path {} has no existing ancestor", path.display()))?;
+    }
+    let mut canonical = fs::canonicalize(cursor)?;
+    for component in missing.into_iter().rev() {
+        canonical.push(component);
+    }
+    Ok(canonical)
+}
+
+fn reject_private_mount_path(label: &str, path: &Path) -> Result<()> {
+    if path.starts_with("/tmp") || path.starts_with("/dev/shm") {
+        return Err(anyhow!(
+            "{label} path {} is shadowed by the matrix namespace's private /tmp or /dev/shm mount",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn configured_resource_limits(cli: &Cli) -> BTreeMap<ResourceClass, usize> {
+    BTreeMap::from([
+        (ResourceClass::Lola, cli.lola_jobs),
+        (ResourceClass::DdsHeavy, cli.dds_jobs.unwrap_or(cli.jobs)),
+        (
+            ResourceClass::ZenohShm,
+            cli.zenoh_shm_jobs.unwrap_or(cli.jobs),
+        ),
+        (ResourceClass::Vsomeip, cli.vsomeip_jobs.unwrap_or(cli.jobs)),
+        (ResourceClass::Mqtt, cli.mqtt_jobs.unwrap_or(cli.jobs)),
+    ])
+}
+
+fn row_resource_classes(row: &MatrixRow) -> BTreeSet<ResourceClass> {
+    let mut classes = BTreeSet::new();
+    if row.uses_lola() {
+        classes.insert(ResourceClass::Lola);
+    }
+    if row.uses_dds() {
+        classes.insert(ResourceClass::DdsHeavy);
+    }
+    if [row.source, row.sink].into_iter().any(|profile| {
+        profile.physical == PhysicalTransport::Zenoh && profile.kind != EndpointKind::Classic
+    }) {
+        classes.insert(ResourceClass::ZenohShm);
+    }
+    if row.uses_vsomeip() {
+        classes.insert(ResourceClass::Vsomeip);
+    }
+    if row.uses_mqtt5() {
+        classes.insert(ResourceClass::Mqtt);
+    }
+    classes
+}
+
+fn cleanup_summary() -> CleanupSummary {
+    CleanupSummary {
+        process_groups_started: PROCESS_GROUPS_STARTED.load(Ordering::SeqCst),
+        process_group_leak_checks: PROCESS_GROUP_LEAK_CHECKS.load(Ordering::SeqCst),
+        process_group_leaks: PROCESS_GROUP_LEAKS.load(Ordering::SeqCst),
+    }
+}
+
+fn run_preflight(
+    cli: &Cli,
+    runnable_tasks: usize,
+    bundle: &RunBundle,
+    host: &HostSnapshot,
+    artifacts_root: &Path,
+    user_namespace_probe: &std::result::Result<(), String>,
+) -> PreflightSummary {
+    let available_cpus = host.available_parallelism.max(1);
+    let effective_jobs = cli.jobs.min(available_cpus).min(runnable_tasks);
+    let required_memory_bytes = mib_to_bytes(
+        cli.preflight_memory_mib_per_job
+            .saturating_mul(effective_jobs as u64)
+            .saturating_add(PREFLIGHT_MEMORY_RESERVE_MIB),
+    );
+    let required_tasks = cli
+        .preflight_tasks_per_job
+        .saturating_mul(effective_jobs as u64)
+        .saturating_add(PREFLIGHT_TASK_RESERVE);
+    let required_open_files = cli
+        .preflight_fds_per_job
+        .saturating_mul(effective_jobs as u64)
+        .saturating_add(PREFLIGHT_FD_RESERVE);
+    let bundle_bytes = bundle
+        .manifest
+        .files
+        .iter()
+        .map(|file| file.size_bytes)
+        .sum::<u64>();
+    let required_disk_bytes = bundle_bytes
+        .saturating_add(mib_to_bytes(
+            cli.preflight_disk_mib_per_row
+                .saturating_mul(runnable_tasks as u64),
+        ))
+        .saturating_add(mib_to_bytes(PREFLIGHT_DISK_RESERVE_MIB));
+    let required_inodes = cli
+        .preflight_inodes_per_row
+        .saturating_mul(runnable_tasks as u64)
+        .saturating_add(PREFLIGHT_INODE_RESERVE)
+        .saturating_add(bundle.manifest.files.len() as u64 * 2);
+    let available_tasks = available_task_capacity(host);
+    let open_files_soft_limit = host
+        .open_files_limit_soft
+        .as_deref()
+        .and_then(parse_numeric_limit);
+    let user_namespaces_max = read_trimmed(Path::new("/proc/sys/user/max_user_namespaces"))
+        .and_then(|value| value.parse().ok());
+    let filesystem = host
+        .filesystems
+        .iter()
+        .find(|snapshot| snapshot.path == artifacts_root.display().to_string());
+    let reasonable_cpu_max = available_cpus
+        .saturating_mul(2)
+        .max(4)
+        .min(cli.hard_max_jobs);
+    let reasonable_task_max = runnable_tasks
+        .saturating_mul(4)
+        .max(4)
+        .min(cli.hard_max_jobs);
+
+    let mut checks = vec![
+        PreflightCheck {
+            name: "worker_request",
+            pass: cli.jobs <= reasonable_cpu_max && cli.jobs <= reasonable_task_max,
+            detail: format!(
+                "requested={}, effective={}, cpu_based_max={}, runnable_based_max={}, hard_max={}",
+                cli.jobs, effective_jobs, reasonable_cpu_max, reasonable_task_max, cli.hard_max_jobs
+            ),
+        },
+        PreflightCheck {
+            name: "memory",
+            pass: host
+                .memory_available_bytes
+                .is_some_and(|available| available >= required_memory_bytes),
+            detail: format!(
+                "required={} available={:?}; swap_free={:?} is recorded but not counted as runnable RAM",
+                required_memory_bytes, host.memory_available_bytes, host.swap_free_bytes
+            ),
+        },
+        PreflightCheck {
+            name: "tasks",
+            pass: available_tasks.is_some_and(|available| available >= required_tasks),
+            detail: format!("required={required_tasks} available={available_tasks:?}"),
+        },
+        PreflightCheck {
+            name: "open_files",
+            pass: open_files_soft_limit
+                .is_some_and(|available| available >= required_open_files),
+            detail: format!(
+                "required={required_open_files} soft_limit={open_files_soft_limit:?}"
+            ),
+        },
+        PreflightCheck {
+            name: "disk",
+            pass: filesystem
+                .and_then(|snapshot| snapshot.available_bytes)
+                .is_some_and(|available| available >= required_disk_bytes),
+            detail: format!(
+                "required={} available={:?}",
+                required_disk_bytes,
+                filesystem.and_then(|snapshot| snapshot.available_bytes)
+            ),
+        },
+        PreflightCheck {
+            name: "user_namespaces",
+            pass: user_namespaces_max.is_some_and(|maximum| maximum > 0)
+                && user_namespace_probe.is_ok(),
+            detail: format!(
+                "max_user_namespaces={user_namespaces_max:?}; executable_probe={user_namespace_probe:?}"
+            ),
+        },
+    ];
+    let inode_available = filesystem.and_then(|snapshot| snapshot.available_inodes);
+    checks.push(PreflightCheck {
+        name: "inodes",
+        pass: inode_available
+            .map(|available| available >= required_inodes)
+            .unwrap_or_else(|| {
+                filesystem.is_some_and(|snapshot| !snapshot.inode_reporting_supported)
+            }),
+        detail: match inode_available {
+            Some(available) => format!("required={required_inodes} available={available}"),
+            None => "filesystem reports no meaningful inode quota; byte capacity remains enforced"
+                .to_string(),
+        },
+    });
+    let pass = checks.iter().all(|check| check.pass);
+    PreflightSummary {
+        verdict: if pass { "PASS" } else { "FAIL" },
+        configured_jobs: cli.jobs,
+        effective_jobs,
+        available_cpus,
+        runnable_tasks,
+        required_memory_bytes,
+        available_memory_bytes: host.memory_available_bytes,
+        available_swap_bytes: host.swap_free_bytes,
+        required_tasks,
+        available_tasks,
+        required_open_files,
+        open_files_soft_limit,
+        required_disk_bytes,
+        required_inodes,
+        user_namespaces_max,
+        checks,
+    }
+}
+
+fn mib_to_bytes(mib: u64) -> u64 {
+    mib.saturating_mul(1024 * 1024)
+}
+
+fn parse_numeric_limit(value: &str) -> Option<u64> {
+    (value != "unlimited" && value != "max")
+        .then(|| value.parse().ok())
+        .flatten()
+}
+
+fn available_task_capacity(host: &HostSnapshot) -> Option<u64> {
+    let process_limit = host
+        .process_limit_soft
+        .as_deref()
+        .and_then(parse_numeric_limit);
+    let cgroup_limit = host
+        .cgroup_pids_max
+        .as_deref()
+        .and_then(parse_numeric_limit)
+        .map(|maximum| maximum.saturating_sub(host.cgroup_pids_current.unwrap_or_default()));
+    match (process_limit, cgroup_limit) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
 }
 
 fn plan_rows(
@@ -1053,7 +1688,7 @@ fn plan_rows(
                 } else {
                     runnable.push(ScheduledTask {
                         slot,
-                        lola_sensitive: row.uses_lola(),
+                        resources: row_resource_classes(row),
                         payload: RowExecution {
                             row: row.clone(),
                             iteration,
@@ -1076,7 +1711,7 @@ fn plan_rows(
 fn run_bounded<T, R, F>(
     tasks: Vec<ScheduledTask<T>>,
     jobs: usize,
-    lola_jobs: usize,
+    resource_limits: &BTreeMap<ResourceClass, usize>,
     cancellation: &Cancellation,
     run_task: F,
 ) -> Result<Vec<(usize, R)>>
@@ -1085,18 +1720,22 @@ where
     R: Send,
     F: Fn(T) -> Result<R> + Sync,
 {
-    Ok(
-        run_bounded_instrumented(tasks, jobs, lola_jobs, cancellation, |payload, _| {
-            run_task(payload)
-        })?
-        .completed,
-    )
+    Ok(run_bounded_instrumented(
+        tasks,
+        jobs,
+        jobs,
+        resource_limits,
+        cancellation,
+        |payload, _| run_task(payload),
+    )?
+    .completed)
 }
 
 fn run_bounded_instrumented<T, R, F>(
     tasks: Vec<ScheduledTask<T>>,
-    jobs: usize,
-    lola_jobs: usize,
+    configured_jobs: usize,
+    effective_jobs: usize,
+    resource_limits: &BTreeMap<ResourceClass, usize>,
     cancellation: &Cancellation,
     run_task: F,
 ) -> Result<BoundedRun<R>>
@@ -1105,16 +1744,27 @@ where
     R: Send,
     F: Fn(T, TaskDispatchTiming) -> Result<R> + Sync,
 {
-    validate_concurrency(jobs, lola_jobs)?;
+    let lola_jobs = resource_limits
+        .get(&ResourceClass::Lola)
+        .copied()
+        .unwrap_or(effective_jobs);
+    validate_concurrency(effective_jobs, lola_jobs.min(effective_jobs))?;
     let started_at = Utc::now().to_rfc3339();
     let started = Instant::now();
     let initial_queued = tasks.len();
-    let lola_task_count = tasks.iter().filter(|task| task.lola_sensitive).count();
+    let resource_task_counts: BTreeMap<_, _> = ResourceClass::ORDERED
+        .into_iter()
+        .map(|class| {
+            let count = tasks.iter().filter(|task| task.uses(class)).count();
+            (class, count)
+        })
+        .collect();
+    let limits = resource_limits.clone();
     let shared = Arc::new((
         Mutex::new(SchedulerState {
             pending: tasks.into(),
             active: 0,
-            active_lola: 0,
+            active_resources: BTreeMap::new(),
             permit_wait_started: BTreeMap::new(),
             events: Vec::with_capacity(initial_queued.saturating_mul(2)),
             stopped: false,
@@ -1124,11 +1774,12 @@ where
     let (sender, receiver) = mpsc::channel();
 
     thread::scope(|scope| -> Result<()> {
-        let mut workers = Vec::with_capacity(jobs);
-        for _ in 0..jobs {
+        let mut workers = Vec::with_capacity(effective_jobs);
+        for _ in 0..effective_jobs {
             let shared = Arc::clone(&shared);
             let sender = sender.clone();
             let run_task = &run_task;
+            let limits = &limits;
             workers.push(scope.spawn(move || loop {
                 let task = {
                     let (state_lock, wake) = &*shared;
@@ -1141,59 +1792,70 @@ where
                             return;
                         }
                         let now = Instant::now();
-                        let eligible = if jobs == 1 {
-                            Some(0)
+                        let blocked: Vec<_> = state
+                            .pending
+                            .iter()
+                            .flat_map(|task| {
+                                blocked_resource_classes(task, &state, effective_jobs, limits)
+                                    .into_iter()
+                                    .map(move |class| (task.slot, class))
+                            })
+                            .collect();
+                        for key in blocked {
+                            state.permit_wait_started.entry(key).or_insert(now);
+                        }
+                        let is_eligible = |task: &ScheduledTask<T>| {
+                            blocked_resource_classes(task, &state, effective_jobs, limits)
+                                .is_empty()
+                        };
+                        let eligible = if effective_jobs == 1 {
+                            state.pending.iter().position(is_eligible)
                         } else {
-                            let regular_pending =
-                                state.pending.iter().any(|task| !task.lola_sensitive);
-                            let lola_capacity = if regular_pending {
-                                lola_jobs.min(jobs - 1)
-                            } else {
-                                lola_jobs
-                            };
-                            if state.active_lola >= lola_capacity {
-                                let blocked_slots: Vec<_> = state
-                                    .pending
-                                    .iter()
-                                    .filter(|task| task.lola_sensitive)
-                                    .map(|task| task.slot)
-                                    .collect();
-                                for slot in blocked_slots {
-                                    state.permit_wait_started.entry(slot).or_insert(now);
-                                }
-                            }
-                            if state.active_lola < lola_capacity {
-                                state.pending.iter().position(|task| task.lola_sensitive)
-                            } else {
-                                None
-                            }
-                            .or_else(|| state.pending.iter().position(|task| !task.lola_sensitive))
+                            state
+                                .pending
+                                .iter()
+                                .position(|task| {
+                                    task.uses(ResourceClass::Lola) && is_eligible(task)
+                                })
+                                .or_else(|| {
+                                    state.pending.iter().position(|task| {
+                                        !task.uses(ResourceClass::Lola) && is_eligible(task)
+                                    })
+                                })
                         };
                         if let Some(index) = eligible {
                             let task = state
                                 .pending
                                 .remove(index)
                                 .expect("eligible scheduler task disappeared");
-                            if task.lola_sensitive {
-                                state.active_lola += 1;
+                            for class in &task.resources {
+                                *state.active_resources.entry(*class).or_default() += 1;
                             }
                             state.active += 1;
+                            let resource_permit_waits: BTreeMap<_, _> = task
+                                .resources
+                                .iter()
+                                .filter_map(|class| {
+                                    state
+                                        .permit_wait_started
+                                        .remove(&(task.slot, *class))
+                                        .map(|wait_started| (*class, wait_started.elapsed()))
+                                })
+                                .collect();
                             let dispatch = TaskDispatchTiming {
                                 slot: task.slot,
                                 queue_wait: started.elapsed(),
-                                permit_wait: state
-                                    .permit_wait_started
-                                    .remove(&task.slot)
-                                    .map(|permit_started| permit_started.elapsed()),
+                                permit_wait: resource_permit_waits.values().copied().max(),
+                                resource_permit_waits,
                             };
                             record_scheduler_event(
                                 &mut state,
                                 started,
                                 SchedulerEventKind::Dispatch,
                                 task.slot,
-                                task.lola_sensitive,
-                                jobs,
-                                lola_jobs,
+                                task.uses(ResourceClass::Lola),
+                                effective_jobs,
+                                limits,
                             );
                             break (task, dispatch);
                         }
@@ -1205,7 +1867,8 @@ where
                 };
 
                 let (task, dispatch) = task;
-                let lola_sensitive = task.lola_sensitive;
+                let lola_sensitive = task.uses(ResourceClass::Lola);
+                let resources = task.resources.clone();
                 let slot = task.slot;
                 let result = catch_unwind(AssertUnwindSafe(|| run_task(task.payload, dispatch)))
                     .unwrap_or_else(|_| Err(anyhow!("matrix scheduler task panicked")));
@@ -1213,8 +1876,12 @@ where
                 {
                     let (state_lock, wake) = &*shared;
                     let mut state = state_lock.lock().expect("scheduler state mutex poisoned");
-                    if lola_sensitive {
-                        state.active_lola -= 1;
+                    for class in resources {
+                        let active = state
+                            .active_resources
+                            .get_mut(&class)
+                            .expect("active resource permit disappeared");
+                        *active -= 1;
                     }
                     state.active -= 1;
                     record_scheduler_event(
@@ -1223,8 +1890,8 @@ where
                         SchedulerEventKind::Complete,
                         slot,
                         lola_sensitive,
-                        jobs,
-                        lola_jobs,
+                        effective_jobs,
+                        limits,
                     );
                     if failed {
                         state.stopped = true;
@@ -1271,10 +1938,11 @@ where
             Some(started_at),
             Some(Utc::now().to_rfc3339()),
             duration,
-            jobs,
-            lola_jobs,
+            configured_jobs,
+            effective_jobs,
+            resource_limits,
             initial_queued,
-            lola_task_count,
+            &resource_task_counts,
             events,
         ),
     })
@@ -1287,15 +1955,27 @@ fn record_scheduler_event<T>(
     slot: usize,
     lola_sensitive: bool,
     jobs: usize,
-    lola_jobs: usize,
+    resource_limits: &BTreeMap<ResourceClass, usize>,
 ) {
-    let lola_capacity = if jobs == 1 {
-        1
-    } else if state.pending.iter().any(|task| !task.lola_sensitive) {
-        lola_jobs.min(jobs - 1)
-    } else {
-        lola_jobs
-    };
+    let active_lola = active_resource_count(state, ResourceClass::Lola);
+    let capacities: BTreeMap<_, _> = ResourceClass::ORDERED
+        .into_iter()
+        .map(|class| {
+            (
+                class,
+                resource_capacity(state, class, jobs, resource_limits),
+            )
+        })
+        .collect();
+    let available = capacities
+        .iter()
+        .map(|(class, capacity)| {
+            (
+                *class,
+                capacity.saturating_sub(active_resource_count(state, *class)),
+            )
+        })
+        .collect();
     state.events.push(SchedulerEvent {
         elapsed_us: duration_us(started.elapsed()),
         kind,
@@ -1303,10 +1983,64 @@ fn record_scheduler_event<T>(
         lola_sensitive,
         queued: state.pending.len(),
         active: state.active,
-        active_lola: state.active_lola,
+        active_lola,
         global_permits_available: jobs.saturating_sub(state.active),
-        lola_permits_available: lola_capacity.saturating_sub(state.active_lola),
+        lola_permits_available: capacities
+            .get(&ResourceClass::Lola)
+            .copied()
+            .unwrap_or(jobs)
+            .saturating_sub(active_lola),
+        active_resources: state.active_resources.clone(),
+        resource_permits_available: available,
     });
+}
+
+fn active_resource_count<T>(state: &SchedulerState<T>, class: ResourceClass) -> usize {
+    state
+        .active_resources
+        .get(&class)
+        .copied()
+        .unwrap_or_default()
+}
+
+fn resource_capacity<T>(
+    state: &SchedulerState<T>,
+    class: ResourceClass,
+    jobs: usize,
+    resource_limits: &BTreeMap<ResourceClass, usize>,
+) -> usize {
+    let configured = resource_limits
+        .get(&class)
+        .copied()
+        .unwrap_or(jobs)
+        .min(jobs);
+    if class == ResourceClass::Lola
+        && jobs > 1
+        && state
+            .pending
+            .iter()
+            .any(|task| !task.uses(ResourceClass::Lola))
+    {
+        configured.min(jobs - 1)
+    } else {
+        configured
+    }
+}
+
+fn blocked_resource_classes<T>(
+    task: &ScheduledTask<T>,
+    state: &SchedulerState<T>,
+    jobs: usize,
+    resource_limits: &BTreeMap<ResourceClass, usize>,
+) -> Vec<ResourceClass> {
+    task.resources
+        .iter()
+        .copied()
+        .filter(|class| {
+            active_resource_count(state, *class)
+                >= resource_capacity(state, *class, jobs, resource_limits)
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1314,10 +2048,11 @@ fn aggregate_scheduler_events(
     started_at: Option<String>,
     completed_at: Option<String>,
     duration: Duration,
-    jobs: usize,
-    lola_jobs: usize,
+    configured_jobs: usize,
+    effective_jobs: usize,
+    resource_limits: &BTreeMap<ResourceClass, usize>,
     initial_queued: usize,
-    lola_task_count: usize,
+    resource_task_counts: &BTreeMap<ResourceClass, usize>,
     events: Vec<SchedulerEvent>,
 ) -> SchedulerSummary {
     let duration_us = duration_us(duration);
@@ -1351,10 +2086,35 @@ fn aggregate_scheduler_events(
         started_at,
         completed_at,
         duration_us,
-        configured_jobs: jobs,
-        effective_jobs: jobs.min(initial_queued),
-        configured_lola_jobs: lola_jobs,
-        effective_lola_jobs: lola_jobs.min(lola_task_count).min(jobs.min(initial_queued)),
+        configured_jobs,
+        effective_jobs: effective_jobs.min(initial_queued),
+        configured_lola_jobs: resource_limits
+            .get(&ResourceClass::Lola)
+            .copied()
+            .unwrap_or(effective_jobs),
+        effective_lola_jobs: resource_limits
+            .get(&ResourceClass::Lola)
+            .copied()
+            .unwrap_or(effective_jobs)
+            .min(
+                resource_task_counts
+                    .get(&ResourceClass::Lola)
+                    .copied()
+                    .unwrap_or_default(),
+            )
+            .min(effective_jobs.min(initial_queued)),
+        configured_resource_limits: resource_limits.clone(),
+        effective_resource_limits: resource_limits
+            .iter()
+            .map(|(class, limit)| {
+                (
+                    *class,
+                    (*limit)
+                        .min(effective_jobs)
+                        .min(resource_task_counts.get(class).copied().unwrap_or_default()),
+                )
+            })
+            .collect(),
         initial_queued,
         peak_active,
         peak_active_lola,
@@ -1675,9 +2435,11 @@ fn row_run_id(row: &MatrixRow, iterations: usize, iteration: usize) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_row(
     repo_root: &Path,
     artifacts_root: &Path,
+    bundle: &RunBundle,
     row: &MatrixRow,
     cli: &Cli,
     iteration: usize,
@@ -1703,6 +2465,7 @@ fn run_row(
         let (mut result, mut timings) = run_row_attempt(
             repo_root,
             artifacts_root,
+            bundle,
             row,
             cli,
             iteration,
@@ -1713,6 +2476,11 @@ fn run_row(
         if attempt == 0 {
             timings.queue_wait_us = duration_us(dispatch.queue_wait);
             timings.permit_wait_us = dispatch.permit_wait.map(duration_us);
+            timings.resource_permit_wait_us = dispatch
+                .resource_permit_waits
+                .iter()
+                .map(|(class, wait)| (*class, duration_us(*wait)))
+                .collect();
             timings.total_us = timings.total_us.saturating_add(timings.queue_wait_us);
         }
         result.iteration = iteration;
@@ -1727,7 +2495,7 @@ fn run_row(
         populate_row_timings(
             &mut result,
             &attempts,
-            dispatch,
+            &dispatch,
             execution_started.elapsed(),
         );
         if result.classification != RowClassification::Failed {
@@ -1746,7 +2514,7 @@ fn run_row(
             populate_row_timings(
                 &mut result,
                 &attempts,
-                dispatch,
+                &dispatch,
                 execution_started.elapsed(),
             );
             write_row_checkpoint(artifacts_root, dispatch.slot, &result)?;
@@ -1767,7 +2535,7 @@ fn run_row(
             populate_row_timings(
                 &mut result,
                 &attempts,
-                dispatch,
+                &dispatch,
                 execution_started.elapsed(),
             );
             write_row_checkpoint(artifacts_root, dispatch.slot, &result)?;
@@ -1780,9 +2548,11 @@ fn run_row(
     Ok(last_result.expect("at least one row attempt ran"))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_row_attempt(
     repo_root: &Path,
     artifacts_root: &Path,
+    bundle: &RunBundle,
     row: &MatrixRow,
     cli: &Cli,
     iteration: usize,
@@ -1824,49 +2594,22 @@ fn run_row_attempt(
     let lola_manifest_path = lola_manifest_paths
         .as_ref()
         .map(|paths| paths.streamer.clone());
-    let lola_bridge_lib_dir = match detect_lola_bridge_lib_dir(repo_root) {
-        Ok(path) => Some(path),
-        Err(error) if row.uses_lola() => {
-            timings.preparation_us = duration_us(preparation_started.elapsed());
-            timings.total_us = duration_us(attempt_started.elapsed());
-            return Ok((row_result(
-                row,
-                RowClassification::Blocked,
-                format!(
-                    "LoLa row {} requires libup_lola_bridge.so; build LoLa examples first or set LD_LIBRARY_PATH: {error:#}",
-                    row.id
-                ),
-                Some(row_dir),
-                None,
-                lola_manifest_path,
-                logs,
-            ), timings));
-        }
-        Err(_) => None,
-    };
-    let vsomeip_lib_dir = match detect_vsomeip_lib_dir(repo_root) {
-        Ok(path) => Some(path),
-        Err(error) if row.uses_vsomeip() => {
-            timings.preparation_us = duration_us(preparation_started.elapsed());
-            timings.total_us = duration_us(attempt_started.elapsed());
-            return Ok((
-                row_result(
-                    row,
-                    RowClassification::Blocked,
-                    format!(
-                        "vSomeIP row {} requires libvsomeip3.so.3 on LD_LIBRARY_PATH: {error:#}",
-                        row.id
-                    ),
-                    Some(row_dir),
-                    None,
-                    lola_manifest_path,
-                    logs,
-                ),
-                timings,
-            ));
-        }
-        Err(_) => None,
-    };
+    let lola_bridge_lib = row
+        .uses_lola()
+        .then(|| bundle.native_library("libup_lola_bridge.so"))
+        .transpose()?;
+    let vsomeip_lib = row
+        .uses_vsomeip()
+        .then(|| bundle.native_library("libvsomeip3.so.3"))
+        .transpose()?;
+    let vsomeip_cfg_lib = row
+        .uses_vsomeip()
+        .then(|| bundle.native_library("libvsomeip3-cfg.so.3"))
+        .transpose()?;
+    let vsomeip_sd_lib = row
+        .uses_vsomeip()
+        .then(|| bundle.native_library("libvsomeip3-sd.so.3"))
+        .transpose()?;
     let iceoryx2_root = if row.uses_iceoryx2() {
         Some(PathBuf::from(ICEORYX2_ROOT_PATH))
     } else {
@@ -1875,26 +2618,26 @@ fn run_row_attempt(
     let process_env = row_env(
         row,
         iceoryx2_root.as_deref(),
-        lola_bridge_lib_dir.as_deref(),
-        vsomeip_lib_dir.as_deref(),
+        bundle,
+        cli.tokio_worker_threads,
     );
     let mut native_library_paths = BTreeMap::new();
-    if let Some(path) = &lola_bridge_lib_dir {
-        native_library_paths.insert(
-            "lola".to_string(),
-            path.join("libup_lola_bridge.so").display().to_string(),
-        );
+    if let Some(path) = &lola_bridge_lib {
+        native_library_paths.insert("lola".to_string(), path.display().to_string());
     }
-    if let Some(path) = &vsomeip_lib_dir {
-        native_library_paths.insert(
-            "vsomeip".to_string(),
-            path.join("libvsomeip3.so.3").display().to_string(),
-        );
+    if let Some(path) = &vsomeip_lib {
+        native_library_paths.insert("vsomeip".to_string(), path.display().to_string());
+    }
+    if let Some(path) = &vsomeip_cfg_lib {
+        native_library_paths.insert("vsomeip_cfg".to_string(), path.display().to_string());
+    }
+    if let Some(path) = &vsomeip_sd_lib {
+        native_library_paths.insert("vsomeip_sd".to_string(), path.display().to_string());
     }
     timings.preparation_us = duration_us(preparation_started.elapsed());
 
     let namespace_started = Instant::now();
-    let mut namespace = start_namespace_holder(&row_dir, cancellation)?;
+    let mut namespace = start_namespace_holder(bundle, &process_env, &row_dir, cancellation)?;
     timings.namespace_us = duration_us(namespace_started.elapsed());
     logs.insert(
         "namespace_holder".to_string(),
@@ -1903,7 +2646,7 @@ fn run_row_attempt(
 
     let mut mqtt_broker = if row.uses_mqtt5() {
         let broker_started = Instant::now();
-        let broker = start_mqtt_broker(&row_dir, &process_env, &namespace, cancellation)?;
+        let broker = start_mqtt_broker(bundle, &row_dir, &process_env, &namespace, cancellation)?;
         timings.broker_us = duration_us(broker_started.elapsed());
         logs.insert(
             "mqtt_broker".to_string(),
@@ -1940,8 +2683,9 @@ fn run_row_attempt(
 
     let streamer_started = Instant::now();
     let mut streamer = spawn_process(
+        bundle,
         "streamer",
-        &target_debug_binary(repo_root, "configurable-streamer"),
+        &bundle.executable("configurable-streamer")?,
         &["--config".to_string(), config_path.display().to_string()],
         &repo_root.join("configurable-streamer"),
         &process_env,
@@ -1975,8 +2719,9 @@ fn run_row_attempt(
             cli,
         )?;
         let mut passive = spawn_process(
+            bundle,
             "passive",
-            &target_debug_binary(repo_root, &passive_spec.binary),
+            &bundle.executable(&passive_spec.binary)?,
             &passive_spec.args,
             repo_root,
             &process_env,
@@ -2043,8 +2788,9 @@ fn run_row_attempt(
             cli,
         )?;
         let mut active = spawn_process(
+            bundle,
             "active",
-            &target_debug_binary(repo_root, &active_spec.binary),
+            &bundle.executable(&active_spec.binary)?,
             &active_spec.args,
             repo_root,
             &process_env,
@@ -2089,18 +2835,22 @@ fn run_row_attempt(
         timings.validation_us = duration_us(validation_started.elapsed());
         validation?;
         let teardown_started = Instant::now();
-        terminate(&mut passive);
-        terminate(&mut active);
+        terminate(&mut passive)?;
+        terminate(&mut active)?;
         timings.teardown_us = duration_us(teardown_started.elapsed());
         Ok(())
     })();
 
     let teardown_started = Instant::now();
-    terminate(&mut streamer);
+    let mut cleanup_result = terminate(&mut streamer);
     if let Some(broker) = &mut mqtt_broker {
-        terminate(broker);
+        if let Err(error) = terminate(broker) {
+            cleanup_result = cleanup_result.and(Err(error));
+        }
     }
-    terminate(&mut namespace);
+    if let Err(error) = terminate(&mut namespace) {
+        cleanup_result = cleanup_result.and(Err(error));
+    }
     timings.teardown_us = timings
         .teardown_us
         .saturating_add(duration_us(teardown_started.elapsed()));
@@ -2110,6 +2860,7 @@ fn run_row_attempt(
         timings.cooldown_us = duration_us(cooldown_started.elapsed());
     }
 
+    let result = result.and(cleanup_result);
     let mut result = match result {
         Ok(()) => row_result(
             row,
@@ -2148,6 +2899,7 @@ fn run_row_attempt(
 
 fn build_required_binaries(
     repo_root: &Path,
+    target_directory: &Path,
     rows: &[MatrixRow],
     use_local_sibling_patches: bool,
 ) -> Result<BuildSummary> {
@@ -2200,7 +2952,7 @@ fn build_required_binaries(
         started_at: Some(started_at),
         completed_at: Some(Utc::now().to_rfc3339()),
         duration_us: duration_us(started.elapsed()),
-        target_directory: repo_root.join("target/debug").display().to_string(),
+        target_directory: target_directory.display().to_string(),
         configurable_streamer_features: configurable_streamer_features(rows)
             .into_iter()
             .map(str::to_string)
@@ -2213,13 +2965,13 @@ fn build_required_binaries(
     })
 }
 
-fn skipped_build_summary(repo_root: &Path, rows: &[MatrixRow]) -> BuildSummary {
+fn skipped_build_summary(target_directory: &Path, rows: &[MatrixRow]) -> BuildSummary {
     BuildSummary {
         skipped: true,
         started_at: None,
         completed_at: None,
         duration_us: 0,
-        target_directory: repo_root.join("target/debug").display().to_string(),
+        target_directory: target_directory.display().to_string(),
         configurable_streamer_features: configurable_streamer_features(rows)
             .into_iter()
             .map(str::to_string)
@@ -3707,7 +4459,9 @@ fn require_any_log(contents: &str, markers: &[&str], path: &Path) -> Result<()> 
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_process(
+    bundle: &RunBundle,
     name: &str,
     executable: &Path,
     args: &[String],
@@ -3720,7 +4474,7 @@ fn spawn_process(
     let stdout = log_file(&log_path)?;
     let stderr = stdout.try_clone()?;
     let mut command = if let Some(namespace) = namespace {
-        let mut command = Command::new("nsenter");
+        let mut command = Command::new(bundle.executable("nsenter")?);
         command
             .arg("-t")
             .arg(namespace.child.id().to_string())
@@ -3733,9 +4487,10 @@ fn spawn_process(
     command
         .current_dir(workdir)
         .args(args)
-        .envs(env.iter().map(|(key, value)| (key, value)))
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
+    configure_matrix_environment(&mut command, env);
+    command.process_group(0);
     let child = command.spawn().with_context(|| {
         format!(
             "unable to spawn {name}: {} {}",
@@ -3743,14 +4498,21 @@ fn spawn_process(
             args.join(" ")
         )
     })?;
+    let process_group =
+        i32::try_from(child.id()).context("child PID exceeds process-group range")?;
+    PROCESS_GROUPS_STARTED.fetch_add(1, Ordering::SeqCst);
     Ok(RunningProcess {
         name: name.to_string(),
         log_path,
         child,
+        process_group,
+        terminated: false,
     })
 }
 
 fn start_namespace_holder(
+    bundle: &RunBundle,
+    env: &[(String, String)],
     artifact_dir: &Path,
     cancellation: &Cancellation,
 ) -> Result<RunningProcess> {
@@ -3764,19 +4526,30 @@ fn start_namespace_holder(
         shm_size = NAMESPACE_SHM_SIZE,
         iceoryx2_root = ICEORYX2_ROOT_PATH,
     );
-    let child = Command::new("unshare")
-        .args(["-U", "--map-root-user", "-m", "-n", "-i", "sh", "-c"])
+    let mut command = Command::new(bundle.executable("unshare")?);
+    command
+        .args(["-U", "--map-root-user", "-m", "-n", "-i"])
+        .arg(bundle.executable("sh")?)
+        .arg("-c")
         .arg(script)
         .arg("sh")
         .arg(&ready_path)
         .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
+        .stderr(Stdio::from(stderr));
+    configure_matrix_environment(&mut command, env);
+    command.process_group(0);
+    let child = command
         .spawn()
         .with_context(|| "unable to spawn namespace holder with unshare")?;
+    let process_group =
+        i32::try_from(child.id()).context("child PID exceeds process-group range")?;
+    PROCESS_GROUPS_STARTED.fetch_add(1, Ordering::SeqCst);
     let mut process = RunningProcess {
         name: "namespace-holder".to_string(),
         log_path,
         child,
+        process_group,
+        terminated: false,
     };
     wait_for_path_or_exit(
         &ready_path,
@@ -3789,6 +4562,7 @@ fn start_namespace_holder(
 }
 
 fn start_mqtt_broker(
+    bundle: &RunBundle,
     artifact_dir: &Path,
     env: &[(String, String)],
     namespace: &RunningProcess,
@@ -3803,8 +4577,9 @@ fn start_mqtt_broker(
     )
     .with_context(|| format!("unable to write {}", config_path.display()))?;
     let mut broker = spawn_process(
+        bundle,
         "mqtt-broker",
-        Path::new("mosquitto"),
+        &bundle.executable("mosquitto")?,
         &["-c".to_string(), config_path.display().to_string()],
         artifact_dir,
         env,
@@ -3975,23 +4750,73 @@ fn assert_success(process: &mut RunningProcess) -> Result<()> {
     }
 }
 
-fn terminate(process: &mut RunningProcess) {
-    if matches!(process.child.try_wait(), Ok(Some(_))) {
-        return;
+fn terminate(process: &mut RunningProcess) -> Result<()> {
+    if process.terminated {
+        return Ok(());
     }
-    let _ = Command::new("kill")
-        .arg("-INT")
-        .arg(process.child.id().to_string())
-        .status();
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while Instant::now() < deadline {
-        if matches!(process.child.try_wait(), Ok(Some(_))) {
-            return;
+    PROCESS_GROUP_LEAK_CHECKS.fetch_add(1, Ordering::SeqCst);
+    for (signal, grace) in [
+        (libc::SIGINT, Duration::from_secs(2)),
+        (libc::SIGTERM, Duration::from_secs(1)),
+        (libc::SIGKILL, Duration::from_secs(2)),
+    ] {
+        if !process_group_exists(process.process_group)? {
+            let _ = process.child.try_wait();
+            process.terminated = true;
+            return Ok(());
         }
-        thread::sleep(Duration::from_millis(50));
+        signal_process_group(process.process_group, signal)?;
+        if wait_for_process_group_exit(process, grace)? {
+            process.terminated = true;
+            return Ok(());
+        }
     }
-    let _ = process.child.kill();
-    let _ = process.child.wait();
+    PROCESS_GROUP_LEAKS.fetch_add(1, Ordering::SeqCst);
+    Err(anyhow!(
+        "process group {} for {} still has descendants after SIGKILL; log={}",
+        process.process_group,
+        process.name,
+        process.log_path.display()
+    ))
+}
+
+fn signal_process_group(process_group: i32, signal: i32) -> Result<()> {
+    // SAFETY: a negative, positive process-group ID is passed by value; no pointer is involved.
+    let result = unsafe { libc::kill(-process_group, signal) };
+    if result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+            .with_context(|| format!("unable to signal process group {process_group}"))
+    }
+}
+
+fn process_group_exists(process_group: i32) -> Result<bool> {
+    // SAFETY: signal zero only checks a process-group ID passed by value.
+    let result = unsafe { libc::kill(-process_group, 0) };
+    if result == 0 {
+        return Ok(true);
+    }
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(libc::ESRCH) => Ok(false),
+        Some(libc::EPERM) => Ok(true),
+        _ => Err(std::io::Error::last_os_error())
+            .with_context(|| format!("unable to inspect process group {process_group}")),
+    }
+}
+
+fn wait_for_process_group_exit(process: &mut RunningProcess, timeout: Duration) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let _ = process.child.try_wait()?;
+        if !process_group_exists(process.process_group)? {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
 }
 
 fn remaining_timeout(started: Instant, timeout_secs: u64, phase: &str) -> Result<Duration> {
@@ -4029,7 +4854,7 @@ fn attempt_result(
 fn populate_row_timings(
     result: &mut RowResult,
     attempts: &[AttemptResult],
-    dispatch: TaskDispatchTiming,
+    dispatch: &TaskDispatchTiming,
     execution: Duration,
 ) {
     let queue_wait_us = duration_us(dispatch.queue_wait);
@@ -4038,6 +4863,11 @@ fn populate_row_timings(
     result.timings = RowTimingSummary {
         queue_wait_us,
         permit_wait_us: dispatch.permit_wait.map(duration_us),
+        resource_permit_wait_us: dispatch
+            .resource_permit_waits
+            .iter()
+            .map(|(class, wait)| (*class, duration_us(*wait)))
+            .collect(),
         execution_us,
         total_us: queue_wait_us.saturating_add(execution_us),
     };
@@ -4053,7 +4883,13 @@ fn checkpoint_path(artifacts_root: &Path, slot: usize, result: &RowResult) -> Pa
 
 fn write_row_checkpoint(artifacts_root: &Path, slot: usize, result: &RowResult) -> Result<()> {
     let path = checkpoint_path(artifacts_root, slot, result);
-    atomic_write_json(&path, result)
+    atomic_write_json(
+        &path,
+        &CheckpointEnvelope {
+            schema_version: CHECKPOINT_SCHEMA_VERSION,
+            row: result,
+        },
+    )
 }
 
 fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -4092,6 +4928,10 @@ fn atomic_write(path: &Path, payload: &[u8]) -> Result<()> {
                 temporary.display()
             )
         })?;
+        File::open(parent)
+            .with_context(|| format!("unable to open {} for directory sync", parent.display()))?
+            .sync_all()
+            .with_context(|| format!("unable to sync directory {}", parent.display()))?;
         Ok(())
     })();
     if write_result.is_err() {
@@ -4163,15 +5003,21 @@ fn infer_failure_phase(reason: &str) -> &'static str {
 fn row_env(
     row: &MatrixRow,
     iceoryx2_root: Option<&Path>,
-    lola_bridge_lib_dir: Option<&Path>,
-    vsomeip_lib_dir: Option<&Path>,
+    bundle: &RunBundle,
+    tokio_worker_threads: usize,
 ) -> Vec<(String, String)> {
     let mut env = vec![
         (
             "RUST_LOG".to_string(),
             "info,configurable_streamer=debug,up_streamer=debug,example_streamer_uses=debug,up_transport_zenoh=debug,up_transport_iceoryx2_rust=debug,up_transport_lola_rust=debug,up_transport_dds=debug".to_string(),
         ),
-        ("CARGO_NET_GIT_FETCH_WITH_CLI".to_string(), "true".to_string()),
+        ("PATH".to_string(), bundle.bin_dir().display().to_string()),
+        ("TMPDIR".to_string(), "/tmp".to_string()),
+        ("TOKIO_WORKER_THREADS".to_string(), tokio_worker_threads.to_string()),
+        ("LD_LIBRARY_PATH".to_string(), bundle.lib_dir().display().to_string()),
+        ("LANG".to_string(), "C.UTF-8".to_string()),
+        ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+        ("TZ".to_string(), "UTC".to_string()),
     ];
     if let Some(root) = iceoryx2_root {
         env.push((
@@ -4183,33 +5029,21 @@ fn row_env(
             format!("u{:08x}_", stable_hash(&row.id)),
         ));
     }
-    let mut ld_library_paths = Vec::new();
-    if let Some(lib_dir) = lola_bridge_lib_dir {
-        ld_library_paths.push(lib_dir.display().to_string());
-    }
-    if let Some(lib_dir) = vsomeip_lib_dir {
-        ld_library_paths.push(lib_dir.display().to_string());
-        if let Some(install_path) = lib_dir.parent() {
-            env.push((
-                "VSOMEIP_INSTALL_PATH".to_string(),
-                install_path.display().to_string(),
-            ));
-        }
-    }
-    if !ld_library_paths.is_empty() {
-        let existing = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-        let prefix = ld_library_paths.join(":");
-        let value = if existing.is_empty() {
-            prefix
-        } else {
-            format!("{prefix}:{existing}")
-        };
-        env.push(("LD_LIBRARY_PATH".to_string(), value));
+    if row.uses_vsomeip() {
+        env.push((
+            "VSOMEIP_INSTALL_PATH".to_string(),
+            bundle.root.display().to_string(),
+        ));
     }
     env
 }
 
-fn detect_vsomeip_lib_dir(repo_root: &Path) -> Result<PathBuf> {
+fn configure_matrix_environment(command: &mut Command, env: &[(String, String)]) {
+    command.env_clear();
+    command.envs(env.iter().map(|(key, value)| (key, value)));
+}
+
+fn detect_vsomeip_lib_dir(target_directory: &Path) -> Result<PathBuf> {
     if let Ok(ld_library_path) = std::env::var("LD_LIBRARY_PATH") {
         for path in ld_library_path.split(':') {
             let candidate = Path::new(path).join("libvsomeip3.so.3");
@@ -4218,22 +5052,22 @@ fn detect_vsomeip_lib_dir(repo_root: &Path) -> Result<PathBuf> {
             }
         }
     }
-    let build_root = repo_root.join("target/debug/build");
-    for entry in fs::read_dir(&build_root)
+    let build_root = target_directory.join("build");
+    let candidates = fs::read_dir(&build_root)
         .with_context(|| format!("unable to read {}", build_root.display()))?
-    {
-        let entry = entry?;
-        let path = entry.path().join("out/vsomeip/vsomeip-install/lib");
-        if path.join("libvsomeip3.so.3").is_file() {
-            return Ok(path);
-        }
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path().join("out/vsomeip/vsomeip-install/lib"))
+        .filter(|path| path.join("libvsomeip3.so.3").is_file())
+        .collect();
+    if let Some(path) = newest_native_directory(candidates, "libvsomeip3.so.3") {
+        return Ok(path);
     }
     Err(anyhow!(
         "libvsomeip3.so.3 not found under LD_LIBRARY_PATH or target/debug/build"
     ))
 }
 
-fn detect_lola_bridge_lib_dir(repo_root: &Path) -> Result<PathBuf> {
+fn detect_lola_bridge_lib_dir(target_directory: &Path) -> Result<PathBuf> {
     if let Ok(ld_library_path) = std::env::var("LD_LIBRARY_PATH") {
         for path in ld_library_path.split(':') {
             let candidate = Path::new(path).join("libup_lola_bridge.so");
@@ -4242,25 +5076,366 @@ fn detect_lola_bridge_lib_dir(repo_root: &Path) -> Result<PathBuf> {
             }
         }
     }
-    let build_root = repo_root.join("target/debug/build");
-    for entry in fs::read_dir(&build_root)
+    let build_root = target_directory.join("build");
+    let candidates = fs::read_dir(&build_root)
         .with_context(|| format!("unable to read {}", build_root.display()))?
-    {
-        let entry = entry?;
-        let path = entry
-            .path()
-            .join("out/up-lola-bridge-bazel/bazel-out/k8-fastbuild/bin");
-        if path.join("libup_lola_bridge.so").is_file() {
-            return Ok(path);
-        }
+        .filter_map(|entry| entry.ok())
+        .map(|entry| {
+            entry
+                .path()
+                .join("out/up-lola-bridge-bazel/bazel-out/k8-fastbuild/bin")
+        })
+        .filter(|path| path.join("libup_lola_bridge.so").is_file())
+        .collect();
+    if let Some(path) = newest_native_directory(candidates, "libup_lola_bridge.so") {
+        return Ok(path);
     }
     Err(anyhow!(
         "libup_lola_bridge.so not found under LD_LIBRARY_PATH or target/debug/build"
     ))
 }
 
-fn target_debug_binary(repo_root: &Path, name: &str) -> PathBuf {
-    repo_root.join("target/debug").join(name)
+fn newest_native_directory(mut candidates: Vec<PathBuf>, library: &str) -> Option<PathBuf> {
+    candidates.sort_by(|left, right| {
+        let modified = |path: &Path| {
+            fs::metadata(path.join(library))
+                .and_then(|metadata| metadata.modified())
+                .ok()
+        };
+        modified(right)
+            .cmp(&modified(left))
+            .then_with(|| left.cmp(right))
+    });
+    candidates.into_iter().next()
+}
+
+fn stage_run_bundle(
+    target_directory: &Path,
+    artifacts_root: &Path,
+    rows: &[MatrixRow],
+) -> Result<RunBundle> {
+    let root = artifacts_root.join("run-bundle");
+    let mut inputs = Vec::new();
+    for name in required_matrix_executables(rows) {
+        inputs.push((
+            BundleFileKind::MatrixExecutable,
+            name.clone(),
+            target_debug_binary(target_directory, &name),
+        ));
+    }
+    for name in required_system_executables(rows) {
+        inputs.push((
+            BundleFileKind::SystemExecutable,
+            name.to_string(),
+            resolve_executable(name)?,
+        ));
+    }
+    if rows.iter().any(MatrixRow::uses_lola) {
+        let path = detect_lola_bridge_lib_dir(target_directory)?.join("libup_lola_bridge.so");
+        inputs.push((
+            BundleFileKind::NativeLibrary,
+            "libup_lola_bridge.so".to_string(),
+            path,
+        ));
+    }
+    if rows.iter().any(MatrixRow::uses_vsomeip) {
+        let directory = detect_vsomeip_lib_dir(target_directory)?;
+        for name in [
+            "libvsomeip3.so.3",
+            "libvsomeip3-cfg.so.3",
+            "libvsomeip3-sd.so.3",
+        ] {
+            inputs.push((
+                BundleFileKind::NativeLibrary,
+                name.to_string(),
+                directory.join(name),
+            ));
+        }
+    }
+
+    let inputs: Vec<_> = inputs
+        .into_iter()
+        .map(|(kind, name, source)| {
+            let source = fs::canonicalize(&source).with_context(|| {
+                format!("required bundle input {} is missing", source.display())
+            })?;
+            reject_private_mount_path("bundle input", &source)?;
+            Ok((kind, name, source))
+        })
+        .collect::<Result<_>>()?;
+    let required_bytes = inputs
+        .iter()
+        .map(|(_, _, path)| fs::metadata(path).map(|metadata| metadata.len()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .sum::<u64>()
+        .saturating_add(mib_to_bytes(PREFLIGHT_DISK_RESERVE_MIB));
+    let filesystem = filesystem_snapshot(artifacts_root);
+    if filesystem
+        .available_bytes
+        .is_none_or(|available| available < required_bytes)
+    {
+        return Err(anyhow!(
+            "insufficient disk for immutable run bundle: required={} available={:?}",
+            required_bytes,
+            filesystem.available_bytes
+        ));
+    }
+    let required_inodes = (inputs.len() as u64)
+        .saturating_mul(2)
+        .saturating_add(PREFLIGHT_INODE_RESERVE);
+    if filesystem.inode_reporting_supported
+        && filesystem
+            .available_inodes
+            .is_none_or(|available| available < required_inodes)
+    {
+        return Err(anyhow!(
+            "insufficient inodes for immutable run bundle: required={} available={:?}",
+            required_inodes,
+            filesystem.available_inodes
+        ));
+    }
+    for directory in [
+        root.clone(),
+        root.join("bin"),
+        root.join("lib"),
+        root.join("objects"),
+    ] {
+        fs::create_dir(&directory).with_context(|| {
+            format!("unable to create bundle directory {}", directory.display())
+        })?;
+    }
+    let mut files = Vec::with_capacity(inputs.len());
+    for (kind, name, source) in inputs {
+        files.push(stage_bundle_file(&root, kind, &name, &source)?);
+    }
+    files.sort_by(|left, right| {
+        (left.kind, left.name.as_str()).cmp(&(right.kind, right.name.as_str()))
+    });
+    let manifest = BundleManifest {
+        schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
+        created_at: Utc::now().to_rfc3339(),
+        target_directory: target_directory.display().to_string(),
+        files,
+    };
+    let manifest_path = root.join("manifest.json");
+    atomic_write_json(&manifest_path, &manifest)?;
+    fs::set_permissions(&manifest_path, fs::Permissions::from_mode(0o444))?;
+    for directory in [
+        root.join("bin"),
+        root.join("lib"),
+        root.join("objects"),
+        root.clone(),
+    ] {
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o555))?;
+    }
+    let bundle = RunBundle {
+        root: fs::canonicalize(&root)?,
+        manifest_path,
+        manifest,
+    };
+    validate_run_bundle(&bundle)?;
+    Ok(bundle)
+}
+
+fn stage_bundle_file(
+    bundle_root: &Path,
+    kind: BundleFileKind,
+    name: &str,
+    source: &Path,
+) -> Result<BundleFile> {
+    let hash_before = sha256_file(source)?;
+    let metadata = fs::metadata(source)?;
+    if !metadata.is_file() {
+        return Err(anyhow!(
+            "bundle input {} is not a regular file",
+            source.display()
+        ));
+    }
+    let destination_directory = if kind == BundleFileKind::NativeLibrary {
+        bundle_root.join("lib")
+    } else {
+        bundle_root.join("bin")
+    };
+    let object = bundle_root.join("objects").join(&hash_before);
+    let transfer = if object.exists() {
+        if sha256_file(&object)? != hash_before {
+            return Err(anyhow!("bundle object hash collision for {hash_before}"));
+        }
+        "deduplicated"
+    } else {
+        match fs::hard_link(source, &object) {
+            Ok(()) => "hard_link",
+            Err(_) => {
+                fs::copy(source, &object).with_context(|| {
+                    format!(
+                        "unable to copy bundle input {} to {}",
+                        source.display(),
+                        object.display()
+                    )
+                })?;
+                "copy"
+            }
+        }
+    };
+    let mode = if kind == BundleFileKind::NativeLibrary {
+        0o444
+    } else {
+        0o555
+    };
+    fs::set_permissions(&object, fs::Permissions::from_mode(mode))?;
+    let destination = destination_directory.join(name);
+    fs::hard_link(&object, &destination)
+        .or_else(|_| fs::copy(&object, &destination).map(|_| ()))?;
+    fs::set_permissions(&destination, fs::Permissions::from_mode(mode))?;
+    let hash_after = sha256_file(source)?;
+    let bundled_hash = sha256_file(&destination)?;
+    if hash_before != hash_after || hash_before != bundled_hash {
+        return Err(anyhow!(
+            "bundle input {} changed while it was staged",
+            source.display()
+        ));
+    }
+    Ok(BundleFile {
+        kind,
+        name: name.to_string(),
+        source_path: source.display().to_string(),
+        bundle_path: destination.display().to_string(),
+        size_bytes: metadata.len(),
+        sha256: hash_before,
+        mode,
+        transfer: transfer.to_string(),
+    })
+}
+
+fn required_matrix_executables(rows: &[MatrixRow]) -> BTreeSet<String> {
+    let mut names = BTreeSet::from(["configurable-streamer".to_string()]);
+    for row in rows {
+        if support_status(row).classification != RowClassification::Pass {
+            continue;
+        }
+        for active in [true, false] {
+            let profile = if active { row.source } else { row.sink };
+            names.insert(binary_name(profile, role_binary_suffix(row.role, active)));
+        }
+    }
+    names
+}
+
+fn required_system_executables(rows: &[MatrixRow]) -> Vec<&'static str> {
+    let mut names = vec![
+        "unshare", "nsenter", "sh", "sleep", "ip", "mount", "mkdir", "touch",
+    ];
+    if rows.iter().any(|row| {
+        support_status(row).classification == RowClassification::Pass && row.uses_mqtt5()
+    }) {
+        names.push("mosquitto");
+    }
+    names
+}
+
+fn resolve_executable(name: &str) -> Result<PathBuf> {
+    let path = std::env::var_os("PATH").ok_or_else(|| anyhow!("PATH is not set"))?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| anyhow!("required executable {name} was not found on PATH"))
+}
+
+fn validate_run_bundle(bundle: &RunBundle) -> Result<()> {
+    let payload = fs::read(&bundle.manifest_path)
+        .with_context(|| format!("unable to read {}", bundle.manifest_path.display()))?;
+    let manifest: BundleManifest = serde_json::from_slice(&payload)
+        .with_context(|| format!("invalid bundle manifest {}", bundle.manifest_path.display()))?;
+    if manifest.schema_version != BUNDLE_SCHEMA_VERSION {
+        return Err(anyhow!(
+            "unsupported bundle schema {}, expected {}",
+            manifest.schema_version,
+            BUNDLE_SCHEMA_VERSION
+        ));
+    }
+    let canonical_root = fs::canonicalize(&bundle.root)?;
+    for file in &manifest.files {
+        let path = fs::canonicalize(&file.bundle_path)
+            .with_context(|| format!("bundle file {} is missing", file.bundle_path))?;
+        if !path.starts_with(&canonical_root) {
+            return Err(anyhow!(
+                "bundle file {} escapes the bundle root",
+                path.display()
+            ));
+        }
+        let metadata = fs::metadata(&path)?;
+        if metadata.len() != file.size_bytes || sha256_file(&path)? != file.sha256 {
+            return Err(anyhow!("bundle hash/size mismatch for {}", path.display()));
+        }
+        let actual_mode = metadata.permissions().mode() & 0o777;
+        if actual_mode != file.mode || actual_mode & 0o222 != 0 {
+            return Err(anyhow!(
+                "bundle file {} has mutable mode {actual_mode:o}, expected {:o}",
+                path.display(),
+                file.mode
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let output = Command::new("sha256sum")
+        .arg("--")
+        .arg(path)
+        .output()
+        .with_context(|| format!("unable to hash {} with sha256sum", path.display()))?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "sha256sum failed for {} with {}: {}",
+            path.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let digest = String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("sha256sum produced no digest for {}", path.display()))?;
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(anyhow!(
+            "sha256sum produced invalid digest for {}: {digest}",
+            path.display()
+        ));
+    }
+    Ok(digest)
+}
+
+fn probe_user_namespaces(bundle: &RunBundle) -> Result<()> {
+    let env = vec![
+        ("PATH".to_string(), bundle.bin_dir().display().to_string()),
+        ("TMPDIR".to_string(), "/tmp".to_string()),
+        ("LANG".to_string(), "C.UTF-8".to_string()),
+        ("LC_ALL".to_string(), "C.UTF-8".to_string()),
+    ];
+    let mut command = Command::new(bundle.executable("unshare")?);
+    command
+        .args(["-U", "--map-root-user"])
+        .arg(bundle.executable("sh")?)
+        .args(["-c", "exit 0"]);
+    configure_matrix_environment(&mut command, &env);
+    let output = command
+        .output()
+        .context("unable to probe user namespaces")?;
+    if !output.status.success() {
+        return Err(anyhow!(
+            "user namespace probe failed with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+fn target_debug_binary(target_directory: &Path, name: &str) -> PathBuf {
+    target_directory.join(name)
 }
 
 fn command_summary(argv: Vec<String>, working_directory: PathBuf) -> CommandSummary {
@@ -4273,52 +5448,29 @@ fn command_summary(argv: Vec<String>, working_directory: PathBuf) -> CommandSumm
 
 fn capture_provenance(
     repo_root: &Path,
-    rows: &[MatrixRow],
-    results: &[RowResult],
+    target_directory: &Path,
+    bundle: &RunBundle,
 ) -> Result<ProvenanceSummary> {
-    let mut binary_names = BTreeSet::from([
-        "configurable-streamer".to_string(),
-        "streamer-transport-test-orchestrator".to_string(),
-    ]);
-    for row in rows {
-        for active in [true, false] {
-            let profile = if active { row.source } else { row.sink };
-            binary_names.insert(binary_name(profile, role_binary_suffix(row.role, active)));
-        }
-    }
-    let binaries = binary_names
-        .into_iter()
-        .map(|name| file_provenance(name.clone(), target_debug_binary(repo_root, &name)))
-        .collect();
-    let native_paths: BTreeSet<_> = results
+    let binaries = bundle
+        .manifest
+        .files
         .iter()
-        .flat_map(|result| {
-            result
-                .native_library_paths
-                .values()
-                .chain(
-                    result
-                        .attempts
-                        .iter()
-                        .flat_map(|attempt| attempt.native_library_paths.values()),
-                )
-                .map(PathBuf::from)
-        })
+        .filter(|file| file.kind != BundleFileKind::NativeLibrary)
+        .map(|file| file_provenance(file.name.clone(), PathBuf::from(&file.bundle_path)))
         .collect();
-    let native_libraries = native_paths
-        .into_iter()
-        .map(|path| {
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
-            file_provenance(name, path)
-        })
+    let native_libraries = bundle
+        .manifest
+        .files
+        .iter()
+        .filter(|file| file.kind == BundleFileKind::NativeLibrary)
+        .map(|file| file_provenance(file.name.clone(), PathBuf::from(&file.bundle_path)))
         .collect();
     let status = git_output(repo_root, &["status", "--porcelain"]);
     Ok(ProvenanceSummary {
         repository_root: repo_root.display().to_string(),
-        target_directory: repo_root.join("target/debug").display().to_string(),
+        target_directory: target_directory.display().to_string(),
+        bundle_root: bundle.root.display().to_string(),
+        bundle_manifest: bundle.manifest_path.display().to_string(),
         orchestrator_commit: git_output(repo_root, &["rev-parse", "HEAD"]),
         orchestrator_branch: git_output(repo_root, &["branch", "--show-current"]),
         worktree_dirty: status.as_ref().map(|output| !output.is_empty()),
@@ -4351,26 +5503,8 @@ fn file_provenance(name: String, path: PathBuf) -> FileProvenance {
         };
     }
     let size_bytes = fs::metadata(&path).ok().map(|metadata| metadata.len());
-    let hash = Command::new("sha256sum").arg("--").arg(&path).output();
-    let (sha256, observation_error) = match hash {
-        Ok(output) if output.status.success() => {
-            let hash = String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .next()
-                .map(str::to_string);
-            match hash {
-                Some(hash) => (Some(hash), None),
-                None => (None, Some("sha256sum produced no digest".to_string())),
-            }
-        }
-        Ok(output) => (
-            None,
-            Some(format!(
-                "sha256sum exited with {}: {}",
-                output.status,
-                String::from_utf8_lossy(&output.stderr).trim()
-            )),
-        ),
+    let (sha256, observation_error) = match sha256_file(&path) {
+        Ok(hash) => (Some(hash), None),
         Err(error) => (None, Some(error.to_string())),
     };
     FileProvenance {
@@ -4474,40 +5608,45 @@ fn current_cgroup_root() -> Option<PathBuf> {
 }
 
 fn filesystem_snapshot(path: &Path) -> FilesystemSnapshot {
-    let blocks = df_values(path, "-Pk");
-    let inodes = df_values(path, "-Pi");
-    FilesystemSnapshot {
+    let mut snapshot = FilesystemSnapshot {
         path: path.display().to_string(),
-        total_bytes: blocks
-            .as_ref()
-            .and_then(|values| values.get(1))
-            .and_then(|value| value.parse::<u64>().ok())
-            .map(|kilobytes| kilobytes.saturating_mul(1024)),
-        available_bytes: blocks
-            .as_ref()
-            .and_then(|values| values.get(3))
-            .and_then(|value| value.parse::<u64>().ok())
-            .map(|kilobytes| kilobytes.saturating_mul(1024)),
-        total_inodes: inodes
-            .as_ref()
-            .and_then(|values| values.get(1))
-            .and_then(|value| value.parse().ok()),
-        available_inodes: inodes
-            .as_ref()
-            .and_then(|values| values.get(3))
-            .and_then(|value| value.parse().ok()),
+        block_size: None,
+        total_bytes: None,
+        available_bytes: None,
+        total_inodes: None,
+        available_inodes: None,
+        inode_reporting_supported: false,
+        observation_error: None,
+    };
+    let c_path = match CString::new(path.as_os_str().as_bytes()) {
+        Ok(path) => path,
+        Err(error) => {
+            snapshot.observation_error = Some(error.to_string());
+            return snapshot;
+        }
+    };
+    // SAFETY: `status` is writable and `c_path` is a valid NUL-terminated path for this call.
+    let mut status: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: both pointers remain valid for the duration of statvfs and do not alias.
+    let result = unsafe { libc::statvfs(c_path.as_ptr(), &mut status) };
+    if result != 0 {
+        snapshot.observation_error = Some(std::io::Error::last_os_error().to_string());
+        return snapshot;
     }
-}
-
-fn df_values(path: &Path, option: &str) -> Option<Vec<String>> {
-    let output = Command::new("df").arg(option).arg(path).output().ok()?;
-    if !output.status.success() {
-        return None;
+    let block_size = if status.f_frsize == 0 {
+        status.f_bsize
+    } else {
+        status.f_frsize
+    };
+    snapshot.block_size = Some(block_size);
+    snapshot.total_bytes = Some(status.f_blocks.saturating_mul(block_size));
+    snapshot.available_bytes = Some(status.f_bavail.saturating_mul(block_size));
+    snapshot.inode_reporting_supported = status.f_files > 0;
+    if snapshot.inode_reporting_supported {
+        snapshot.total_inodes = Some(status.f_files);
+        snapshot.available_inodes = Some(status.f_favail);
     }
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .last()
-        .map(|line| line.split_whitespace().map(str::to_string).collect())
+    snapshot
 }
 
 fn read_trimmed(path: &Path) -> Option<String> {
@@ -4784,6 +5923,33 @@ impl MatrixRow {
 mod tests {
     use super::*;
 
+    fn test_resource_limits(jobs: usize, lola_jobs: usize) -> BTreeMap<ResourceClass, usize> {
+        ResourceClass::ORDERED
+            .into_iter()
+            .map(|class| {
+                (
+                    class,
+                    if class == ResourceClass::Lola {
+                        lola_jobs
+                    } else {
+                        jobs
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn synthetic_task<T>(slot: usize, lola_sensitive: bool, payload: T) -> ScheduledTask<T> {
+        ScheduledTask {
+            slot,
+            resources: lola_sensitive
+                .then_some(ResourceClass::Lola)
+                .into_iter()
+                .collect(),
+            payload,
+        }
+    }
+
     fn zero_criteria() -> MatrixCriteria {
         MatrixCriteria {
             expected: ExpectedCounts {
@@ -4811,11 +5977,14 @@ mod tests {
             generated_at: String::new(),
             started_at: String::new(),
             completed_at: String::new(),
+            completion_boundary: FINALIZATION_BOUNDARY,
             command: command_summary(vec!["orchestrator".to_string()], PathBuf::from("/repo")),
             options: Cli::try_parse_from(["orchestrator"]).expect("default CLI parses"),
             provenance: ProvenanceSummary {
                 repository_root: "/repo".to_string(),
                 target_directory: "/repo/target/debug".to_string(),
+                bundle_root: "/repo/artifacts/run-bundle".to_string(),
+                bundle_manifest: "/repo/artifacts/run-bundle/manifest.json".to_string(),
                 orchestrator_commit: Some("dc4c17f".to_string()),
                 orchestrator_branch: Some("test".to_string()),
                 worktree_dirty: Some(false),
@@ -4827,8 +5996,10 @@ mod tests {
                 after: HostSnapshot::default(),
                 peaks: ResourcePeaks::default(),
             },
+            preflight: PreflightSummary::default(),
             build: BuildSummary::default(),
             scheduler: SchedulerSummary::default(),
+            cleanup: CleanupSummary::default(),
             timings: RunTimingSummary::default(),
             row_count: 0,
             pass_count: 0,
@@ -4884,7 +6055,7 @@ mod tests {
         );
 
         let value = serde_json::to_value(&summary).expect("summary serializes");
-        assert_eq!(value["schema_version"], "2.0");
+        assert_eq!(value["schema_version"], "3.0");
         assert_eq!(value["options"]["only"][0], "matrix-row");
         assert_eq!(value["options"]["jobs"], 7);
         assert_eq!(value["options"]["lola_jobs"], 2);
@@ -4893,6 +6064,7 @@ mod tests {
         assert_eq!(value["command"]["working_directory"], "/repo");
         assert_eq!(value["provenance"]["orchestrator_commit"], "dc4c17f");
         assert!(value.get("host_resources").is_some());
+        assert!(value.get("preflight").is_some());
         assert!(value.get("build").is_some());
         assert!(value.get("scheduler").is_some());
         assert!(value.get("timings").is_some());
@@ -4924,8 +6096,12 @@ mod tests {
             slot: 4,
             queue_wait: Duration::from_micros(2_000),
             permit_wait: Some(Duration::from_micros(700)),
+            resource_permit_waits: BTreeMap::from([(
+                ResourceClass::Lola,
+                Duration::from_micros(700),
+            )]),
         };
-        populate_row_timings(&mut result, &[], dispatch, Duration::from_micros(3_000));
+        populate_row_timings(&mut result, &[], &dispatch, Duration::from_micros(3_000));
         assert_eq!(result.timings.queue_wait_us, 2_000);
         assert_eq!(result.timings.permit_wait_us, Some(700));
         assert_eq!(result.timings.execution_us, 3_000);
@@ -5001,15 +6177,23 @@ mod tests {
             active_lola,
             global_permits_available: 2_usize.saturating_sub(active),
             lola_permits_available: 1_usize.saturating_sub(active_lola),
+            active_resources: BTreeMap::from([(ResourceClass::Lola, active_lola)]),
+            resource_permits_available: BTreeMap::from([(
+                ResourceClass::Lola,
+                1_usize.saturating_sub(active_lola),
+            )]),
         };
+        let limits = test_resource_limits(2, 1);
+        let task_counts = BTreeMap::from([(ResourceClass::Lola, 1)]);
         let summary = aggregate_scheduler_events(
             None,
             None,
             Duration::from_micros(100),
             2,
-            1,
             2,
-            1,
+            &limits,
+            2,
+            &task_counts,
             vec![
                 event(10, SchedulerEventKind::Dispatch, 0, 1, 1),
                 event(30, SchedulerEventKind::Dispatch, 1, 2, 1),
@@ -5029,18 +6213,15 @@ mod tests {
     fn scheduler_records_meaningful_lola_permit_wait() {
         let tasks = [0_usize, 1]
             .into_iter()
-            .map(|slot| ScheduledTask {
-                slot,
-                lola_sensitive: true,
-                payload: slot,
-            })
+            .map(|slot| synthetic_task(slot, true, slot))
             .collect();
         let observed = Arc::new(Mutex::new(BTreeMap::new()));
         let worker_observed = Arc::clone(&observed);
         run_bounded_instrumented(
             tasks,
             2,
-            1,
+            2,
+            &test_resource_limits(2, 1),
             &Cancellation::default(),
             move |slot, dispatch| {
                 worker_observed
@@ -5095,7 +6276,8 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).expect("read checkpoint"))
                 .expect("parse checkpoint");
-        assert_eq!(value["reason"], "second");
+        assert_eq!(value["schema_version"], CHECKPOINT_SCHEMA_VERSION);
+        assert_eq!(value["row"]["reason"], "second");
         assert!(fs::read_dir(root.join("checkpoints"))
             .expect("read checkpoints")
             .all(|entry| !entry
@@ -5437,36 +6619,39 @@ mod tests {
         let tasks = [true, true, false, false]
             .into_iter()
             .enumerate()
-            .map(|(slot, lola_sensitive)| ScheduledTask {
-                slot,
-                lola_sensitive,
-                payload: lola_sensitive,
-            })
+            .map(|(slot, lola_sensitive)| synthetic_task(slot, lola_sensitive, lola_sensitive))
             .collect();
         let worker_gate = Arc::clone(&gate);
+        let limits = test_resource_limits(3, 1);
         let scheduler = thread::spawn(move || {
-            run_bounded(tasks, 3, 1, &Cancellation::default(), move |is_lola| {
-                let (state_lock, wake) = &*worker_gate;
-                let mut state = state_lock.lock().expect("test state mutex poisoned");
-                state.started += 1;
-                state.active += 1;
-                state.max_active = state.max_active.max(state.active);
-                if is_lola {
-                    state.active_lola += 1;
-                    state.max_active_lola = state.max_active_lola.max(state.active_lola);
-                } else {
-                    state.regular_started += 1;
-                }
-                wake.notify_all();
-                while !state.release {
-                    state = wake.wait(state).expect("test state mutex poisoned");
-                }
-                state.active -= 1;
-                if is_lola {
-                    state.active_lola -= 1;
-                }
-                Ok(())
-            })
+            run_bounded(
+                tasks,
+                3,
+                &limits,
+                &Cancellation::default(),
+                move |is_lola| {
+                    let (state_lock, wake) = &*worker_gate;
+                    let mut state = state_lock.lock().expect("test state mutex poisoned");
+                    state.started += 1;
+                    state.active += 1;
+                    state.max_active = state.max_active.max(state.active);
+                    if is_lola {
+                        state.active_lola += 1;
+                        state.max_active_lola = state.max_active_lola.max(state.active_lola);
+                    } else {
+                        state.regular_started += 1;
+                    }
+                    wake.notify_all();
+                    while !state.release {
+                        state = wake.wait(state).expect("test state mutex poisoned");
+                    }
+                    state.active -= 1;
+                    if is_lola {
+                        state.active_lola -= 1;
+                    }
+                    Ok(())
+                },
+            )
         });
 
         let (state_lock, wake) = &*gate;
@@ -5504,22 +6689,24 @@ mod tests {
         let tasks = [false, true, false, true]
             .into_iter()
             .enumerate()
-            .map(|(slot, lola_sensitive)| ScheduledTask {
-                slot,
-                lola_sensitive,
-                payload: slot,
-            })
+            .map(|(slot, lola_sensitive)| synthetic_task(slot, lola_sensitive, slot))
             .collect();
         let observed = Arc::new(Mutex::new(Vec::new()));
         let worker_observed = Arc::clone(&observed);
 
-        run_bounded(tasks, 1, 1, &Cancellation::default(), move |slot| {
-            worker_observed
-                .lock()
-                .expect("observed mutex poisoned")
-                .push(slot);
-            Ok(())
-        })
+        run_bounded(
+            tasks,
+            1,
+            &test_resource_limits(1, 1),
+            &Cancellation::default(),
+            move |slot| {
+                worker_observed
+                    .lock()
+                    .expect("observed mutex poisoned")
+                    .push(slot);
+                Ok(())
+            },
+        )
         .expect("single-worker scheduler should complete");
 
         assert_eq!(
@@ -5531,22 +6718,20 @@ mod tests {
     #[test]
     fn panicking_lola_task_releases_scheduler_without_deadlock() {
         let tasks = vec![
-            ScheduledTask {
-                slot: 0,
-                lola_sensitive: true,
-                payload: true,
-            },
-            ScheduledTask {
-                slot: 1,
-                lola_sensitive: true,
-                payload: false,
-            },
+            synthetic_task(0, true, true),
+            synthetic_task(1, true, false),
         ];
 
-        let error = run_bounded(tasks, 2, 1, &Cancellation::default(), |should_panic| {
-            assert!(!should_panic, "synthetic worker panic");
-            Ok(())
-        })
+        let error = run_bounded(
+            tasks,
+            2,
+            &test_resource_limits(2, 1),
+            &Cancellation::default(),
+            |should_panic| {
+                assert!(!should_panic, "synthetic worker panic");
+                Ok(())
+            },
+        )
         .expect_err("worker panic should become a scheduler error");
 
         assert!(error.to_string().contains("task panicked"));
@@ -5558,19 +6743,19 @@ mod tests {
         let worker_cancellation = cancellation.clone();
         let started = Arc::new(Mutex::new(0_usize));
         let worker_started = Arc::clone(&started);
-        let tasks = (0..4)
-            .map(|slot| ScheduledTask {
-                slot,
-                lola_sensitive: false,
-                payload: (),
-            })
-            .collect();
+        let tasks = (0..4).map(|slot| synthetic_task(slot, false, ())).collect();
 
-        let result = run_bounded(tasks, 1, 1, &cancellation, move |()| {
-            *worker_started.lock().expect("started mutex poisoned") += 1;
-            worker_cancellation.cancel();
-            Ok(())
-        });
+        let result = run_bounded(
+            tasks,
+            1,
+            &test_resource_limits(1, 1),
+            &cancellation,
+            move |()| {
+                *worker_started.lock().expect("started mutex poisoned") += 1;
+                worker_cancellation.cancel();
+                Ok(())
+            },
+        );
 
         assert!(result.is_err());
         assert_eq!(*started.lock().expect("started mutex poisoned"), 1);
@@ -5615,6 +6800,21 @@ mod tests {
     }
 
     #[test]
+    fn target_build_lock_is_exclusive_and_reacquirable() {
+        let base = std::env::temp_dir().join(format!(
+            "streamer-orchestrator-build-lock-test-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().expect("timestamp fits")
+        ));
+        fs::create_dir(&base).expect("create build-lock test root");
+        let lock = BuildLock::acquire(&base).expect("first build lock succeeds");
+        assert!(BuildLock::acquire(&base).is_err());
+        drop(lock);
+        BuildLock::acquire(&base).expect("released build lock is reacquirable");
+        fs::remove_dir_all(base).expect("remove build-lock test root");
+    }
+
+    #[test]
     fn criteria_rejects_consumed_retry() {
         let mut summary = empty_summary();
         assert!(validate_criteria(&summary, &zero_criteria()).is_empty());
@@ -5622,6 +6822,303 @@ mod tests {
         summary.max_retries_consumed = 1;
         let errors = validate_criteria(&summary, &zero_criteria());
         assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn statvfs_reports_capacity_and_distinguishes_unsupported_inode_counts() {
+        let snapshot = filesystem_snapshot(&std::env::temp_dir());
+        assert!(snapshot.observation_error.is_none());
+        assert!(snapshot.block_size.is_some_and(|size| size > 0));
+        assert!(snapshot.total_bytes.is_some_and(|bytes| bytes > 0));
+        assert!(snapshot.available_bytes <= snapshot.total_bytes);
+        if snapshot.inode_reporting_supported {
+            assert!(snapshot.total_inodes.is_some_and(|inodes| inodes > 0));
+            assert!(snapshot.available_inodes <= snapshot.total_inodes);
+        } else {
+            assert_eq!(snapshot.total_inodes, None);
+            assert_eq!(snapshot.available_inodes, None);
+        }
+    }
+
+    #[test]
+    fn preflight_clamps_workers_and_rejects_unreasonable_requests() {
+        let artifacts = Path::new("/artifacts");
+        let host = HostSnapshot {
+            available_parallelism: 2,
+            memory_available_bytes: Some(mib_to_bytes(32 * 1024)),
+            swap_free_bytes: Some(mib_to_bytes(8 * 1024)),
+            process_limit_soft: Some("100000".to_string()),
+            open_files_limit_soft: Some("100000".to_string()),
+            cgroup_pids_current: Some(100),
+            cgroup_pids_max: Some("100000".to_string()),
+            filesystems: vec![FilesystemSnapshot {
+                path: artifacts.display().to_string(),
+                block_size: Some(4096),
+                total_bytes: Some(mib_to_bytes(64 * 1024)),
+                available_bytes: Some(mib_to_bytes(32 * 1024)),
+                total_inodes: Some(1_000_000),
+                available_inodes: Some(900_000),
+                inode_reporting_supported: true,
+                observation_error: None,
+            }],
+            ..HostSnapshot::default()
+        };
+        let bundle = RunBundle {
+            root: PathBuf::from("/bundle"),
+            manifest_path: PathBuf::from("/bundle/manifest.json"),
+            manifest: BundleManifest {
+                schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
+                created_at: String::new(),
+                target_directory: "/target".to_string(),
+                files: Vec::new(),
+            },
+        };
+        let cli =
+            Cli::try_parse_from(["orchestrator", "--jobs", "4"]).expect("bounded request parses");
+        let clamped = run_preflight(&cli, 1, &bundle, &host, artifacts, &Ok(()));
+        assert_eq!(clamped.effective_jobs, 1);
+        assert!(
+            clamped
+                .checks
+                .iter()
+                .find(|check| check.name == "worker_request")
+                .unwrap()
+                .pass
+        );
+
+        let unreasonable =
+            Cli::try_parse_from(["orchestrator", "--jobs", "8", "--hard-max-jobs", "16"])
+                .expect("request parses before host preflight");
+        let rejected = run_preflight(&unreasonable, 1, &bundle, &host, artifacts, &Ok(()));
+        assert!(
+            !rejected
+                .checks
+                .iter()
+                .find(|check| check.name == "worker_request")
+                .unwrap()
+                .pass
+        );
+    }
+
+    #[test]
+    fn private_mount_shadow_paths_are_rejected_after_canonicalization() {
+        let canonical = fs::canonicalize(std::env::temp_dir()).expect("canonical temp directory");
+        assert!(reject_private_mount_path("test", &canonical).is_err());
+        assert!(reject_private_mount_path("test", Path::new("/dev/shm/input")).is_err());
+        assert!(reject_private_mount_path("test", Path::new("/home/input")).is_ok());
+        let missing = canonicalize_allow_missing(&canonical.join("missing/child"))
+            .expect("missing suffix canonicalizes through parent");
+        assert!(reject_private_mount_path("test", &missing).is_err());
+    }
+
+    #[test]
+    fn bundle_isolated_from_source_replacement_and_rejects_hash_mutation() {
+        let base = std::env::temp_dir().join(format!(
+            "streamer-orchestrator-bundle-test-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().expect("timestamp fits")
+        ));
+        let root = base.join("run-bundle");
+        for directory in [
+            root.clone(),
+            root.join("bin"),
+            root.join("lib"),
+            root.join("objects"),
+        ] {
+            fs::create_dir_all(directory).expect("create bundle test directory");
+        }
+        let source = base.join("source-bin");
+        fs::write(&source, b"original executable").expect("write source");
+        fs::set_permissions(&source, fs::Permissions::from_mode(0o755))
+            .expect("make source executable");
+        let staged =
+            stage_bundle_file(&root, BundleFileKind::MatrixExecutable, "test-bin", &source)
+                .expect("stage test executable");
+        let manifest = BundleManifest {
+            schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
+            created_at: Utc::now().to_rfc3339(),
+            target_directory: base.display().to_string(),
+            files: vec![staged.clone()],
+        };
+        let manifest_path = root.join("manifest.json");
+        atomic_write_json(&manifest_path, &manifest).expect("write test manifest");
+        let bundle = RunBundle {
+            root: fs::canonicalize(&root).expect("canonical bundle root"),
+            manifest_path,
+            manifest,
+        };
+        validate_run_bundle(&bundle).expect("fresh bundle validates");
+
+        let replacement = base.join("replacement-bin");
+        fs::write(&replacement, b"replacement executable").expect("write replacement");
+        fs::rename(&replacement, &source).expect("atomically replace source");
+        assert_eq!(
+            fs::read(&staged.bundle_path).expect("read isolated bundle file"),
+            b"original executable"
+        );
+        validate_run_bundle(&bundle).expect("source replacement does not alter bundle");
+
+        let bundled_path = Path::new(&staged.bundle_path);
+        fs::set_permissions(bundled_path, fs::Permissions::from_mode(0o644))
+            .expect("make bundled file mutable for corruption test");
+        fs::write(bundled_path, b"corrupt").expect("corrupt bundled file");
+        assert!(validate_run_bundle(&bundle)
+            .expect_err("bundle mutation must be rejected")
+            .to_string()
+            .contains("hash/size mismatch"));
+        fs::remove_dir_all(base).expect("remove bundle test root");
+    }
+
+    #[test]
+    fn child_environment_is_allowlisted_and_forces_matrix_controls() {
+        let mut command = Command::new("/usr/bin/env");
+        configure_matrix_environment(
+            &mut command,
+            &[
+                ("PATH".to_string(), "/bundle/bin".to_string()),
+                ("TMPDIR".to_string(), "/tmp".to_string()),
+                ("TOKIO_WORKER_THREADS".to_string(), "2".to_string()),
+            ],
+        );
+        let output = command.output().expect("run env command");
+        assert!(output.status.success());
+        let output = String::from_utf8(output.stdout).expect("environment is UTF-8");
+        let values: BTreeSet<_> = output.lines().collect();
+        assert_eq!(
+            values,
+            BTreeSet::from(["PATH=/bundle/bin", "TMPDIR=/tmp", "TOKIO_WORKER_THREADS=2"])
+        );
+    }
+
+    #[test]
+    fn multi_resource_rows_acquire_permits_atomically_without_deadlock() {
+        #[derive(Default)]
+        struct State {
+            active: BTreeMap<ResourceClass, usize>,
+            peaks: BTreeMap<ResourceClass, usize>,
+        }
+        let resource_sets = [
+            BTreeSet::from([ResourceClass::Lola, ResourceClass::DdsHeavy]),
+            BTreeSet::from([ResourceClass::DdsHeavy, ResourceClass::Vsomeip]),
+            BTreeSet::from([ResourceClass::Lola, ResourceClass::Vsomeip]),
+            BTreeSet::from([ResourceClass::Mqtt, ResourceClass::ZenohShm]),
+        ];
+        let tasks = resource_sets
+            .into_iter()
+            .enumerate()
+            .map(|(slot, resources)| ScheduledTask {
+                slot,
+                payload: resources.clone(),
+                resources,
+            })
+            .collect();
+        let limits: BTreeMap<_, _> = ResourceClass::ORDERED
+            .into_iter()
+            .map(|class| (class, 1))
+            .collect();
+        let state = Arc::new(Mutex::new(State::default()));
+        let worker_state = Arc::clone(&state);
+        let run = run_bounded_instrumented(
+            tasks,
+            3,
+            3,
+            &limits,
+            &Cancellation::default(),
+            move |resources, _| {
+                {
+                    let mut state = worker_state.lock().expect("resource state mutex poisoned");
+                    for class in &resources {
+                        let active = state.active.entry(*class).or_default();
+                        *active += 1;
+                        let count = *active;
+                        state
+                            .peaks
+                            .entry(*class)
+                            .and_modify(|peak| *peak = (*peak).max(count))
+                            .or_insert(count);
+                    }
+                }
+                thread::sleep(Duration::from_millis(10));
+                let mut state = worker_state.lock().expect("resource state mutex poisoned");
+                for class in resources {
+                    *state.active.get_mut(&class).unwrap() -= 1;
+                }
+                Ok(())
+            },
+        )
+        .expect("multi-resource scheduler completes");
+        assert_eq!(run.completed.len(), 4);
+        assert!(state
+            .lock()
+            .expect("resource state mutex poisoned")
+            .peaks
+            .values()
+            .all(|peak| *peak <= 1));
+        assert!(run
+            .summary
+            .events
+            .iter()
+            .all(|event| event.active_resources.values().all(|active| *active <= 1)));
+    }
+
+    #[test]
+    fn process_group_cleanup_reaps_spawned_descendants() {
+        let base = std::env::temp_dir().join(format!(
+            "streamer-orchestrator-process-test-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().expect("timestamp fits")
+        ));
+        fs::create_dir(&base).expect("create process test root");
+        let child_pid_path = base.join("child.pid");
+        let bundle = RunBundle {
+            root: base.clone(),
+            manifest_path: base.join("unused.json"),
+            manifest: BundleManifest {
+                schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
+                created_at: String::new(),
+                target_directory: String::new(),
+                files: Vec::new(),
+            },
+        };
+        let script = format!(
+            "sleep 30 & child=$!; printf '%s' \"$child\" > {}; wait",
+            child_pid_path.display()
+        );
+        let mut process = spawn_process(
+            &bundle,
+            "descendant-test",
+            Path::new("/bin/sh"),
+            &["-c".to_string(), script],
+            &base,
+            &[("PATH".to_string(), "/usr/bin:/bin".to_string())],
+            &base,
+            None,
+        )
+        .expect("spawn process tree");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !child_pid_path.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let descendant: u32 = fs::read_to_string(&child_pid_path)
+            .expect("read descendant PID")
+            .parse()
+            .expect("parse descendant PID");
+        assert!(Path::new(&format!("/proc/{descendant}")).exists());
+        terminate(&mut process).expect("terminate complete process group");
+        assert!(!Path::new(&format!("/proc/{descendant}")).exists());
+        fs::remove_dir_all(base).expect("remove process test root");
+    }
+
+    #[test]
+    fn sigterm_sets_the_same_cancellation_flag_as_sigint() {
+        let cancellation = Cancellation::default();
+        install_signal_handlers(&cancellation).expect("install both signal handlers");
+        signal_hook::low_level::raise(SIGTERM).expect("raise SIGTERM");
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while !cancellation.is_cancelled() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(cancellation.is_cancelled());
     }
 
     #[test]
