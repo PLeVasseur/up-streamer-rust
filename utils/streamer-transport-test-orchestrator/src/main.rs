@@ -152,22 +152,22 @@ struct Cli {
     #[arg(long)]
     max_runnable_rows: Option<usize>,
 
-    #[arg(long, default_value_t = 4)]
+    #[arg(long, default_value_t = 8)]
     jobs: usize,
 
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, default_value_t = 3)]
     lola_jobs: usize,
 
-    #[arg(long)]
+    #[arg(long, default_value = "4")]
     dds_jobs: Option<usize>,
 
-    #[arg(long)]
+    #[arg(long, default_value = "4")]
     zenoh_shm_jobs: Option<usize>,
 
-    #[arg(long)]
+    #[arg(long, default_value = "3")]
     vsomeip_jobs: Option<usize>,
 
-    #[arg(long)]
+    #[arg(long, default_value = "3")]
     mqtt_jobs: Option<usize>,
 
     #[arg(long, default_value_t = DEFAULT_HARD_MAX_JOBS)]
@@ -8786,8 +8786,12 @@ mod tests {
     #[test]
     fn default_concurrency_and_evidence_backed_timing_options_are_stable() {
         let cli = Cli::try_parse_from(["orchestrator"]).expect("default CLI parses");
-        assert_eq!(cli.jobs, 4);
-        assert_eq!(cli.lola_jobs, 1);
+        assert_eq!(cli.jobs, 8);
+        assert_eq!(cli.lola_jobs, 3);
+        assert_eq!(cli.dds_jobs, Some(4));
+        assert_eq!(cli.zenoh_shm_jobs, Some(4));
+        assert_eq!(cli.vsomeip_jobs, Some(3));
+        assert_eq!(cli.mqtt_jobs, Some(3));
         assert_eq!(cli.send_interval_ms, 50);
         assert_eq!(cli.mqtt_readiness_timeout_ms, 250);
         assert_eq!(cli.lola_pre_active_stabilization_ms, 0);

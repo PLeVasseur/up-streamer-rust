@@ -30,8 +30,8 @@ Run from the workspace root:
 
 ```bash
 cargo run -p streamer-transport-test-orchestrator -- \
-  --jobs 4 \
-  --lola-jobs 1 \
+  --jobs 8 \
+  --lola-jobs 3 \
   --criteria utils/streamer-transport-test-orchestrator/matrix-criteria.json
 ```
 
@@ -67,17 +67,17 @@ cargo run -p streamer-transport-test-orchestrator -- \
 - `--scenario-timeout-secs <S>`: row scenario timeout, default `30`.
 - `--max-runnable-rows <N>`: execute only the first `N` supported rows and
   classify later supported rows as planner-blocked.
-- `--jobs <N>`: global worker limit, default `4`.
-- `--lola-jobs <N>`: LoLa-sensitive worker limit, default `1`.
+- `--jobs <N>`: global worker limit, default `8`.
+- `--lola-jobs <N>`: LoLa-sensitive worker limit, default `3`.
 - `--dds-jobs <N>`, `--zenoh-shm-jobs <N>`, `--vsomeip-jobs <N>`, and
-  `--mqtt-jobs <N>`: optional transport-resource caps. Unset caps inherit the
-  effective global worker limit. Rows acquire their complete applicable class
+  `--mqtt-jobs <N>`: transport-resource caps, defaulting to DDS `4`, Zenoh-SHM
+  `4`, vSomeIP `3`, and MQTT `3`. Rows acquire their complete applicable class
   set atomically in deterministic class order, so mixed-resource rows cannot
   deadlock.
 - `--hard-max-jobs <N>`: configured host-policy ceiling, default `16`. Requests
   above it are rejected. The worker pool is further clamped to available CPUs
-  and runnable tasks; the accepted defaults remain effectively `4/1` for
-  global/LoLa work on a sufficiently capable host.
+  and runnable tasks; smaller hosts therefore clamp the accepted `8/3` profile
+  automatically.
 - `--tokio-worker-threads <N>`: forced Tokio worker count for matrix children,
   default `2`.
 - `--preflight-memory-mib-per-job`, `--preflight-tasks-per-job`,
