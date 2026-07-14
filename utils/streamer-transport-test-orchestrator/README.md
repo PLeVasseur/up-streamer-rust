@@ -98,6 +98,44 @@ cargo run -p streamer-transport-test-orchestrator -- \
 - `--merge-shard-root <DIR>`: merge a completed shard artifact root; repeat once
   for every shard. `--merge-output <FILE>` selects the merged summary path.
 
+## Matrix Authoring Contract
+
+Selected-wire metadata and payload bytes are opaque to physical transport
+cores. A core carries those bytes and the already validated source/sink
+sideband; it does not decode selected-wire metadata or payload to choose a
+route. Source and sink adapters validate wire identity and representation before
+callback or egress. Wrong-wire or otherwise rejected input therefore produces
+neither a callback nor an outbound transport send.
+
+The canonical denominator is the complete ordered Cartesian product:
+
+```text
+12 source profiles x 12 sink profiles x 3 role styles x 5 wire encodings = 2160 rows
+```
+
+The twelve endpoint profiles are Zenoh classic, MQTT5 classic, vSomeIP classic,
+Zenoh owned-frame, Zenoh copy-minimized, iceoryx2 owned-frame, iceoryx2
+copy-minimized, LoLa owned-frame, LoLa copy-minimized, DDS classic, DDS
+owned-frame, and DDS copy-minimized. The three role styles are
+publisher/subscriber, notifier/notifyee, and client/server RPC. The five wire
+encodings are native, protobuf, XCDRv2, Arrow, and OMG IDL.
+
+Every generated row remains in the denominator. A row is structurally
+unsupported only for one of these reasons:
+
+- source and sink endpoint profiles are identical, so no bridge boundary is
+  under test; or
+- Arrow and OMG IDL are not implemented by MQTT5 or vSomeIP classic role
+  binaries.
+
+The checked criteria require `1728` supported and `432` structurally
+unsupported rows, with no blocked or failed rows. Canonical generation and
+criteria validation together reject a missing row, an unknown row, an
+unsupported reason outside the allowlist, or a count mismatch. Do not remove
+unsupported rows, narrow the denominator, or use a focused selection as
+full-matrix evidence when adding profiles, role styles, encodings, or support
+classifications.
+
 ## Resource And Input Safety
 
 Before row dispatch the orchestrator checks CPU policy, available RAM, free
