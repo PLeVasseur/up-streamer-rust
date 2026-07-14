@@ -195,7 +195,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "9265a190934ff92c15d67f4c2d862b9eb6763b24", optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "e6c1510aedc06f2206afbf031ec26d60cfd576e3", optional = true }
 up-transport-zenoh = { workspace = true, optional = true }
 up-transport-vsomeip = { workspace = true, optional = true }
 up-transport-mqtt5 = { workspace = true, optional = true }
