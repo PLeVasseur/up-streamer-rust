@@ -23,6 +23,7 @@ license.workspace = true
 default = []
 experimental-copy-minimized-routing = [
     "up-rust/selected-wire-user-api",
+    "up-rust/zero-copy-transport",
 ]
 owned-frame-transport = ["up-rust/owned-frame-transport", "up-rust/wire-implementer-api"]
 

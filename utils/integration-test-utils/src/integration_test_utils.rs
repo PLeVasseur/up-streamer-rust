@@ -156,10 +156,10 @@ pub async fn check_messages_in_order(messages: Arc<Mutex<Vec<UMessage>>>) {
     for ((source_uuri, message_type), group) in grouped_messages {
         debug!("source_uuri: {source_uuri}, message_type: {message_type}");
         if let Some((_first_index, first_msg)) = group.first() {
-            let mut prev_timestamp = first_msg.id().get_time();
+            let mut prev_timestamp = first_msg.id().time();
 
             for (msg_index, msg) in group.iter().skip(1) {
-                let curr_timestamp = msg.id().get_time();
+                let curr_timestamp = msg.id().time();
 
                 debug!("prev_timestamp: {prev_timestamp}, curr_timestamp: {curr_timestamp}");
                 // relaxing to < instead of <= since we now do not have the counter for tie breaker

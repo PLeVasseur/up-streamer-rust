@@ -9,10 +9,11 @@ use up_rust::communication::{
     owned, CallOptions, RequestHandler, ServiceInvocationError, SubscriptionStatus, UPayload,
 };
 use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
+use up_rust::frame::metadata::try_project_umessage_to_frame_metadata;
 use up_rust::{
-    try_project_umessage_to_frame_metadata, LocalUriProvider, PayloadEncoding, StaticUriProvider,
-    UAttributes, UCode, UListener, UMessage, UMessageBuilder, UOwnedFrame, UOwnedListener,
-    UOwnedTransportImpl, UPayloadFormat, UStatus, UUri, ValidatedOwnedFrame,
+    LocalUriProvider, PayloadEncoding, StaticUriProvider, UAttributes, UCode, UListener, UMessage,
+    UMessageBuilder, UOwnedFrame, UOwnedListener, UOwnedTransportImpl, UPayloadFormat, UStatus,
+    UUri,
 };
 use up_streamer::{OwnedFrameEndpoint, RouteCopySemantics, RouteKind, UStreamer};
 
@@ -27,17 +28,11 @@ impl USubscription for EmptySubscription {
         _expiration: Option<u64>,
         _min_sample_period: Option<u32>,
     ) -> Result<SubscriptionStatus, UStatus> {
-        Err(UStatus::fail_with_code(
-            UCode::Unimplemented,
-            "subscribe is not used by this test",
-        ))
+        Ok(SubscriptionStatus::Subscribed)
     }
 
     async fn unsubscribe(&self, _topic: &UUri) -> Result<(), UStatus> {
-        Err(UStatus::fail_with_code(
-            UCode::Unimplemented,
-            "unsubscribe is not used by this test",
-        ))
+        Ok(())
     }
 
     async fn fetch_subscriptions_by_topic(
@@ -224,8 +219,7 @@ impl RecordingOwnedTransport {
 
 #[async_trait]
 impl UOwnedTransportImpl for RecordingOwnedTransport {
-    async fn send_validated_owned(&self, frame: ValidatedOwnedFrame) -> Result<(), UStatus> {
-        let frame = frame.into_inner();
+    async fn send_validated_owned(&self, frame: UOwnedFrame) -> Result<(), UStatus> {
         self.sent.lock().expect("sent lock").push(frame.clone());
         self.received
             .lock()
@@ -478,7 +472,8 @@ async fn owned_l2_publish_routes_through_streamer() {
         .await
         .expect("streamer");
     let publisher = owned::Endpoint::new(ingress.clone(), uri_provider("authority-a")).publisher();
-    let subscriber = owned::Endpoint::new(egress.clone(), uri_provider("authority-b")).subscriber();
+    let subscriber = owned::Endpoint::new(egress.clone(), uri_provider("authority-b"))
+        .subscriber(Arc::new(EmptySubscription));
     let listener = Arc::new(RecordingMessageListener::default());
 
     subscriber

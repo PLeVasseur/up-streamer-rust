@@ -837,7 +837,7 @@ async fn receive_owned_frame(
         .await
         {
             Ok(Ok(frame)) => return Ok(frame),
-            Ok(Err(error)) if error.get_code() == UCode::NotFound => {
+            Ok(Err(error)) if error.code() == UCode::NotFound => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Ok(Err(error)) => return Err(error),
@@ -988,7 +988,7 @@ where
         .await
         {
             Ok(Ok(frame)) => return Ok(frame),
-            Ok(Err(error)) if error.get_code() == UCode::NotFound => {
+            Ok(Err(error)) if error.code() == UCode::NotFound => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Ok(Err(error)) => return Err(error),
@@ -1066,7 +1066,7 @@ fn response_metadata(
 }
 
 fn frame_metadata(cli: &Cli, message: UMessage) -> Result<UFrameMetadata, UStatus> {
-    up_rust::try_project_attributes_to_frame_metadata(
+    up_rust::frame::metadata::try_project_attributes_to_frame_metadata(
         message.attributes(),
         Some(payload_encoding(cli.wire_format)),
     )

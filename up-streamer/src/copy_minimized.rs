@@ -142,9 +142,10 @@ mod tests {
     use super::*;
     use bytes::Bytes;
     use std::io::Cursor;
+    use up_rust::frame::metadata::try_project_umessage_to_frame_metadata;
     use up_rust::{
-        try_project_umessage_to_frame_metadata, PayloadEncoding, UFrameMetadata, UMessageBuilder,
-        UPayloadFormat, UUri, UVecRxLease, UVecTxBuffer,
+        PayloadEncoding, UFrameMetadata, UMessageBuilder, UPayloadFormat, UUri, UVecRxLease,
+        UVecTxBuffer,
     };
 
     struct TestFrame {
@@ -255,7 +256,7 @@ mod tests {
         )
         .expect_err("alignment should be rejected");
 
-        assert_eq!(error.get_code(), UCode::InvalidArgument);
+        assert_eq!(error.code(), UCode::InvalidArgument);
 
         let spec = loan_spec_for_copy_minimized(
             &frame,
@@ -275,7 +276,7 @@ mod tests {
         let error = loan_spec_for_copy_minimized(&frame, CopyMinimizedRouteOptions::default())
             .expect_err("length should be rejected");
 
-        assert_eq!(error.get_code(), UCode::InvalidArgument);
+        assert_eq!(error.code(), UCode::InvalidArgument);
     }
 
     #[test]
@@ -288,6 +289,6 @@ mod tests {
         let error = loan_spec_for_copy_minimized(&frame, CopyMinimizedRouteOptions::default())
             .expect_err("malformed stable-container metadata should be rejected");
 
-        assert_eq!(error.get_code(), UCode::InvalidArgument);
+        assert_eq!(error.code(), UCode::InvalidArgument);
     }
 }

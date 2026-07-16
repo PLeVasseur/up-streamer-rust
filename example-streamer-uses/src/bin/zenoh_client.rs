@@ -614,7 +614,7 @@ async fn receive_owned_payload(
         .await
         {
             Ok(Ok(frame)) => return Ok(frame.payload_bytes().to_vec()),
-            Ok(Err(error)) if error.get_code() == UCode::NotFound => {
+            Ok(Err(error)) if error.code() == UCode::NotFound => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Ok(Err(error)) => return Err(error),
@@ -649,7 +649,7 @@ where
         .await
         {
             Ok(Ok(frame)) => return Ok(frame.try_contiguous_payload().unwrap_or(&[]).to_vec()),
-            Ok(Err(error)) if error.get_code() == UCode::NotFound => {
+            Ok(Err(error)) if error.code() == UCode::NotFound => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
             Ok(Err(error)) => return Err(error),

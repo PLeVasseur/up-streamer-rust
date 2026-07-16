@@ -22,10 +22,10 @@ use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration};
 use up_rust::communication::SubscriptionStatus;
 use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
+use up_rust::frame::metadata::try_project_umessage_to_frame_metadata;
 use up_rust::{
-    try_project_umessage_to_frame_metadata, PayloadEncoding, UCode, UListener, UMessage,
-    UMessageBuilder, UOwnedFrame, UOwnedListener, UOwnedTransportImpl, UStatus, UTransport, UUri,
-    ValidatedOwnedFrame,
+    PayloadEncoding, UCode, UListener, UMessage, UMessageBuilder, UOwnedFrame, UOwnedListener,
+    UOwnedTransportImpl, UStatus, UTransport, UUri,
 };
 use up_streamer::{Endpoint, OwnedFrameEndpoint, UStreamer};
 
@@ -159,11 +159,8 @@ impl RecordingOwnedTransport {
 
 #[async_trait]
 impl UOwnedTransportImpl for RecordingOwnedTransport {
-    async fn send_validated_owned(&self, frame: ValidatedOwnedFrame) -> Result<(), UStatus> {
-        self.sent
-            .lock()
-            .expect("sent lock")
-            .push(frame.into_inner());
+    async fn send_validated_owned(&self, frame: UOwnedFrame) -> Result<(), UStatus> {
+        self.sent.lock().expect("sent lock").push(frame);
         Ok(())
     }
 

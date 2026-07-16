@@ -135,11 +135,11 @@ async fn add_delete_route_contract_rejects_same_authority() {
         .add_route(endpoint_a.clone(), endpoint_b.clone())
         .await
         .expect_err("same-authority add should fail");
-    assert_eq!(add_error.get_code(), UCode::InvalidArgument);
+    assert_eq!(add_error.code(), UCode::InvalidArgument);
 
     let delete_error = streamer
         .delete_route(endpoint_a, endpoint_b)
         .await
         .expect_err("same-authority delete should fail");
-    assert_eq!(delete_error.get_code(), UCode::InvalidArgument);
+    assert_eq!(delete_error.code(), UCode::InvalidArgument);
 }

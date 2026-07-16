@@ -12,6 +12,7 @@ use std::{
 use tokio::time::{sleep, Duration};
 use up_rust::communication::{zero_copy, CallOptions, SubscriptionStatus};
 use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
+use up_rust::frame::metadata::try_project_umessage_to_frame_metadata;
 use up_rust::selected_wire_user_api::{
     ProtobufWireTransport, UProtocolNativeWire, UWithNativePrefixWire,
 };
@@ -22,10 +23,9 @@ use up_rust::wire_implementer_api::{
     NativePrefixFrameMetadataCodec, ProtobufWire, UWire, UWireMetadataCodec,
 };
 use up_rust::{
-    try_project_umessage_to_frame_metadata, ByteBackedStablePayload, InMemoryZeroCopyTransport,
-    StablePayload, StaticUriProvider, UCode, UFrameMetadata, UFrameView, UMessageBuilder,
-    UPayloadFormat, UStatus, UTxBuffer, UUri, UVecRxLease, UZeroCopyListener,
-    UZeroCopyTransportImpl, ValidatedTxLoanSpec,
+    ByteBackedStablePayload, InMemoryZeroCopyTransport, StablePayload, StaticUriProvider, UCode,
+    UFrameMetadata, UFrameView, UMessageBuilder, UPayloadFormat, UStatus, UTxBuffer, UTxLoanSpec,
+    UUri, UVecRxLease, UZeroCopyListener, UZeroCopyTransportImpl,
 };
 use up_rust::{UZeroCopyRxLease, UZeroCopyTransport};
 use up_streamer::{
@@ -400,7 +400,7 @@ impl UZeroCopyTransportImpl for InstrumentedZeroCopyTransport {
     type Tx = InstrumentedTxBuffer;
     type Rx = InstrumentedRxLease;
 
-    async fn loan_validated_tx(&self, spec: ValidatedTxLoanSpec) -> Result<Self::Tx, UStatus> {
+    async fn loan_validated_tx(&self, spec: UTxLoanSpec) -> Result<Self::Tx, UStatus> {
         self.instrumentation
             .loan_tx_calls
             .fetch_add(1, Ordering::SeqCst);
@@ -1008,7 +1008,7 @@ async fn copy_minimized_route_rejects_duplicate_same_authority_and_missing_delet
         .add_copy_minimized_route_ref(&ingress_endpoint, &same_authority_endpoint)
         .await
         .expect_err("same-authority route should fail");
-    assert_eq!(same_authority_error.get_code(), UCode::InvalidArgument);
+    assert_eq!(same_authority_error.code(), UCode::InvalidArgument);
 
     streamer
         .add_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
@@ -1018,7 +1018,7 @@ async fn copy_minimized_route_rejects_duplicate_same_authority_and_missing_delet
         .add_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
         .await
         .expect_err("duplicate route should fail");
-    assert_eq!(duplicate_error.get_code(), UCode::AlreadyExists);
+    assert_eq!(duplicate_error.code(), UCode::AlreadyExists);
 
     streamer
         .delete_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
@@ -1028,7 +1028,7 @@ async fn copy_minimized_route_rejects_duplicate_same_authority_and_missing_delet
         .delete_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
         .await
         .expect_err("missing route delete should fail");
-    assert_eq!(missing_delete_error.get_code(), UCode::NotFound);
+    assert_eq!(missing_delete_error.code(), UCode::NotFound);
 }
 
 #[tokio::test]
@@ -1084,7 +1084,7 @@ async fn copy_minimized_route_rolls_back_after_partial_registration_failure() {
         .await
         .expect_err("partial registration failure should fail route add");
 
-    assert_eq!(error.get_code(), UCode::Unavailable);
+    assert_eq!(error.code(), UCode::Unavailable);
     assert_eq!(ingress.listener_count(), 0);
     assert_eq!(ingress.unregister_calls(), 1);
     assert!(streamer.route_diagnostics().is_empty());
@@ -1112,7 +1112,7 @@ async fn copy_minimized_route_delete_failure_keeps_route_registered() {
         .await
         .expect_err("injected unregister failure should fail delete");
 
-    assert_eq!(error.get_code(), UCode::Unavailable);
+    assert_eq!(error.code(), UCode::Unavailable);
     assert_eq!(streamer.route_diagnostics().len(), 1);
     assert_eq!(ingress.listener_count(), 1);
 

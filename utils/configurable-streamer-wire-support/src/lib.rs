@@ -757,7 +757,7 @@ mod tests {
     #[test]
     fn route_wire_format_rejects_open_plugin_names() {
         let error = RouteWireFormat::parse("third_party_plugin").expect_err("open plugin rejected");
-        assert_eq!(error.get_code(), UCode::InvalidArgument);
+        assert_eq!(error.code(), UCode::InvalidArgument);
     }
 
     #[test]
@@ -768,6 +768,6 @@ mod tests {
             RouteWireFormat::Arrow,
         )
         .expect_err("mismatch rejected");
-        assert_eq!(error.get_code(), UCode::InvalidArgument);
+        assert_eq!(error.code(), UCode::InvalidArgument);
     }
 }

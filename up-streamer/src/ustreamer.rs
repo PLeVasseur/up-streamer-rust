@@ -1545,19 +1545,20 @@ impl UStreamer {
         tx: mpsc::Sender<UOwnedFrame>,
     ) {
         while let Some(message) = rx.recv().await {
-            let metadata = match up_rust::try_project_umessage_to_frame_metadata(&message) {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    warn!(
-                        event = "classic_ingress_unprojectable",
-                        component = COMPONENT,
-                        route_label = route_label.as_str(),
-                        err = %error,
-                        "classic message not projectable to frame metadata; dropped loudly"
-                    );
-                    continue;
-                }
-            };
+            let metadata =
+                match up_rust::frame::metadata::try_project_umessage_to_frame_metadata(&message) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        warn!(
+                            event = "classic_ingress_unprojectable",
+                            component = COMPONENT,
+                            route_label = route_label.as_str(),
+                            err = %error,
+                            "classic message not projectable to frame metadata; dropped loudly"
+                        );
+                        continue;
+                    }
+                };
             let payload = message.payload();
             let frame = match UOwnedFrame::new(metadata, payload) {
                 Ok(frame) => frame,
@@ -1605,19 +1606,20 @@ impl UStreamer {
             };
             let payload = frame.payload().cloned();
             let metadata = frame.into_metadata();
-            let message = match up_rust::try_project_frame_to_umessage(metadata, payload) {
-                Ok(message) => message,
-                Err(error) => {
-                    warn!(
-                        event = "classic_egress_unrepresentable",
-                        component = COMPONENT,
-                        route_label = route_label.as_str(),
-                        err = %error,
-                        "frame not representable as classic message; dropped loudly"
-                    );
-                    continue;
-                }
-            };
+            let message =
+                match up_rust::frame::metadata::try_project_frame_to_umessage(metadata, payload) {
+                    Ok(message) => message,
+                    Err(error) => {
+                        warn!(
+                            event = "classic_egress_unrepresentable",
+                            component = COMPONENT,
+                            route_label = route_label.as_str(),
+                            err = %error,
+                            "frame not representable as classic message; dropped loudly"
+                        );
+                        continue;
+                    }
+                };
             if let Err(error) = egress.transport.send(message).await {
                 warn!(
                     event = "copy_minimized_to_classic_egress_send_failed",
@@ -1638,19 +1640,20 @@ impl UStreamer {
         mut rx: mpsc::Receiver<UMessage>,
     ) {
         while let Some(message) = rx.recv().await {
-            let metadata = match up_rust::try_project_umessage_to_frame_metadata(&message) {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    warn!(
-                        event = "classic_ingress_unprojectable",
-                        component = COMPONENT,
-                        route_label = route_label.as_str(),
-                        err = %error,
-                        "classic message not projectable to frame metadata; dropped loudly"
-                    );
-                    continue;
-                }
-            };
+            let metadata =
+                match up_rust::frame::metadata::try_project_umessage_to_frame_metadata(&message) {
+                    Ok(metadata) => metadata,
+                    Err(error) => {
+                        warn!(
+                            event = "classic_ingress_unprojectable",
+                            component = COMPONENT,
+                            route_label = route_label.as_str(),
+                            err = %error,
+                            "classic message not projectable to frame metadata; dropped loudly"
+                        );
+                        continue;
+                    }
+                };
             let payload = message.payload();
             let frame = match UOwnedFrame::new(metadata, payload) {
                 Ok(frame) => frame,
@@ -1687,19 +1690,20 @@ impl UStreamer {
         while let Some(frame) = rx.recv().await {
             let payload = frame.payload().cloned();
             let metadata = frame.into_metadata();
-            let message = match up_rust::try_project_frame_to_umessage(metadata, payload) {
-                Ok(message) => message,
-                Err(error) => {
-                    warn!(
-                        event = "classic_egress_unrepresentable",
-                        component = COMPONENT,
-                        route_label = route_label.as_str(),
-                        err = %error,
-                        "frame not representable as classic message; dropped loudly"
-                    );
-                    continue;
-                }
-            };
+            let message =
+                match up_rust::frame::metadata::try_project_frame_to_umessage(metadata, payload) {
+                    Ok(message) => message,
+                    Err(error) => {
+                        warn!(
+                            event = "classic_egress_unrepresentable",
+                            component = COMPONENT,
+                            route_label = route_label.as_str(),
+                            err = %error,
+                            "frame not representable as classic message; dropped loudly"
+                        );
+                        continue;
+                    }
+                };
             if let Err(error) = egress.transport.send(message).await {
                 warn!(
                     event = "owned_to_classic_egress_send_failed",
