@@ -6072,7 +6072,7 @@ dependencies = [
 [[package]]
 name = "up-transport-lola-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=d5777ea32c45f465f8afa9f62646333fa30ea8ef#d5777ea32c45f465f8afa9f62646333fa30ea8ef"
+source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=48b9a377d5c82e45dbb39596f8067d4c693bb509#48b9a377d5c82e45dbb39596f8067d4c693bb509"
 dependencies = [
  "async-trait",
  "bytes",
