@@ -110,6 +110,7 @@ async fn main() -> Result<(), UStatus> {
 
     println!("READY listener_registered");
 
-    thread::park();
-    Ok(())
+    loop {
+        thread::park();
+    }
 }

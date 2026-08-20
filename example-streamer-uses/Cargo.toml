@@ -28,7 +28,15 @@ name = "someip_publisher"
 required-features = ["vsomeip-transport"]
 
 [[bin]]
-name = "someip_service"
+name = "someip_notifier"
+required-features = ["vsomeip-transport"]
+
+[[bin]]
+name = "someip_notifyee"
+required-features = ["vsomeip-transport"]
+
+[[bin]]
+name = "someip_server"
 required-features = ["vsomeip-transport"]
 
 [[bin]]
@@ -44,12 +52,92 @@ name = "zenoh_publisher"
 required-features = ["zenoh-transport"]
 
 [[bin]]
-name = "zenoh_service"
+name = "zenoh_server"
 required-features = ["zenoh-transport"]
+
+[[bin]]
+name = "zenoh_notifier"
+required-features = ["zenoh-transport"]
+
+[[bin]]
+name = "zenoh_notifyee"
+required-features = ["zenoh-transport"]
+
+[[bin]]
+name = "iceoryx2_publisher"
+required-features = ["iceoryx2-selected-wire"]
+
+[[bin]]
+name = "iceoryx2_subscriber"
+required-features = ["iceoryx2-selected-wire"]
+
+[[bin]]
+name = "iceoryx2_notifier"
+required-features = ["iceoryx2-selected-wire"]
+
+[[bin]]
+name = "iceoryx2_notifyee"
+required-features = ["iceoryx2-selected-wire"]
+
+[[bin]]
+name = "iceoryx2_client"
+required-features = ["iceoryx2-selected-wire"]
+
+[[bin]]
+name = "iceoryx2_server"
+required-features = ["iceoryx2-selected-wire"]
+
+[[bin]]
+name = "lola_publisher"
+required-features = ["lola-selected-wire"]
+
+[[bin]]
+name = "lola_subscriber"
+required-features = ["lola-selected-wire"]
+
+[[bin]]
+name = "lola_notifier"
+required-features = ["lola-selected-wire"]
+
+[[bin]]
+name = "lola_notifyee"
+required-features = ["lola-selected-wire"]
+
+[[bin]]
+name = "lola_client"
+required-features = ["lola-selected-wire"]
+
+[[bin]]
+name = "lola_server"
+required-features = ["lola-selected-wire"]
 
 [[bin]]
 name = "zenoh_subscriber"
 required-features = ["zenoh-transport"]
+
+[[bin]]
+name = "dds_publisher"
+required-features = ["dds-transport"]
+
+[[bin]]
+name = "dds_subscriber"
+required-features = ["dds-transport"]
+
+[[bin]]
+name = "dds_notifier"
+required-features = ["dds-transport"]
+
+[[bin]]
+name = "dds_notifyee"
+required-features = ["dds-transport"]
+
+[[bin]]
+name = "dds_client"
+required-features = ["dds-transport"]
+
+[[bin]]
+name = "dds_server"
+required-features = ["dds-transport"]
 
 [[bin]]
 name = "mqtt_client"
@@ -60,7 +148,15 @@ name = "mqtt_publisher"
 required-features = ["mqtt-transport"]
 
 [[bin]]
-name = "mqtt_service"
+name = "mqtt_notifier"
+required-features = ["mqtt-transport"]
+
+[[bin]]
+name = "mqtt_notifyee"
+required-features = ["mqtt-transport"]
+
+[[bin]]
+name = "mqtt_server"
 required-features = ["mqtt-transport"]
 
 [[bin]]
@@ -68,10 +164,23 @@ name = "mqtt_subscriber"
 required-features = ["mqtt-transport"]
 
 [features]
-zenoh-transport = ["up-transport-zenoh", "zenoh"]
+selected-wire-common = ["up-rust/owned-frame-transport", "up-rust/selected-wire-user-api"]
+wire-formats = ["up-wire-arrow", "up-wire-omgidl", "up-wire-xcdrv2"]
+zenoh-transport = ["selected-wire-common", "wire-formats", "up-transport-zenoh", "up-transport-zenoh/benchmark-owned", "up-transport-zenoh/zero-copy", "zenoh"]
+zenoh-owned-frame = ["selected-wire-common", "zenoh-transport", "up-transport-zenoh/benchmark-owned", "up-wire-xcdrv2"]
+zenoh-zero-copy = ["selected-wire-common", "zenoh-transport", "up-transport-zenoh/zero-copy", "up-wire-xcdrv2"]
+zenoh-selected-wire = ["zenoh-owned-frame", "zenoh-zero-copy"]
+iceoryx2-owned-frame = ["selected-wire-common", "wire-formats", "up-transport-iceoryx2-rust", "up-transport-iceoryx2-rust/benchmark-owned"]
+iceoryx2-zero-copy = ["selected-wire-common", "wire-formats", "up-transport-iceoryx2-rust"]
+iceoryx2-selected-wire = ["iceoryx2-owned-frame", "iceoryx2-zero-copy"]
+lola-transport = ["selected-wire-common", "wire-formats", "up-transport-lola-rust"]
+lola-owned-frame = ["lola-transport", "up-transport-lola-rust/benchmark-owned"]
+lola-zero-copy = ["lola-transport"]
+lola-selected-wire = ["lola-owned-frame", "lola-zero-copy"]
 vsomeip-transport = ["up-transport-vsomeip"]
 bundled-vsomeip = ["up-transport-vsomeip/bundled"]
 mqtt-transport = ["up-transport-mqtt5"]
+dds-transport = ["selected-wire-common", "wire-formats", "up-transport-dds"]
 
 [dependencies]
 async-trait = { workspace = true }
@@ -85,7 +194,13 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
+up-transport-iceoryx2-rust = { workspace = true, optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "ed5ce1dcd7c27d63bd388b2c5b93ce530763ab93", optional = true }
 up-transport-zenoh = { workspace = true, optional = true }
 up-transport-vsomeip = { workspace = true, optional = true }
 up-transport-mqtt5 = { workspace = true, optional = true }
+up-transport-dds = { workspace = true, optional = true }
+up-wire-arrow = { workspace = true, optional = true }
+up-wire-omgidl = { workspace = true, optional = true }
+up-wire-xcdrv2 = { workspace = true, optional = true }
 zenoh = { workspace = true, optional = true }

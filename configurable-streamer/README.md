@@ -1,7 +1,7 @@
 # configurable-streamer
 
 This is a standalone implementation of a uStreamer.
-It is implemented to dynamically link between any number of uEntities that use a mix of either Zenoh or MQTT5.
+It is implemented to dynamically link between any number of uEntities that use Zenoh, MQTT5, or the optional zero-copy transports.
 
 ## Supported Setups
 
@@ -52,6 +52,77 @@ The 'static_subscriptions.json' is only needed when you set up a publish-subscri
 Make sure that the UURI of each pub-sub entity is present at least as a key in this json file!
 
 The 'vsomeip-config/point_to_point.json' is a configuration file only needed for SOME/IP implementations. The list of "services" must include the UEntity IDs of all entities running on the host-protocol (in the reference implementations that means all components running with the Zenoh transport)! The term service in this context comes from SOME/IP and should not be confused with UService entity.
+
+## Zero-Copy Example Configurations
+
+The configurable streamer can expose copy-minimized routes when it is built with `experimental-copy-minimized-routing` and the matching zero-copy transport features. The example files use the current grouped transport schema under `transports`:
+
+- `CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5` routes between Zenoh shared memory and iceoryx2.
+- `CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5` routes between Zenoh shared memory and LoLa using `MW_COM_CONFIG_LOLA.json`.
+- `CONFIG_ZEROCOPY_EXAMPLE.json5` includes Zenoh shared memory, iceoryx2, and LoLa with pairwise copy-minimized forwarding.
+- `CONFIG_ZEROCOPY_MISMATCH_NEGATIVE_EXAMPLE.json5` documents the expected startup failure for an unsupported wire format declaration.
+- `MW_COM_CONFIG_LOLA.json` is the LoLa MW COM service/event fixture used by the LoLa examples.
+- `CONFIG_DDS_ARROW_EXAMPLE.json5` routes between DDS owned-frame and
+  copy-minimized endpoints with Arrow selected wire.
+
+LoLa-backed examples use checked-in S-CORE MW COM deployment manifests such as
+`MW_COM_CONFIG_LOLA.json`. The streamer passes these paths explicitly through
+`lola_mw_com_config_file`, so no copy into `./etc/mw_com_config.json` is needed
+for these examples. A native LoLa process can initialize S-CORE with only one MW
+COM manifest, so every LoLa endpoint in a single configurable-streamer process
+must reference the same resolved manifest path. Use one complete manifest that
+contains all LoLa services/events needed by that example.
+
+On Linux, S-CORE LoLa writes runtime service-discovery and partial-restart state
+under `/tmp/mw_com_lola`. This is LoLa runtime state, not streamer config.
+Repeated local runs after crashes may require cleaning that directory, but only
+after all LoLa-backed streamer and role processes have stopped.
+
+Each copy-minimized endpoint sets `routing_mode: "copy_minimized"`. Copy-minimized forwarding uses `forwarding_routes` entries instead of the legacy `forwarding` string array so each configured route can declare the selected wire format explicitly:
+
+```json5
+forwarding_routes: [
+  { endpoint: "iceoryx2-zc", wire_format: "protobuf" },
+]
+```
+
+The route declaration must use the same wire format for the ingress and egress adapter pair. Unsupported wire format names, missing `wire_format` on copy-minimized routes, MQTT endpoints, owned-only endpoints, or uncompiled zero-copy transports fail during startup before forwarding is registered. The current implementation preserves the one-copy copy-minimized route semantics from `up-streamer`; it is not a generic no-copy forwarding path. If route metadata cannot be decoded for the configured wire format, the selected-wire adapter drops or rejects the frame before Streamer forwarding.
+
+The closed selected-wire set is `up_native`, `protobuf`, `xcdrv2`, `arrow`, and
+`omgidl`. There is no wire sniffing. Both route endpoints are constructed with
+the same concrete wire and native-prefix metadata codec before the typed
+Streamer route call is available.
+
+DDS is configured as one optional grouped transport. `domain_id`, `origin_id`,
+`qos.reliability`, `history_depth`, and `readiness` are explicit. The streamer
+derives a unique origin for each endpoint/family/wire instance, waits for the
+configured DDS publication-match count, and retains transport ownership until
+shutdown so pollers, dispatchers, and participants are joined and deleted by
+the DDS transport lifecycle.
+
+Owned/default routes can continue to use the legacy `forwarding` array and do not require `wire_format`. MQTT endpoints cannot use copy-minimized routing; these examples keep the required MQTT transport section with an empty endpoint list.
+
+Run the examples from the `configurable-streamer` directory so the relative config file paths resolve:
+
+```bash
+cargo run -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy -- --config="CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5"
+```
+
+```bash
+cargo run -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,lola-transport -- --config="CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5"
+```
+
+```bash
+cargo run -p configurable-streamer --features experimental-copy-minimized-routing,zenoh-zero-copy,iceoryx2-zero-copy,lola-transport -- --config="CONFIG_ZEROCOPY_EXAMPLE.json5"
+```
+
+```bash
+cargo run -p configurable-streamer \
+  --features dds-transport,dds-owned-frame,dds-zero-copy \
+  -- --config="CONFIG_DDS_ARROW_EXAMPLE.json5"
+```
+
+The LoLa feature uses the default bundled native bridge build. If your environment does not provide `bazel`, set `BAZEL` to a Bazel or Bazelisk binary before building. The Streamer smoke matrix can also bootstrap the pinned Bazelisk with `scripts/ensure-lola-bazelisk.sh` and caches it under `.cache/tools/`. Configurations with `mqtt.endpoints: []` do not initialize MQTT or require a broker at startup.
 
 ## Running the Streamer in an example service mesh
 

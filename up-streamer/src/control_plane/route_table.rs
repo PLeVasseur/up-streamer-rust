@@ -91,7 +91,7 @@ mod tests {
             _sink_filter: Option<&UUri>,
         ) -> Result<UMessage, UStatus> {
             Err(UStatus::fail_with_code(
-                UCode::UNIMPLEMENTED,
+                UCode::Unimplemented,
                 "not used in tests",
             ))
         }

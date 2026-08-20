@@ -1,0 +1,44 @@
+# Copyright (c) 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# This program and the accompanying materials are made available under the
+# terms of the Apache License Version 2.0 which is available at
+# https://www.apache.org/licenses/LICENSE-2.0
+#
+# SPDX-License-Identifier: Apache-2.0
+
+[package]
+name = "configurable-streamer-wire-support"
+rust-version.workspace = true
+version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+
+[features]
+default = []
+wire-formats = ["dep:up-wire-arrow", "dep:up-wire-omgidl", "dep:up-wire-xcdrv2"]
+zenoh-zero-copy = ["wire-formats", "dep:up-transport-zenoh", "up-transport-zenoh/zero-copy"]
+iceoryx2-zero-copy = ["wire-formats", "dep:up-transport-iceoryx2-rust"]
+lola-transport = ["wire-formats", "dep:up-transport-lola-rust"]
+dds-zero-copy = ["wire-formats", "dep:up-transport-dds"]
+owned-frame-transport = ["wire-formats", "up-streamer/owned-frame-transport"]
+zenoh-owned-frame = ["owned-frame-transport", "dep:up-transport-zenoh", "up-transport-zenoh/benchmark-owned"]
+iceoryx2-owned-frame = ["owned-frame-transport", "dep:up-transport-iceoryx2-rust", "up-transport-iceoryx2-rust/benchmark-owned"]
+lola-owned-frame = ["owned-frame-transport", "dep:up-transport-lola-rust", "up-transport-lola-rust/benchmark-owned"]
+dds-owned-frame = ["owned-frame-transport", "dep:up-transport-dds"]
+
+[dependencies]
+up-rust = { workspace = true }
+up-streamer = { path = "../../up-streamer", features = ["experimental-copy-minimized-routing"] }
+up-transport-zenoh = { workspace = true, optional = true }
+up-transport-iceoryx2-rust = { workspace = true, optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "ed5ce1dcd7c27d63bd388b2c5b93ce530763ab93", optional = true }
+up-transport-dds = { workspace = true, optional = true }
+up-wire-arrow = { workspace = true, optional = true }
+up-wire-omgidl = { workspace = true, optional = true }
+up-wire-xcdrv2 = { workspace = true, optional = true }

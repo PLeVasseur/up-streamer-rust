@@ -206,7 +206,16 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::sync::broadcast;
-    use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
+    use up_rust::{UCode, UListener, UMessage, UMessageBuilder, UStatus, UTransport, UUri};
+
+    fn test_message() -> UMessage {
+        UMessageBuilder::publish(
+            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001)
+                .expect("test URI should build"),
+        )
+        .build()
+        .expect("test message should build")
+    }
 
     #[derive(Default)]
     struct CountingTransport {
@@ -232,7 +241,7 @@ mod tests {
             _sink_filter: Option<&UUri>,
         ) -> Result<UMessage, UStatus> {
             Err(UStatus::fail_with_code(
-                UCode::UNIMPLEMENTED,
+                UCode::Unimplemented,
                 "receive is not used by egress worker tests",
             ))
         }
@@ -276,7 +285,7 @@ mod tests {
         let (sender, receiver) = broadcast::channel(8);
 
         sender
-            .send(Arc::new(UMessage::default()))
+            .send(Arc::new(test_message()))
             .expect("queue should accept pre-close message");
         drop(sender);
 
@@ -297,10 +306,10 @@ mod tests {
         let (sender, receiver) = broadcast::channel(1);
 
         sender
-            .send(Arc::new(UMessage::default()))
+            .send(Arc::new(test_message()))
             .expect("queue should accept first message");
         sender
-            .send(Arc::new(UMessage::default()))
+            .send(Arc::new(test_message()))
             .expect("queue should accept second message");
         drop(sender);
 

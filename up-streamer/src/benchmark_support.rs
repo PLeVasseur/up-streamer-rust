@@ -22,19 +22,18 @@ use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::broadcast;
-use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo, Subscription};
-use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
+use up_rust::communication::SubscriptionStatus;
+use up_rust::core::usubscription::SubscriptionInfo;
+use up_rust::{UCode, UListener, UMessage, UMessageBuilder, UStatus, UTransport, UUri};
 
-fn subscription(topic: UUri, subscriber: UUri) -> Subscription {
-    Subscription {
-        topic: Some(topic).into(),
-        subscriber: Some(SubscriberInfo {
-            uri: Some(subscriber).into(),
-            ..Default::default()
-        })
-        .into(),
-        ..Default::default()
-    }
+fn subscription(topic: UUri, subscriber: UUri) -> SubscriptionInfo {
+    SubscriptionInfo::new(
+        topic,
+        subscriber,
+        SubscriptionStatus::Subscribed,
+        None,
+        None,
+    )
 }
 
 fn topic_uri(authority: Option<&str>, index: usize) -> UUri {
@@ -62,15 +61,10 @@ fn subscriber_uri(authority: Option<&str>, index: usize) -> UUri {
 }
 
 async fn directory_from_subscriptions(
-    subscriptions: Vec<Subscription>,
+    subscriptions: Vec<SubscriptionInfo>,
 ) -> Result<SubscriptionDirectory, UStatus> {
     let directory = SubscriptionDirectory::empty();
-    directory
-        .apply_snapshot(FetchSubscriptionsResponse {
-            subscriptions,
-            ..Default::default()
-        })
-        .await?;
+    directory.apply_snapshot(subscriptions).await?;
     Ok(directory)
 }
 
@@ -78,7 +72,7 @@ fn build_subscriptions(
     topic_authority: Option<&str>,
     subscriber_authority: Option<&str>,
     rows: usize,
-) -> Vec<Subscription> {
+) -> Vec<SubscriptionInfo> {
     let total_rows = rows.max(1);
     let mut subscriptions = Vec::with_capacity(total_rows);
 
@@ -193,7 +187,7 @@ impl UTransport for NoopRegistryTransport {
         _sink_filter: Option<&UUri>,
     ) -> Result<UMessage, UStatus> {
         Err(UStatus::fail_with_code(
-            UCode::UNIMPLEMENTED,
+            UCode::Unimplemented,
             "receive is not used by benchmark fixture",
         ))
     }
@@ -301,7 +295,7 @@ impl UTransport for CountingDispatchTransport {
         _sink_filter: Option<&UUri>,
     ) -> Result<UMessage, UStatus> {
         Err(UStatus::fail_with_code(
-            UCode::UNIMPLEMENTED,
+            UCode::Unimplemented,
             "receive is not used by benchmark fixture",
         ))
     }
@@ -329,10 +323,16 @@ impl UTransport for CountingDispatchTransport {
 pub async fn run_single_route_dispatch_once() -> usize {
     let dispatch_transport = Arc::new(CountingDispatchTransport::default());
     let out_transport: Arc<dyn UTransport> = dispatch_transport.clone();
+    let message = UMessageBuilder::publish(
+        UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001)
+            .expect("benchmark publish URI should build"),
+    )
+    .build()
+    .expect("benchmark message should build");
 
     let (sender, receiver) = broadcast::channel(8);
     sender
-        .send(Arc::new(UMessage::default()))
+        .send(Arc::new(message))
         .expect("dispatch channel should accept one message");
     drop(sender);
 

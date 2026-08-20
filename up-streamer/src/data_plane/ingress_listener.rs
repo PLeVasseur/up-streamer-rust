@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::broadcast::Sender;
 use tracing::{debug, error, Level};
-use up_rust::{UListener, UMessage, UPayloadFormat};
+use up_rust::{PayloadEncoding, UListener, UMessage};
 
 const COMPONENT: &str = "ingress_listener";
 
@@ -75,7 +75,7 @@ impl UListener for IngressRouteListener {
             );
         }
 
-        if msg.payload_format().unwrap_or_default() == UPayloadFormat::UPAYLOAD_FORMAT_SHM {
+        if msg.payload_encoding() == Some(PayloadEncoding::SHM) {
             if let Some(fields) = formatted_fields.as_ref() {
                 debug!(
                     event = events::INGRESS_DROP_UNSUPPORTED_PAYLOAD,
@@ -85,7 +85,7 @@ impl UListener for IngressRouteListener {
                     msg_type = fields.msg_type.as_str(),
                     src = fields.src.as_str(),
                     sink = fields.sink.as_str(),
-                    reason = "unsupported_payload_format_shm",
+                    reason = "unsupported_payload_encoding_shm",
                     "dropping unsupported shared-memory payload"
                 );
             }

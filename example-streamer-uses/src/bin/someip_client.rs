@@ -13,15 +13,18 @@
 
 mod common;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use common::cli;
-use common::ServiceResponseListener;
+use common::{
+    native_message_payload_parts, protobuf_payload, xcdrv2_message_payload_parts,
+    ServiceResponseListener,
+};
 use hello_world_protos::hello_world_service::HelloRequest;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, trace, warn};
-use up_rust::{UListener, UMessageBuilder, UStatus, UTransport};
-use up_transport_vsomeip::UPTransportVsomeip;
+use up_rust::{PayloadEncoding, UCode, UMessageBuilder, UStatus, UTransport};
+use up_transport_vsomeip::{TransportConfig, UPTransportVsomeip};
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
 const DEFAULT_UENTITY: &str = "0x5678";
@@ -41,6 +44,14 @@ const DEFAULT_VSOMEIP_CONFIG: &str = concat!(
 const DEFAULT_UENTITY_NUM: u32 = 0x5678;
 
 const REQUEST_TTL: u32 = 1000;
+const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"SCLI");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum Encoding {
+    Native,
+    Protobuf,
+    Xcdrv2,
+}
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
@@ -81,6 +92,15 @@ struct Args {
     /// Milliseconds to wait between request sends
     #[arg(long, default_value_t = 1000)]
     send_interval_ms: u64,
+    /// Milliseconds to wait for an observed response after bounded sends.
+    #[arg(long, default_value_t = 5000)]
+    timeout_ms: u64,
+    /// Payload encoding fixed by the SOME/IP topic convention.
+    #[arg(long, value_enum, default_value = "protobuf")]
+    encoding: Encoding,
+    /// Text payload used by native/XCDRv2 matrix rows.
+    #[arg(long, default_value = "someip-client")]
+    payload: String,
 }
 
 #[tokio::main]
@@ -109,15 +129,17 @@ async fn main() -> Result<(), UStatus> {
     }
 
     let client_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
+    let payload_encoding = payload_encoding(&args)?;
 
     // There will be a single vsomeip_transport, as there is a connection into device and a streamer
     // TODO: Add error handling if we fail to create a UPTransportVsomeip
     let client: Arc<dyn UTransport> = Arc::new(
-        UPTransportVsomeip::new_with_config(
+        UPTransportVsomeip::new_with_config_and_transport_config(
             client_uuri,
             &args.remote_authority,
             &vsomeip_config,
             None,
+            TransportConfig::new(payload_encoding),
         )
         .unwrap(),
     );
@@ -130,10 +152,14 @@ async fn main() -> Result<(), UStatus> {
         target_resource,
     )?;
 
-    let service_response_listener: Arc<dyn UListener> = Arc::new(ServiceResponseListener);
+    let service_response_listener = Arc::new(ServiceResponseListener::default());
     client
-        .register_listener(&sink, Some(&source), service_response_listener)
+        .register_listener(&sink, Some(&source), service_response_listener.clone())
         .await?;
+
+    if args.send_count > 0 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
 
     let mut i: u64 = 0;
     let mut sent_count: u64 = 0;
@@ -151,14 +177,60 @@ async fn main() -> Result<(), UStatus> {
         };
         i += 1;
 
-        let request_msg = UMessageBuilder::request(sink.clone(), source.clone(), REQUEST_TTL)
-            .build_with_protobuf_payload(&hello_request)
-            .unwrap();
+        let mut builder = UMessageBuilder::request(sink.clone(), source.clone(), REQUEST_TTL);
+        let request_msg = if args.encoding == Encoding::Protobuf {
+            builder
+                .build_with_payload(protobuf_payload(&hello_request), PayloadEncoding::PROTOBUF)
+                .unwrap()
+        } else {
+            let (payload, encoding) = selected_payload_parts(&args, sent_count as u32 + 1)?;
+            builder
+                .build_with_payload(payload, encoding)
+                .map_err(|error| {
+                    invalid_config(format!("failed to build request message: {error:?}"))
+                })?
+        };
         info!("Sending Request message:\n{request_msg:?}");
 
         client.send(request_msg).await?;
         sent_count += 1;
     }
 
+    if args.send_count > 0 {
+        service_response_listener
+            .wait_for_response(args.timeout_ms)
+            .await?;
+    }
+
     Ok(())
+}
+
+fn payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
+    match args.encoding {
+        Encoding::Native => {
+            native_message_payload_parts(NATIVE_PAYLOAD_MAGIC, 0, "").map(|(_, encoding)| encoding)
+        }
+        Encoding::Protobuf => Ok(PayloadEncoding::PROTOBUF),
+        Encoding::Xcdrv2 => xcdrv2_message_payload_parts(0, args.uauthority.clone(), "")
+            .map(|(_, encoding)| encoding),
+    }
+}
+
+fn selected_payload_parts(
+    args: &Args,
+    sequence: u32,
+) -> Result<(Vec<u8>, PayloadEncoding), UStatus> {
+    match args.encoding {
+        Encoding::Native => {
+            native_message_payload_parts(NATIVE_PAYLOAD_MAGIC, sequence, &args.payload)
+        }
+        Encoding::Protobuf => unreachable!("protobuf is handled by the classic protobuf path"),
+        Encoding::Xcdrv2 => {
+            xcdrv2_message_payload_parts(sequence, args.uauthority.clone(), &args.payload)
+        }
+    }
+}
+
+fn invalid_config(message: impl Into<String>) -> UStatus {
+    UStatus::fail_with_code(UCode::InvalidArgument, message.into())
 }

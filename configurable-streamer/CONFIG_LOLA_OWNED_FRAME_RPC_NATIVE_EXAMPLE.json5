@@ -1,0 +1,57 @@
+{
+  up_streamer_config: {
+    message_queue_size: 32,
+  },
+  streamer_uuri: {
+    authority: "authority-streamer",
+    ue_id: 78,
+    ue_version_major: 1,
+  },
+  usubscription_config: {
+    mode: "static_file",
+    file_path: "subscription_data.json",
+  },
+  transports: {
+    zenoh: {
+      config_file: "ZENOH_CONFIG.json5",
+      endpoints: [
+        {
+          authority: "authority-a",
+          endpoint: "zenoh-owned",
+          routing_mode: "owned_frame",
+          forwarding_routes: [
+            { endpoint: "lola-owned", wire_format: "up_native" },
+          ],
+        },
+      ],
+    },
+    mqtt: {
+      config_file: "MQTT_CONFIG.json5",
+      endpoints: [],
+    },
+    lola: {
+      endpoints: [
+        {
+          authority: "authority-b",
+          endpoint: "lola-owned",
+          routing_mode: "owned_frame",
+          lola_instance_specifier: "uprotocol/transportNativeRpcSingleRequestV3",
+          lola_service_type: "/uprotocol/TransportR004D2NativeRpcSingleRequestV3",
+          lola_event_name: "frameNativeSingleRequestV3",
+          lola_response_instance_specifier: "uprotocol/transportNativeRpcSingleResponseV3",
+          lola_response_service_type: "/uprotocol/TransportR004D2NativeRpcSingleResponseV3",
+          lola_response_event_name: "frameNativeSingleResponseV3",
+          lola_default_rx_channel: "response",
+          lola_sample_size: 65536,
+          lola_sample_alignment: 8,
+          lola_max_samples: 16,
+          lola_mw_com_config_file: "MW_COM_CONFIG_LOLA_NATIVE_RPC.json",
+          lola_response_mw_com_config_file: "MW_COM_CONFIG_LOLA_NATIVE_RPC.json",
+          forwarding_routes: [
+            { endpoint: "zenoh-owned", wire_format: "up_native" },
+          ],
+        },
+      ],
+    },
+  },
+}

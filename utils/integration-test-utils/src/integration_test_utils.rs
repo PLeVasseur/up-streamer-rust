@@ -22,7 +22,7 @@ use tokio::runtime::Builder;
 use tokio::sync::Mutex;
 use tokio_condvar::Condvar;
 use tracing::{debug, error};
-use up_rust::{UListener, UMessage, UStatus, UTransport, UUri, UUID};
+use up_rust::{UListener, UMessage, UStatus, UTransport, UUri};
 
 pub type Signal = Arc<(Mutex<bool>, Condvar)>;
 
@@ -138,46 +138,35 @@ pub async fn check_messages_in_order(messages: Arc<Mutex<Vec<UMessage>>>) {
         return;
     }
 
-    // Step 1: Group messages by source UUri
+    // Step 1: Group messages by source UUri and message type. Different message types may be
+    // generated concurrently from the same source, so only each per-type stream has a stable order.
     #[allow(clippy::mutable_key_type)]
-    let mut grouped_messages: HashMap<UUri, Vec<(usize, &UMessage)>> = HashMap::new();
+    let mut grouped_messages: HashMap<(UUri, String), Vec<(usize, &UMessage)>> = HashMap::new();
     for (index, msg) in messages.iter().enumerate() {
-        let source_uuri = msg
-            .source()
-            .cloned()
-            .unwrap_or_else(|| panic!("message index {index} missing source URI"));
+        let source_uuri = msg.source().clone();
+        let message_type = format!("{:?}", msg.attributes().type_());
 
         grouped_messages
-            .entry(source_uuri)
+            .entry((source_uuri, message_type))
             .or_default()
             .push((index, msg));
     }
 
     // Step 2: Check each group for strict increasing order of id.msb first 48 bytes
-    for (source_uuri, group) in grouped_messages {
-        debug!("source_uuri: {source_uuri}");
-        if let Some((first_index, first_msg)) = group.first() {
-            let mut prev_timestamp = first_msg.id().map(|id| id.msb >> 16).unwrap_or_else(|| {
-                panic!(
-                    "message index {} for source {} missing message id",
-                    first_index, source_uuri
-                )
-            });
+    for ((source_uuri, message_type), group) in grouped_messages {
+        debug!("source_uuri: {source_uuri}, message_type: {message_type}");
+        if let Some((_first_index, first_msg)) = group.first() {
+            let mut prev_timestamp = first_msg.id().time();
 
             for (msg_index, msg) in group.iter().skip(1) {
-                let curr_timestamp = msg.id().map(|id| id.msb >> 16).unwrap_or_else(|| {
-                    panic!(
-                        "message index {} for source {} missing message id",
-                        msg_index, source_uuri
-                    )
-                });
+                let curr_timestamp = msg.id().time();
 
                 debug!("prev_timestamp: {prev_timestamp}, curr_timestamp: {curr_timestamp}");
                 // relaxing to < instead of <= since we now do not have the counter for tie breaker
                 if curr_timestamp < prev_timestamp {
                     panic!(
-                        "message ordering issue for source_uuri {}: prev_timestamp={}, curr_timestamp={}, msg_index={}",
-                        source_uuri, prev_timestamp, curr_timestamp, msg_index
+                        "message ordering issue for source_uuri {} message_type {:?}: prev_timestamp={}, curr_timestamp={}, msg_index={}",
+                        source_uuri, message_type, prev_timestamp, curr_timestamp, msg_index
                     );
                 }
                 prev_timestamp = curr_timestamp;
@@ -246,13 +235,7 @@ pub struct ClientControl {
 }
 
 fn any_uuri() -> UUri {
-    UUri {
-        authority_name: "*".to_string(),
-        ue_id: 0x0000_FFFF,     // any instance, any service
-        ue_version_major: 0xFF, // any
-        resource_id: 0xFFFF,    // any
-        ..Default::default()
-    }
+    UUri::any()
 }
 
 async fn configure_client(client_configuration: &ClientConfiguration) -> UPClientFoo {
@@ -360,11 +343,6 @@ async fn send_message_set(
             .unwrap_or(true);
         if !should_send {
             continue;
-        }
-
-        if let Some(attributes) = msg.attributes.as_mut() {
-            let new_id = UUID::build();
-            attributes.id.0 = Some(Box::new(new_id));
         }
 
         debug!(

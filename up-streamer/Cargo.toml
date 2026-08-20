@@ -19,11 +19,19 @@ edition.workspace = true
 keywords.workspace = true
 license.workspace = true
 
+[features]
+default = []
+experimental-copy-minimized-routing = [
+    "up-rust/up-l2-zero-copy",
+]
+owned-frame-transport = ["up-rust/owned-frame-transport", "up-rust/wire-implementer-api"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 tokio = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 tracing = { workspace = true }
 up-rust = { workspace = true, features = ["usubscription"] }
 protobuf = { version = "3.3", features = ["with-bytes"] }
@@ -36,7 +44,9 @@ criterion = { version = "0.5.1", features = ["csv_output"] }
 futures = { workspace = true }
 integration-test-utils = { path = "../utils/integration-test-utils" }
 tokio-condvar = { version = "0.3.0" }
-up-rust = { workspace = true, features = ["test-util"] }
+up-rust = { workspace = true, features = ["test-util", "transport-implementer-api", "wire-implementer-api", "up-l2-zero-copy"] }
+up-transport-iceoryx2-rust = { workspace = true }
+up-transport-zenoh = { workspace = true, features = ["zero-copy"] }
 usubscription-static-file = { path = "../utils/usubscription-static-file" }
 
 [[bench]]

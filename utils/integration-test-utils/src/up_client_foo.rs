@@ -80,16 +80,10 @@ impl UPClientFoo {
                 while let Ok(received) = protocol_receiver.recv().await {
                     match &received {
                         Ok(msg) => {
-                            let Some(attr) = msg.attributes() else {
-                                debug!("{}: No UAttributes!", &name);
-                                continue;
-                            };
+                            let attr = msg.attributes();
 
-                            match attr
-                                .type_()
-                                .unwrap_or(UMessageType::UMESSAGE_TYPE_UNSPECIFIED)
-                            {
-                                UMessageType::UMESSAGE_TYPE_NOTIFICATION => {
+                            match attr.type_() {
+                                UMessageType::Notification => {
                                     UPClientFoo::process_message(
                                         &name,
                                         msg,
@@ -101,10 +95,10 @@ impl UPClientFoo {
                                     )
                                     .await;
                                 }
-                                UMessageType::UMESSAGE_TYPE_PUBLISH => {
+                                UMessageType::Publish => {
                                     unimplemented!("Still need to handle Publish messages");
                                 }
-                                UMessageType::UMESSAGE_TYPE_REQUEST => {
+                                UMessageType::Request => {
                                     UPClientFoo::process_message(
                                         &name,
                                         msg,
@@ -116,7 +110,7 @@ impl UPClientFoo {
                                     )
                                     .await;
                                 }
-                                UMessageType::UMESSAGE_TYPE_RESPONSE => {
+                                UMessageType::Response => {
                                     UPClientFoo::process_message(
                                         &name,
                                         msg,
@@ -127,9 +121,6 @@ impl UPClientFoo {
                                         times_received.clone(),
                                     )
                                     .await;
-                                }
-                                _ => {
-                                    debug!("No matching type or an error occurred!");
                                 }
                             }
                         }
@@ -162,7 +153,7 @@ impl UPClientFoo {
                 let authority_listeners = authority_listeners.lock().await;
                 debug!("{}: {msg_type}: authority_name: {authority_name}", name);
 
-                let authority_listeners = authority_listeners.get(&authority_name);
+                let authority_listeners = authority_listeners.get(authority_name);
                 if let Some(authority_listeners) = authority_listeners {
                     debug!(
                         "{}: {msg_type}: authority listeners found: {authority_name:?}",
@@ -184,8 +175,7 @@ impl UPClientFoo {
                 }
 
                 let listeners = listeners.lock().await;
-                let topic_listeners =
-                    listeners.get(&(attr.source().cloned().unwrap(), attr.sink().cloned()));
+                let topic_listeners = listeners.get(&(attr.source().clone(), attr.sink().cloned()));
 
                 if let Some(topic_listeners) = topic_listeners {
                     debug!(
@@ -222,7 +212,7 @@ impl UTransport for UPClientFoo {
         match self.protocol_sender.broadcast(Ok(message)).await {
             Ok(_) => Ok(()),
             Err(_) => Err(UStatus::fail_with_code(
-                UCode::INTERNAL,
+                UCode::Internal,
                 "Unable to send over Foo protocol",
             )),
         }
@@ -255,7 +245,7 @@ impl UTransport for UPClientFoo {
             );
 
             let authority_listeners = authority_listeners
-                .entry(sink_authority.clone())
+                .entry(sink_authority.to_string())
                 .or_default();
             let comparable_listener = Self::comparable_listener(listener);
             let inserted = authority_listeners.insert(comparable_listener);
@@ -270,7 +260,7 @@ impl UTransport for UPClientFoo {
                     Ok(())
                 }
                 false => Err(UStatus::fail_with_code(
-                    UCode::ALREADY_EXISTS,
+                    UCode::AlreadyExists,
                     format!(
                         "{}: UUri and listener already registered! failed to register authority listener for: authority: {}",
                         &self.name, sink_authority
@@ -288,7 +278,7 @@ impl UTransport for UPClientFoo {
                 Ok(())
             } else {
                 Err(UStatus::fail_with_code(
-                    UCode::ALREADY_EXISTS,
+                    UCode::AlreadyExists,
                     "Listener already registered for topic!",
                 ))
             }
@@ -317,9 +307,9 @@ impl UTransport for UPClientFoo {
                 sink.authority_name()
             };
 
-            let Some(authority_listeners) = authority_listeners.get_mut(&authority) else {
+            let Some(authority_listeners) = authority_listeners.get_mut(authority) else {
                 let err = UStatus::fail_with_code(
-                    UCode::NOT_FOUND,
+                    UCode::NotFound,
                     format!("{} No authority listeners for: source: {:?} sink: {:?} -- unable to unregister", self.name, source_filter, sink_filter)
                 );
                 error!("{} {err:?}", &self.name);
@@ -332,7 +322,7 @@ impl UTransport for UPClientFoo {
                 true => Ok(()),
                 false => {
                     let err = UStatus::fail_with_code(
-                        UCode::NOT_FOUND,
+                        UCode::NotFound,
                         format!("{} Unable to find authority listener for: source: {:?} sink: {:?} -- unable to unregister", self.name, source_filter, sink_filter)
                     );
                     error!("{} {err:?}", &self.name);
@@ -345,7 +335,7 @@ impl UTransport for UPClientFoo {
                 listeners.get_mut(&(source_filter.clone(), sink_filter.cloned()))
             else {
                 return Err(UStatus::fail_with_code(
-                    UCode::NOT_FOUND,
+                    UCode::NotFound,
                     "No listeners registered for topic!",
                 ));
             };
@@ -354,7 +344,7 @@ impl UTransport for UPClientFoo {
 
             match removed {
                 false => Err(UStatus::fail_with_code(
-                    UCode::NOT_FOUND,
+                    UCode::NotFound,
                     "No listeners registered for topic! topic: {topic:?}",
                 )),
                 true => Ok(()),

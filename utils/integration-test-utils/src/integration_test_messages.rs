@@ -12,116 +12,78 @@
  ********************************************************************************/
 
 use crate::local_client_uuri;
-use up_rust::UMessageType::{
-    UMESSAGE_TYPE_NOTIFICATION, UMESSAGE_TYPE_PUBLISH, UMESSAGE_TYPE_REQUEST,
-    UMESSAGE_TYPE_RESPONSE,
-};
-use up_rust::{UAttributes, UMessage, UUri};
+use up_rust::{UMessage, UMessageBuilder, UUri, UUID};
+
+fn method_uri_from(endpoint: &UUri) -> UUri {
+    endpoint.clone_with_resource_id(0)
+}
 
 pub fn publish_from_local_client_for_remote_client(local_id: u32) -> UMessage {
-    UMessage {
-        attributes: Some(UAttributes {
-            source: Some(local_client_uuri(local_id)).into(),
-            type_: UMESSAGE_TYPE_PUBLISH.into(),
-            ..Default::default()
-        })
-        .into(),
-        ..Default::default()
-    }
+    UMessageBuilder::publish(local_client_uuri(local_id))
+        .build()
+        .expect("publish message should build")
 }
 
 pub fn notification_from_local_client_for_remote_client(
     local_id: u32,
     remote_uuri: UUri,
 ) -> UMessage {
-    UMessage {
-        attributes: Some(UAttributes {
-            source: Some(local_client_uuri(local_id)).into(),
-            sink: Some(remote_uuri).into(),
-            type_: UMESSAGE_TYPE_NOTIFICATION.into(),
-            ..Default::default()
-        })
-        .into(),
-        ..Default::default()
-    }
+    UMessageBuilder::notification(local_client_uuri(local_id), method_uri_from(&remote_uuri))
+        .build()
+        .expect("notification message should build")
 }
 
 pub fn request_from_local_client_for_remote_client(local_id: u32, remote_uuri: UUri) -> UMessage {
-    UMessage {
-        attributes: Some(UAttributes {
-            source: Some(local_client_uuri(local_id)).into(),
-            sink: Some(remote_uuri).into(),
-            type_: UMESSAGE_TYPE_REQUEST.into(),
-            ..Default::default()
-        })
-        .into(),
-        ..Default::default()
-    }
+    UMessageBuilder::request(
+        remote_uuri,
+        method_uri_from(&local_client_uuri(local_id)),
+        5_000,
+    )
+    .build()
+    .expect("request message should build")
 }
 
 pub fn response_from_local_client_for_remote_client(local_id: u32, remote_uuri: UUri) -> UMessage {
-    UMessage {
-        attributes: Some(UAttributes {
-            source: Some(local_client_uuri(local_id)).into(),
-            sink: Some(remote_uuri).into(),
-            type_: UMESSAGE_TYPE_RESPONSE.into(),
-            ..Default::default()
-        })
-        .into(),
-        ..Default::default()
-    }
+    UMessageBuilder::response(
+        method_uri_from(&remote_uuri),
+        UUID::build(),
+        local_client_uuri(local_id),
+    )
+    .build()
+    .expect("response message should build")
 }
 
 pub fn publish_from_remote_client_for_local_client(remote_uuri: UUri) -> UMessage {
-    UMessage {
-        attributes: Some(UAttributes {
-            source: Some(remote_uuri).into(),
-            type_: UMESSAGE_TYPE_PUBLISH.into(),
-            ..Default::default()
-        })
-        .into(),
-        ..Default::default()
-    }
+    UMessageBuilder::publish(remote_uuri)
+        .build()
+        .expect("publish message should build")
 }
 
 pub fn notification_from_remote_client_for_local_client(
     remote_uuri: UUri,
     local_id: u32,
 ) -> UMessage {
-    UMessage {
-        attributes: Some(UAttributes {
-            source: Some(remote_uuri).into(),
-            sink: Some(local_client_uuri(local_id)).into(),
-            type_: UMESSAGE_TYPE_NOTIFICATION.into(),
-            ..Default::default()
-        })
-        .into(),
-        ..Default::default()
-    }
+    UMessageBuilder::notification(remote_uuri, method_uri_from(&local_client_uuri(local_id)))
+        .build()
+        .expect("notification message should build")
 }
 
 pub fn request_from_remote_client_for_local_client(remote_uuri: UUri, local_id: u32) -> UMessage {
-    UMessage {
-        attributes: Some(UAttributes {
-            source: Some(remote_uuri).into(),
-            sink: Some(local_client_uuri(local_id)).into(),
-            type_: UMESSAGE_TYPE_REQUEST.into(),
-            ..Default::default()
-        })
-        .into(),
-        ..Default::default()
-    }
+    UMessageBuilder::request(
+        local_client_uuri(local_id),
+        method_uri_from(&remote_uuri),
+        5_000,
+    )
+    .build()
+    .expect("request message should build")
 }
 
 pub fn response_from_remote_client_for_local_client(remote_uuri: UUri, local_id: u32) -> UMessage {
-    UMessage {
-        attributes: Some(UAttributes {
-            source: Some(remote_uuri).into(),
-            sink: Some(local_client_uuri(local_id)).into(),
-            type_: UMESSAGE_TYPE_RESPONSE.into(),
-            ..Default::default()
-        })
-        .into(),
-        ..Default::default()
-    }
+    UMessageBuilder::response(
+        method_uri_from(&local_client_uuri(local_id)),
+        UUID::build(),
+        remote_uuri,
+    )
+    .build()
+    .expect("response message should build")
 }

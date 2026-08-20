@@ -13,7 +13,7 @@
 
 //! Canonical structured field keys and value-format helpers.
 
-use up_rust::{UAttributes, UMessage, UUri, UUID};
+use up_rust::{UAttributes, UMessage, UUri};
 
 pub const EVENT: &str = "event";
 pub const COMPONENT: &str = "component";
@@ -71,21 +71,15 @@ pub fn current_thread_name_or_default() -> String {
 }
 
 pub fn format_message_id(message: &UMessage) -> String {
-    message
-        .id()
-        .map(UUID::to_hyphenated_string)
-        .unwrap_or_else(|| NONE.to_string())
+    message.id().to_hyphenated_string()
 }
 
 pub fn format_message_type(message: &UMessage) -> String {
-    message
-        .type_()
-        .map(|message_type| format!("{message_type:?}"))
-        .unwrap_or_else(|| "UMESSAGE_TYPE_UNSPECIFIED".to_string())
+    format!("{:?}", message.type_())
 }
 
 pub fn format_source_uri(message: &UMessage) -> String {
-    format_optional_uri(message.source())
+    format_uri(message.source())
 }
 
 pub fn format_sink_uri(message: &UMessage) -> String {
@@ -102,20 +96,18 @@ fn format_optional_uri(uri: Option<&UUri>) -> String {
 
 pub fn format_attributes_message_id(attributes: Option<&UAttributes>) -> String {
     attributes
-        .and_then(UAttributes::id)
-        .map(UUID::to_hyphenated_string)
+        .map(|attributes| attributes.id().to_hyphenated_string())
         .unwrap_or_else(|| NONE.to_string())
 }
 
 pub fn format_attributes_message_type(attributes: Option<&UAttributes>) -> String {
     attributes
-        .and_then(UAttributes::type_)
-        .map(|message_type| format!("{message_type:?}"))
+        .map(|attributes| format!("{:?}", attributes.type_()))
         .unwrap_or_else(|| "UMESSAGE_TYPE_UNSPECIFIED".to_string())
 }
 
 pub fn format_attributes_source_uri(attributes: Option<&UAttributes>) -> String {
-    format_optional_uri(attributes.and_then(UAttributes::source))
+    format_optional_uri(attributes.map(UAttributes::source))
 }
 
 pub fn format_attributes_sink_uri(attributes: Option<&UAttributes>) -> String {
@@ -125,22 +117,27 @@ pub fn format_attributes_sink_uri(attributes: Option<&UAttributes>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_message_id, format_sink_uri, format_source_uri, thread_name_or_default,
-        DEFAULT_WORKER_THREAD, NONE,
+        format_message_id, format_message_type, format_sink_uri, format_source_uri,
+        thread_name_or_default, DEFAULT_WORKER_THREAD, NONE,
     };
-    use up_rust::{UAttributes, UMessage, UUri, UUID};
+    use up_rust::{UMessage, UMessageBuilder, UUri, UUID};
+
+    fn publish_message(source: UUri) -> UMessage {
+        UMessageBuilder::publish(source)
+            .build()
+            .expect("publish message should build")
+    }
 
     #[test]
     fn format_message_id_returns_uuid_when_present() {
         let message_id = UUID::build();
-        let message = UMessage {
-            attributes: Some(UAttributes {
-                id: Some(message_id.clone()).into(),
-                ..Default::default()
-            })
-            .into(),
-            ..Default::default()
-        };
+        let message = UMessageBuilder::publish(
+            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001)
+                .expect("source URI should build"),
+        )
+        .with_message_id(message_id.clone())
+        .build()
+        .expect("publish message should build");
 
         assert_eq!(
             format_message_id(&message),
@@ -149,31 +146,34 @@ mod tests {
     }
 
     #[test]
-    fn format_message_id_returns_none_when_absent() {
-        let message = UMessage::default();
+    fn format_message_type_returns_debug_variant() {
+        let message = publish_message(
+            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001)
+                .expect("source URI should build"),
+        );
 
-        assert_eq!(format_message_id(&message), NONE);
+        assert_eq!(format_message_type(&message), "Publish");
     }
 
     #[test]
     fn format_sink_uri_returns_uri_when_present() {
         let sink = UUri::try_from_parts("authority-b", 0x5678, 0x1, 0x1234)
             .expect("sink URI should build");
-        let message = UMessage {
-            attributes: Some(UAttributes {
-                sink: Some(sink).into(),
-                ..Default::default()
-            })
-            .into(),
-            ..Default::default()
-        };
+        let source =
+            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0).expect("source URI should build");
+        let message = UMessageBuilder::request(sink.clone(), source, 5_000)
+            .build()
+            .expect("request message should build");
 
         assert_eq!(format_sink_uri(&message), "authority-b/5678/1/1234");
     }
 
     #[test]
     fn format_sink_uri_returns_none_when_absent() {
-        let message = UMessage::default();
+        let message = publish_message(
+            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001)
+                .expect("source URI should build"),
+        );
 
         assert_eq!(format_sink_uri(&message), NONE);
     }
@@ -182,14 +182,7 @@ mod tests {
     fn format_source_uri_is_stable_compact_path() {
         let source = UUri::try_from_parts("authority-a", 0x5ba0, 0x1, 0x8001)
             .expect("source URI should build");
-        let message = UMessage {
-            attributes: Some(UAttributes {
-                source: Some(source).into(),
-                ..Default::default()
-            })
-            .into(),
-            ..Default::default()
-        };
+        let message = publish_message(source);
 
         assert_eq!(format_source_uri(&message), "authority-a/5BA0/1/8001");
     }

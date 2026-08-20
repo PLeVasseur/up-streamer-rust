@@ -54,7 +54,7 @@ impl UTransport for UPClientFailingRegister {
             self.name, source_filter, sink_filter
         );
         Err(UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
+            UCode::InvalidArgument,
             "Failing to register listener",
         ))
     }

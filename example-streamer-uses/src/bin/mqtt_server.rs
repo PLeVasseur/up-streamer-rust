@@ -16,28 +16,21 @@ mod common;
 use clap::Parser;
 use common::cli;
 use common::ServiceRequestResponder;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::thread;
 use tracing::info;
 use up_rust::{UListener, UStatus, UTransport, UUri};
-use up_transport_zenoh::{
-    zenoh_config::{Config, EndPoint},
-    UPTransportZenoh,
-};
+use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions, MqttClientOptions};
 
-const DEFAULT_ENDPOINT: &str = "tcp/localhost:7447";
-const DEFAULT_UAUTHORITY: &str = "authority-b";
-const DEFAULT_UENTITY: &str = "0x1236";
+const DEFAULT_UAUTHORITY: &str = "authority-a";
+const DEFAULT_UENTITY: &str = "0x4321";
 const DEFAULT_UVERSION: &str = "0x1";
 const DEFAULT_RESOURCE: &str = "0x0421";
+const DEFAULT_BROKER_URI: &str = "localhost:1883";
 
-#[derive(Parser, Debug)]
+#[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
-    /// The endpoint for Zenoh client to connect to
-    #[arg(short, long, default_value = DEFAULT_ENDPOINT)]
-    endpoint: String,
     /// Authority for the local service identity
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
@@ -50,6 +43,9 @@ struct Args {
     /// Resource ID for local service identity (decimal or 0x-prefixed hex)
     #[arg(long, default_value = DEFAULT_RESOURCE)]
     resource: String,
+    /// MQTT broker URI in host:port format
+    #[arg(long, default_value = DEFAULT_BROKER_URI)]
+    broker_uri: String,
 }
 
 #[tokio::main]
@@ -58,39 +54,30 @@ async fn main() -> Result<(), UStatus> {
 
     let args = Args::parse();
 
+    info!("Started mqtt_server.");
+
     let uentity = cli::parse_u32_status("--uentity", &args.uentity)?;
     let uversion = cli::parse_u8_status("--uversion", &args.uversion)?;
     let resource = cli::parse_u16_status("--resource", &args.resource)?;
 
-    info!("Started zenoh_service");
-
-    let mut zenoh_config = Config::default();
-
-    if !args.endpoint.is_empty() {
-        // Specify the address to listen on using IPv4
-        let ipv4_endpoint =
-            EndPoint::from_str(args.endpoint.as_str()).expect("Unable to set endpoint");
-
-        // Add the IPv4 endpoint to the Zenoh configuration
-        zenoh_config
-            .connect
-            .endpoints
-            .set(vec![ipv4_endpoint])
-            .expect("Unable to set Zenoh Config");
-    }
-
-    let service_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
-    let service: Arc<dyn UTransport> = Arc::new(
-        UPTransportZenoh::builder(service_uuri.authority_name())
-            .expect("Unable to create Zenoh transport builder")
-            .with_config(zenoh_config)
-            .build()
-            .await
-            .unwrap(),
-    );
-
+    // We set the source filter to "any" so that we process messages from all device that send some.
     let source_filter = UUri::any();
+    // The sink filter gets specified so that we only process messages directed at this entity.
     let sink_filter = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
+
+    let mqtt_client_options = MqttClientOptions {
+        broker_uri: args.broker_uri,
+        ..Default::default()
+    };
+    let mqtt_transport_options = Mqtt5TransportOptions {
+        mqtt_client_options,
+        ..Default::default()
+    };
+    let mqtt5_transport =
+        Mqtt5Transport::new(mqtt_transport_options, args.uauthority.to_string()).await?;
+    mqtt5_transport.connect().await?;
+
+    let service: Arc<dyn UTransport> = Arc::new(mqtt5_transport);
 
     let service_request_responder: Arc<dyn UListener> =
         Arc::new(ServiceRequestResponder::new(service.clone()));
@@ -104,6 +91,7 @@ async fn main() -> Result<(), UStatus> {
 
     println!("READY listener_registered");
 
-    thread::park();
-    Ok(())
+    loop {
+        thread::park();
+    }
 }
