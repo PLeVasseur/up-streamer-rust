@@ -1961,9 +1961,9 @@ checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "h2"
-version = "0.4.15"
+version = "0.4.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb093c84e8bd9b188d4c4a8cb6579fc016968d14c99882163cd3ff402a4f155"
+checksum = "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -6166,7 +6166,7 @@ dependencies = [
 [[package]]
 name = "up-transport-lola-rust"
 version = "0.2.0"
-source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=ed5ce1dcd7c27d63bd388b2c5b93ce530763ab93#ed5ce1dcd7c27d63bd388b2c5b93ce530763ab93"
+source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=9e04d0f57eb9666c0ce449584b1160db799176de#9e04d0f57eb9666c0ce449584b1160db799176de"
 dependencies = [
  "async-trait",
  "tokio",
@@ -6197,7 +6197,7 @@ dependencies = [
 [[package]]
 name = "up-transport-vsomeip"
 version = "0.6.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=c0073fe339f759b911154c875f18cb72c2966d2e#c0073fe339f759b911154c875f18cb72c2966d2e"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=693361855b36500e12c8702b643b72d314198553#693361855b36500e12c8702b643b72d314198553"
 dependencies = [
  "async-trait",
  "bimap",
@@ -6442,7 +6442,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 [[package]]
 name = "vsomeip-proc-macro"
 version = "0.6.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=c0073fe339f759b911154c875f18cb72c2966d2e#c0073fe339f759b911154c875f18cb72c2966d2e"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=693361855b36500e12c8702b643b72d314198553#693361855b36500e12c8702b643b72d314198553"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6453,7 +6453,7 @@ dependencies = [
 [[package]]
 name = "vsomeip-sys"
 version = "0.6.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=c0073fe339f759b911154c875f18cb72c2966d2e#c0073fe339f759b911154c875f18cb72c2966d2e"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=693361855b36500e12c8702b643b72d314198553#693361855b36500e12c8702b643b72d314198553"
 dependencies = [
  "autocxx",
  "autocxx-build",
