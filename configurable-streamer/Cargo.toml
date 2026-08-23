@@ -84,7 +84,7 @@ up-rust = { workspace = true }
 up-streamer = { path = "../up-streamer" }
 configurable-streamer-wire-support = { path = "../utils/configurable-streamer-wire-support" }
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "0e45300a97eafe07e42e3f13b0c72f596cba1980", optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "4c4608b817517dea96801c4f797ada45e9532b8a", optional = true }
 up-transport-zenoh = { workspace = true }
 up-wire-xcdrv2 = { workspace = true, optional = true }
 up-transport-dds = { workspace = true, optional = true }
