@@ -6231,7 +6231,7 @@ dependencies = [
 [[package]]
 name = "up-transport-dds"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-dds-rust.git?rev=c7f7f5abbca279b216ad2786ce8bbc75aa7c4fb6#c7f7f5abbca279b216ad2786ce8bbc75aa7c4fb6"
+source = "git+https://github.com/PLeVasseur/up-transport-dds-rust.git?rev=9b4d0eae4050b7f4fffad3270206db78ef141d34#9b4d0eae4050b7f4fffad3270206db78ef141d34"
 dependencies = [
  "async-trait",
  "bytes",

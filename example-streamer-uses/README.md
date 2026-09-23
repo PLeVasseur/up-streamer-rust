@@ -134,6 +134,11 @@ and `dds_server` are Streamer example-surface binaries. Each accepts
 evidence. Active DDS roles wait for publication matching rather than relying on
 retry sends.
 
+Terminal DDS sends also wait for matched reliable-reader acknowledgements before
+dropping their writer. A local write is not a remote-delivery barrier; discovery
+and acknowledgement waits use the existing `--timeout-ms` bound. No retry send or
+fixed shutdown sleep substitutes for this completion condition.
+
 For a direct Arrow copy-minimized pub/sub smoke, start the subscriber first:
 
 ```bash
