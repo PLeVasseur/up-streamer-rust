@@ -17,7 +17,7 @@ use clap::{Parser, ValueEnum};
 use common::cli;
 use common::payloads::{
     arrow_payload_bytes, native_payload_alignment, native_payload_bytes, omgidl_payload_bytes,
-    xcdrv2_payload_bytes, SelectedWireNativePayload,
+    xcdrv2_payload_bytes, NativeContext, NativeLoanVerifier,
 };
 use common::{protobuf_payload, ServiceResponseListener};
 use hello_world_protos::hello_world_service::HelloRequest;
@@ -26,11 +26,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{debug, info};
 use up_rust::selected_wire_user_api::ProtobufWire;
-use up_rust::StableContainerWireFormat;
+use up_rust::UWithNativePrefixWire;
 use up_rust::{
-    PayloadCodecIdentity, PayloadEncoding, StableContainerPayload, UCode, UFrameMetadata,
-    UFrameView, UMessageBuilder, UOwnedFrame, UOwnedTransport, UStatus, UTransport, UTxBuffer,
-    UTxLoanSpec, UUri, UZeroCopyRxLease, UZeroCopyTransport,
+    PayloadCodecIdentity, PayloadEncoding, UCode, UFrameMetadata, UFrameView, UMessageBuilder,
+    UOwnedFrame, UOwnedTransport, UStatus, UTransport, UTxBuffer, UTxLoanSpec, UUri,
+    UZeroCopyRxLease, UZeroCopyTransport,
 };
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
@@ -72,6 +72,8 @@ enum Encoding {
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: NativeContext,
     /// The endpoint for Zenoh client to connect to
     #[arg(short, long, default_value = DEFAULT_ENDPOINT)]
     endpoint: String,
@@ -129,7 +131,11 @@ struct Args {
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = NativeContext::from_env()?;
+    if args.encoding == Encoding::Native {
+        args.native.identity()?;
+    }
 
     let uentity = cli::parse_u32_status("--uentity", &args.uentity)?;
     let uversion = cli::parse_u8_status("--uversion", &args.uversion)?;
@@ -171,7 +177,11 @@ async fn main() -> Result<(), UStatus> {
 
     let service_response_listener = Arc::new(ServiceResponseListener::default());
     client
-        .register_listener(&sink, Some(&source), service_response_listener.clone())
+        .register_listener(
+            &sink,
+            Some(&source),
+            common::native::payload_listener(&args.native, service_response_listener.clone()),
+        )
         .await?;
 
     let mut i: u64 = 0;
@@ -199,7 +209,7 @@ async fn main() -> Result<(), UStatus> {
             builder
                 .build_with_payload(
                     selected_payload_bytes(&args, sent_count as u32 + 1)?,
-                    selected_payload_encoding(args.encoding),
+                    selected_payload_encoding(&args)?,
                 )
                 .map_err(|error| {
                     invalid_config(format!("failed to build request message: {error:?}"))
@@ -247,7 +257,7 @@ async fn run_selected_wire_client(
             let transport = Arc::new(
                 ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
                     .await?
-                    .with_selected_wire(StableContainerWireFormat),
+                    .into_stable_container_transport(args.native.agreement()?.clone()),
             ) as Arc<dyn UOwnedTransport>;
             run_owned_selected_client(
                 &transport,
@@ -327,7 +337,7 @@ async fn run_selected_wire_client(
             let transport = Arc::new(
                 ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
                     .await?
-                    .with_selected_wire(StableContainerWireFormat),
+                    .into_stable_container_transport(args.native.agreement()?.clone()),
             );
             run_zero_copy_selected_client(
                 &transport,
@@ -336,6 +346,7 @@ async fn run_selected_wire_client(
                 sink,
                 response_source_filter,
                 response_sink_filter,
+                Some(NativeContext::verify_loan),
             )
             .await
         }
@@ -352,6 +363,7 @@ async fn run_selected_wire_client(
                 sink,
                 response_source_filter,
                 response_sink_filter,
+                None,
             )
             .await
         }
@@ -368,6 +380,7 @@ async fn run_selected_wire_client(
                 sink,
                 response_source_filter,
                 response_sink_filter,
+                None,
             )
             .await
         }
@@ -384,6 +397,7 @@ async fn run_selected_wire_client(
                 sink,
                 response_source_filter,
                 response_sink_filter,
+                None,
             )
             .await
         }
@@ -400,6 +414,7 @@ async fn run_selected_wire_client(
                 sink,
                 response_source_filter,
                 response_sink_filter,
+                None,
             )
             .await
         }
@@ -427,6 +442,7 @@ async fn run_owned_selected_client(
             response_source_filter.clone(),
             response_sink_filter.clone(),
             args.timeout_ms,
+            (args.encoding == Encoding::Native).then(|| args.native.clone()),
         ));
         tokio::time::sleep(Duration::from_millis(RESPONSE_LISTENER_SETTLE_MS)).await;
         for attempt in 0..attempt_count {
@@ -473,6 +489,7 @@ async fn run_zero_copy_selected_client<T>(
     sink: UUri,
     response_source_filter: UUri,
     response_sink_filter: UUri,
+    verify_native: Option<NativeLoanVerifier<T::Rx>>,
 ) -> Result<(), UStatus>
 where
     T: UZeroCopyTransport + Send + Sync + 'static,
@@ -496,6 +513,8 @@ where
             response_source_filter.clone(),
             response_sink_filter.clone(),
             args.timeout_ms,
+            (args.encoding == Encoding::Native).then(|| args.native.clone()),
+            verify_native,
         ));
         tokio::time::sleep(Duration::from_millis(RESPONSE_LISTENER_SETTLE_MS)).await;
         for attempt in 0..attempt_count {
@@ -568,19 +587,26 @@ fn request_metadata(args: &Args, sink: UUri, source: UUri) -> Result<UFrameMetad
         source,
         std::time::Duration::from_millis(args.timeout_ms.min(u32::MAX as u64)),
     )
-    .with_payload_encoding(selected_payload_encoding(args.encoding))
+    .with_payload_encoding(selected_payload_encoding(args)?)
     .build()
     .map_err(|error| invalid_config(format!("failed to build frame metadata: {error:?}")))
+    .and_then(|metadata| {
+        if args.encoding == Encoding::Native {
+            args.native.stamp(metadata)
+        } else {
+            Ok(metadata)
+        }
+    })
 }
 
-fn selected_payload_encoding(encoding: Encoding) -> PayloadEncoding {
-    match encoding {
-        Encoding::Native => StableContainerPayload::<SelectedWireNativePayload>::encoding(),
+fn selected_payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
+    Ok(match args.encoding {
+        Encoding::Native => args.native.encoding()?,
         Encoding::Protobuf => ProtobufWire::encoding(),
         Encoding::Xcdrv2 => XcdrV2Wire::encoding(),
         Encoding::Arrow => ArrowWire::encoding(),
         Encoding::Omgidl => OmgIdlWire::encoding(),
-    }
+    })
 }
 
 fn selected_payload_bytes(args: &Args, sequence: u32) -> Result<Vec<u8>, UStatus> {
@@ -598,6 +624,7 @@ async fn receive_owned_payload(
     source_filter: UUri,
     sink_filter: UUri,
     timeout_ms: u64,
+    native: Option<NativeContext>,
 ) -> Result<Vec<u8>, UStatus> {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     loop {
@@ -614,7 +641,12 @@ async fn receive_owned_payload(
         )
         .await
         {
-            Ok(Ok(frame)) => return Ok(frame.payload_bytes().to_vec()),
+            Ok(Ok(frame)) => {
+                if let Some(native) = &native {
+                    native.verify_owned(frame.metadata(), frame.payload_bytes())?;
+                }
+                return Ok(frame.payload_bytes().to_vec());
+            }
             Ok(Err(error)) if error.code() == UCode::NotFound => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -629,6 +661,8 @@ async fn receive_zero_copy_payload<T>(
     source_filter: UUri,
     sink_filter: UUri,
     timeout_ms: u64,
+    native: Option<NativeContext>,
+    verify_native: Option<NativeLoanVerifier<T::Rx>>,
 ) -> Result<Vec<u8>, UStatus>
 where
     T: UZeroCopyTransport + Send + Sync + 'static,
@@ -649,7 +683,14 @@ where
         )
         .await
         {
-            Ok(Ok(frame)) => return Ok(frame.try_contiguous_payload().unwrap_or(&[]).to_vec()),
+            Ok(Ok(frame)) => {
+                if let Some(native) = &native {
+                    verify_native.ok_or_else(|| {
+                        invalid_config("native receive requires a typed loan verifier")
+                    })?(native, &frame)?;
+                }
+                return Ok(frame.try_contiguous_payload().unwrap_or(&[]).to_vec());
+            }
             Ok(Err(error)) if error.code() == UCode::NotFound => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }

@@ -91,6 +91,7 @@ pub struct Endpoint {
     pub(crate) name: String,
     pub(crate) authority: String,
     pub(crate) transport: Arc<dyn UTransport>,
+    pub(crate) native_profile: Option<Arc<up_rust::NativeProfile>>,
 }
 
 /// How a feature-gated owned-frame endpoint reaches its transport.
@@ -109,6 +110,7 @@ pub struct OwnedFrameEndpoint {
     pub(crate) name: String,
     pub(crate) authority: String,
     pub(crate) transport: Arc<dyn UOwnedTransport>,
+    pub(crate) native_profile: Option<Arc<up_rust::NativeProfile>>,
 }
 
 /// Named endpoint backed by a zero-copy transport for copy-minimized routes.
@@ -120,6 +122,7 @@ where
     pub(crate) name: String,
     pub(crate) authority: String,
     pub(crate) transport: Arc<T>,
+    pub(crate) native_profile: Option<Arc<up_rust::NativeProfile>>,
 }
 
 #[cfg(feature = "experimental-copy-minimized-routing")]
@@ -132,6 +135,7 @@ where
             name: self.name.clone(),
             authority: self.authority.clone(),
             transport: self.transport.clone(),
+            native_profile: self.native_profile.clone(),
         }
     }
 }
@@ -142,7 +146,16 @@ impl Endpoint {
             name: name.to_string(),
             authority: authority.to_string(),
             transport,
+            native_profile: None,
         }
+    }
+
+    /// Attaches this endpoint's immutable deployment profile. Route activation
+    /// checks its domain, version and complete content against the peer's profile.
+    #[must_use]
+    pub fn with_native_profile(mut self, profile: Arc<up_rust::NativeProfile>) -> Self {
+        self.native_profile = Some(profile);
+        self
     }
 }
 
@@ -157,7 +170,15 @@ where
             name: name.to_string(),
             authority: authority.to_string(),
             transport,
+            native_profile: None,
         }
+    }
+
+    /// Attaches the immutable deployment profile used to configure this endpoint.
+    #[must_use]
+    pub fn with_native_profile(mut self, profile: Arc<up_rust::NativeProfile>) -> Self {
+        self.native_profile = Some(profile);
+        self
     }
 
     /// Human-readable endpoint name used in diagnostics and route keys.
@@ -179,7 +200,15 @@ impl OwnedFrameEndpoint {
             name: name.to_string(),
             authority: authority.to_string(),
             transport,
+            native_profile: None,
         }
+    }
+
+    /// Attaches the immutable deployment profile used to configure this endpoint.
+    #[must_use]
+    pub fn with_native_profile(mut self, profile: Arc<up_rust::NativeProfile>) -> Self {
+        self.native_profile = Some(profile);
+        self
     }
 
     /// Human-readable endpoint name used in diagnostics and route keys.
@@ -195,5 +224,23 @@ impl OwnedFrameEndpoint {
     /// Returns the owned/copying compatibility mode for this endpoint.
     pub fn mode(&self) -> TransportMode {
         TransportMode::Owned
+    }
+}
+
+pub(crate) fn native_route_agreement(
+    ingress: Option<&Arc<up_rust::NativeProfile>>,
+    egress: Option<&Arc<up_rust::NativeProfile>>,
+) -> Result<Option<up_rust::NativeProfileAgreement>, up_rust::UStatus> {
+    match (ingress, egress) {
+        (None, None) => Ok(None),
+        (Some(local), Some(peer)) => up_rust::NativeProfileAgreement::new(local.clone(), peer)
+            .map(Some)
+            .map_err(|error| {
+                up_rust::UStatus::fail_with_code(up_rust::UCode::InvalidArgument, error.to_string())
+            }),
+        _ => Err(up_rust::UStatus::fail_with_code(
+            up_rust::UCode::InvalidArgument,
+            "native route requires explicit matching profile configuration at both endpoints",
+        )),
     }
 }

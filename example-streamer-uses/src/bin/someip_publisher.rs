@@ -48,6 +48,8 @@ enum Encoding {
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: common::native::NativeContext,
     /// Authority for the local publisher identity and publish source URI
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
@@ -84,7 +86,11 @@ struct Args {
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = common::native::NativeContext::load()?;
+    if args.encoding == Encoding::Native {
+        args.native.identity()?;
+    }
 
     info!("Started someip_publisher");
 
@@ -174,9 +180,7 @@ async fn main() -> Result<(), UStatus> {
 
 fn payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
     match args.encoding {
-        Encoding::Native => {
-            native_message_payload_parts(NATIVE_PAYLOAD_MAGIC, 0, "").map(|(_, encoding)| encoding)
-        }
+        Encoding::Native => args.native.encoding(),
         Encoding::Protobuf => Ok(PayloadEncoding::PROTOBUF),
         Encoding::Xcdrv2 => xcdrv2_message_payload_parts(0, args.uauthority.clone(), "")
             .map(|(_, encoding)| encoding),
@@ -188,9 +192,12 @@ fn selected_payload_parts(
     sequence: u32,
 ) -> Result<(Vec<u8>, PayloadEncoding), UStatus> {
     match args.encoding {
-        Encoding::Native => {
-            native_message_payload_parts(NATIVE_PAYLOAD_MAGIC, sequence, &args.payload)
-        }
+        Encoding::Native => native_message_payload_parts(
+            NATIVE_PAYLOAD_MAGIC,
+            sequence,
+            &args.payload,
+            &args.native,
+        ),
         Encoding::Protobuf => unreachable!("protobuf is handled by the classic protobuf path"),
         Encoding::Xcdrv2 => {
             xcdrv2_message_payload_parts(sequence, args.uauthority.clone(), &args.payload)

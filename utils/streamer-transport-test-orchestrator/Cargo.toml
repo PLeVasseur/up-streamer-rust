@@ -20,6 +20,8 @@ keywords.workspace = true
 license.workspace = true
 
 [dependencies]
+configurable-streamer-wire-support = { path = "../configurable-streamer-wire-support" }
+up-rust = { workspace = true }
 anyhow = { version = "1.0.98" }
 chrono = { version = "0.4.40", default-features = true, features = ["clock", "serde"] }
 clap = { workspace = true, features = ["derive"] }
@@ -28,3 +30,6 @@ serde_json = { workspace = true }
 libc = { version = "0.2.171" }
 signal-hook = "=0.3.18"
 sha2 = "0.10"
+
+[dev-dependencies]
+test-case = "3.3"

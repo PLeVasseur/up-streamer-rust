@@ -9,6 +9,7 @@ use std::{
         Arc, Mutex,
     },
 };
+use test_case::test_case;
 use tokio::time::{sleep, Duration};
 use up_rust::communication::{zero_copy, CallOptions, SubscriptionStatus};
 use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
@@ -902,6 +903,27 @@ struct StableBytes {
     bytes: [u8; 4],
 }
 
+fn stable_profile(domain: &str, version: u32, encoding: u32) -> Arc<up_rust::NativeProfile> {
+    Arc::new(
+        up_rust::NativeProfile::new(
+            domain,
+            version,
+            up_rust::NativeProfileMode::Table(
+                up_rust::NativeProfileTable::new([(
+                    PayloadEncoding::from_id(encoding).unwrap(),
+                    <StableBytes as up_rust::StablePayload>::native_representation(),
+                )])
+                .unwrap(),
+            ),
+        )
+        .unwrap(),
+    )
+}
+
+fn stable_agreement(profile: &Arc<up_rust::NativeProfile>) -> up_rust::NativeProfileAgreement {
+    up_rust::NativeProfileAgreement::new(profile.clone(), profile).unwrap()
+}
+
 fn stable_uri_provider(authority: &str) -> Arc<StaticUriProvider> {
     Arc::new(StaticUriProvider::new(authority, 0x5BA0, 0x01).expect("uri provider"))
 }
@@ -1332,10 +1354,18 @@ async fn zero_copy_l2_stable_publish_routes_through_streamer() {
     let instrumentation = Arc::new(RouteInstrumentation::default());
     let ingress_core = SelectedWireCore::dispatch_sent(instrumentation.clone());
     let egress_core = SelectedWireCore::new(instrumentation);
-    let ingress = Arc::new(ingress_core.into_stable_container_transport());
-    let egress = Arc::new(egress_core.clone().into_stable_container_transport());
-    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone());
-    let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
+    let profile = stable_profile("streamer.test", 1, 0xF211);
+    let ingress =
+        Arc::new(ingress_core.into_stable_container_transport(stable_agreement(&profile)));
+    let egress = Arc::new(
+        egress_core
+            .clone()
+            .into_stable_container_transport(stable_agreement(&profile)),
+    );
+    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone())
+        .with_native_profile(profile.clone());
+    let egress_endpoint =
+        ZeroCopyFrameEndpoint::new("egress", "authority-b", egress).with_native_profile(profile);
     let mut streamer = UStreamer::new(
         "zero-copy-l2-stable-publish",
         4,
@@ -1375,6 +1405,14 @@ async fn zero_copy_l2_stable_publish_routes_through_streamer() {
         )]
     );
     assert_eq!(egress_core.sent_metadata().len(), 1);
+    assert_eq!(
+        egress_core.sent_metadata()[0].payload_encoding().copied(),
+        Some(PayloadEncoding::from_id(0xF211).unwrap())
+    );
+    assert_eq!(
+        egress_core.sent_metadata()[0].native_type_token(),
+        Some(<StableBytes as up_rust::StablePayload>::native_type_token())
+    );
 
     streamer
         .delete_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
@@ -1387,10 +1425,18 @@ async fn zero_copy_l2_stable_publish_routes_across_heterogeneous_selected_wire_c
     let instrumentation = Arc::new(RouteInstrumentation::default());
     let ingress_core = SelectedWireCore::dispatch_sent(instrumentation.clone());
     let egress_core = AlternateSelectedWireCore::new(instrumentation);
-    let ingress = Arc::new(ingress_core.into_stable_container_transport());
-    let egress = Arc::new(egress_core.clone().into_stable_container_transport());
-    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone());
-    let egress_endpoint = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
+    let profile = stable_profile("streamer.test", 1, 0xF211);
+    let ingress =
+        Arc::new(ingress_core.into_stable_container_transport(stable_agreement(&profile)));
+    let egress = Arc::new(
+        egress_core
+            .clone()
+            .into_stable_container_transport(stable_agreement(&profile)),
+    );
+    let ingress_endpoint = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress.clone())
+        .with_native_profile(profile.clone());
+    let egress_endpoint =
+        ZeroCopyFrameEndpoint::new("egress", "authority-b", egress).with_native_profile(profile);
     let mut streamer = UStreamer::new(
         "zero-copy-l2-cross-transport",
         4,
@@ -1438,6 +1484,14 @@ async fn zero_copy_l2_stable_publish_routes_across_heterogeneous_selected_wire_c
         )]
     );
     assert_eq!(egress_core.sent_metadata().len(), 1);
+    assert_eq!(
+        egress_core.sent_metadata()[0].payload_encoding().copied(),
+        Some(PayloadEncoding::from_id(0xF211).unwrap())
+    );
+    assert_eq!(
+        egress_core.sent_metadata()[0].native_type_token(),
+        Some(<StableBytes as up_rust::StablePayload>::native_type_token())
+    );
 
     streamer
         .delete_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
@@ -1478,4 +1532,88 @@ async fn selected_wire_copy_minimized_route_drops_mismatched_wire_before_forward
         .delete_selected_wire_copy_minimized_route_ref(&ingress_endpoint, &egress_endpoint)
         .await
         .expect("selected-wire route delete");
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum NativeRouteMismatch {
+    MissingIngress,
+    MissingEgress,
+    MissingBoth,
+    Domain,
+    Version,
+    Allocation,
+    Adapter,
+}
+
+#[test_case(NativeRouteMismatch::MissingIngress; "missing ingress declaration")]
+#[test_case(NativeRouteMismatch::MissingEgress; "missing egress declaration")]
+#[test_case(NativeRouteMismatch::MissingBoth; "configured adapters cannot bypass declarations")]
+#[test_case(NativeRouteMismatch::Domain; "foreign deployment domain")]
+#[test_case(NativeRouteMismatch::Version; "different generation")]
+#[test_case(NativeRouteMismatch::Allocation; "same domain and version but different full content")]
+#[test_case(NativeRouteMismatch::Adapter; "adapter disagrees with matching endpoint declarations")]
+#[tokio::test]
+async fn native_route_rejects_mismatches_before_activation(mismatch: NativeRouteMismatch) {
+    let local = stable_profile("streamer.test", 1, 0xF211);
+    let peer = stable_profile(
+        if mismatch == NativeRouteMismatch::Domain {
+            "foreign"
+        } else {
+            "streamer.test"
+        },
+        if mismatch == NativeRouteMismatch::Version {
+            2
+        } else {
+            1
+        },
+        if mismatch == NativeRouteMismatch::Allocation {
+            0xF212
+        } else {
+            0xF211
+        },
+    );
+    let actual_peer = if mismatch == NativeRouteMismatch::Adapter {
+        stable_profile("streamer.test", 2, 0xF211)
+    } else {
+        peer.clone()
+    };
+    let instrumentation = Arc::new(RouteInstrumentation::default());
+    let ingress_core = SelectedWireCore::new(instrumentation.clone());
+    let egress_core = SelectedWireCore::new(instrumentation);
+    let ingress = Arc::new(
+        ingress_core
+            .clone()
+            .into_stable_container_transport(stable_agreement(&local)),
+    );
+    let egress = Arc::new(
+        egress_core
+            .clone()
+            .into_stable_container_transport(stable_agreement(&actual_peer)),
+    );
+    let mut ingress = ZeroCopyFrameEndpoint::new("ingress", "authority-a", ingress);
+    let mut egress = ZeroCopyFrameEndpoint::new("egress", "authority-b", egress);
+    if !matches!(
+        mismatch,
+        NativeRouteMismatch::MissingIngress | NativeRouteMismatch::MissingBoth
+    ) {
+        ingress = ingress.with_native_profile(local);
+    }
+    if !matches!(
+        mismatch,
+        NativeRouteMismatch::MissingEgress | NativeRouteMismatch::MissingBoth
+    ) {
+        egress = egress.with_native_profile(peer);
+    }
+    let mut streamer = UStreamer::new("native-route-negative", 4, Arc::new(EmptySubscription))
+        .await
+        .unwrap();
+    let error = streamer
+        .add_selected_wire_copy_minimized_route_ref(&ingress, &egress)
+        .await
+        .unwrap_err();
+    assert_eq!(error.code(), UCode::InvalidArgument);
+    assert!(streamer.route_diagnostics().is_empty());
+    assert!(ingress_core.registered_filters().is_empty());
+    assert!(egress_core.loan_specs().is_empty());
+    assert!(egress_core.sent_metadata().is_empty());
 }

@@ -16,6 +16,7 @@ mod common;
 use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use common::cli;
+use common::payloads::{NativeContext, NativeLoanVerifier};
 use common::PublishReceiver;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -24,7 +25,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::info;
 use up_rust::selected_wire_user_api::ProtobufWire;
-use up_rust::StableContainerWireFormat;
+use up_rust::UWithNativePrefixWire;
 use up_rust::{
     UCode, UFrameView, UListener, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus,
     UTransport, UUri, UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport,
@@ -65,6 +66,8 @@ enum Encoding {
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: NativeContext,
     /// The endpoint for Zenoh client to connect to
     #[arg(short, long, default_value = DEFAULT_ENDPOINT)]
     endpoint: String,
@@ -110,7 +113,11 @@ struct Args {
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = NativeContext::from_env()?;
+    if args.encoding == Encoding::Native {
+        args.native.identity()?;
+    }
 
     let uentity = cli::parse_u32_status("--uentity", &args.uentity)?;
     let uversion = cli::parse_u8_status("--uversion", &args.uversion)?;
@@ -152,7 +159,8 @@ async fn main() -> Result<(), UStatus> {
         source_resource,
     )?;
 
-    let publish_receiver: Arc<dyn UListener> = Arc::new(PublishReceiver);
+    let publish_receiver: Arc<dyn UListener> =
+        common::native::payload_listener(&args.native, Arc::new(PublishReceiver));
     subscriber
         .register_listener(&source_filter, None, publish_receiver.clone())
         .await?;
@@ -187,10 +195,10 @@ async fn run_selected_wire_subscriber(
             let transport = Arc::new(
                 ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
                     .await?
-                    .with_selected_wire(StableContainerWireFormat),
+                    .into_stable_container_transport(args.native.agreement()?.clone()),
             ) as Arc<dyn UOwnedTransport>;
             print_selected_wire_ready();
-            receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
+            receive_owned_payload(&transport, &source_filter, args).await?
         }
         (RouteFamily::OwnedFrame, Encoding::Protobuf) => {
             let transport = Arc::new(
@@ -199,7 +207,7 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(ProtobufWire),
             ) as Arc<dyn UOwnedTransport>;
             print_selected_wire_ready();
-            receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
+            receive_owned_payload(&transport, &source_filter, args).await?
         }
         (RouteFamily::OwnedFrame, Encoding::Xcdrv2) => {
             let transport = Arc::new(
@@ -208,7 +216,7 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(XcdrV2Wire),
             ) as Arc<dyn UOwnedTransport>;
             print_selected_wire_ready();
-            receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
+            receive_owned_payload(&transport, &source_filter, args).await?
         }
         (RouteFamily::OwnedFrame, Encoding::Arrow) => {
             let transport = Arc::new(
@@ -217,7 +225,7 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(ArrowWire),
             ) as Arc<dyn UOwnedTransport>;
             print_selected_wire_ready();
-            receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
+            receive_owned_payload(&transport, &source_filter, args).await?
         }
         (RouteFamily::OwnedFrame, Encoding::Omgidl) => {
             let transport = Arc::new(
@@ -226,16 +234,22 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(OmgIdlWire),
             ) as Arc<dyn UOwnedTransport>;
             print_selected_wire_ready();
-            receive_owned_payload(&transport, &source_filter, args.timeout_ms).await?
+            receive_owned_payload(&transport, &source_filter, args).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Native) => {
             let transport = Arc::new(
                 ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
                     .await?
-                    .with_selected_wire(StableContainerWireFormat),
+                    .into_stable_container_transport(args.native.agreement()?.clone()),
             );
             print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
+            receive_zero_copy_payload(
+                &transport,
+                &source_filter,
+                args,
+                Some(NativeContext::verify_loan),
+            )
+            .await?
         }
         (RouteFamily::CopyMinimized, Encoding::Protobuf) => {
             let transport = Arc::new(
@@ -244,7 +258,7 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(ProtobufWire),
             );
             print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
+            receive_zero_copy_payload(&transport, &source_filter, args, None).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Xcdrv2) => {
             let transport = Arc::new(
@@ -253,7 +267,7 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(XcdrV2Wire),
             );
             print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
+            receive_zero_copy_payload(&transport, &source_filter, args, None).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Arrow) => {
             let transport = Arc::new(
@@ -262,7 +276,7 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(ArrowWire),
             );
             print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
+            receive_zero_copy_payload(&transport, &source_filter, args, None).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Omgidl) => {
             let transport = Arc::new(
@@ -271,7 +285,7 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(OmgIdlWire),
             );
             print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args.timeout_ms).await?
+            receive_zero_copy_payload(&transport, &source_filter, args, None).await?
         }
     };
 
@@ -315,11 +329,14 @@ fn invalid_config(message: impl Into<String>) -> UStatus {
 async fn receive_owned_payload(
     transport: &Arc<dyn UOwnedTransport>,
     source_filter: &UUri,
-    timeout_ms: u64,
+    args: &Args,
 ) -> Result<Vec<u8>, UStatus> {
-    receive_owned_frame(transport, source_filter, timeout_ms)
-        .await
-        .map(|frame| frame.payload_bytes().to_vec())
+    let frame = receive_owned_frame(transport, source_filter, args.timeout_ms).await?;
+    if args.encoding == Encoding::Native {
+        args.native
+            .verify_owned(frame.metadata(), frame.payload_bytes())?;
+    }
+    Ok(frame.payload_bytes().to_vec())
 }
 
 async fn receive_owned_frame(
@@ -338,7 +355,8 @@ async fn receive_owned_frame(
 async fn receive_zero_copy_payload<T>(
     transport: &Arc<T>,
     source_filter: &UUri,
-    timeout_ms: u64,
+    args: &Args,
+    verify_native: Option<NativeLoanVerifier<T::Rx>>,
 ) -> Result<Vec<u8>, UStatus>
 where
     T: UZeroCopyTransport + Send + Sync + 'static,
@@ -349,9 +367,15 @@ where
         .register_validated_zero_copy_listener(source_filter, None, Arc::new(ZeroCopyListener(tx)))
         .await?;
     print_zenoh_listener_ready();
-    receive(&mut rx, timeout_ms, "zero-copy frame")
-        .await
-        .map(|frame| frame.try_contiguous_payload().unwrap_or(&[]).to_vec())
+    let frame = receive(&mut rx, args.timeout_ms, "zero-copy frame").await?;
+    if args.encoding == Encoding::Native {
+        verify_native
+            .ok_or_else(|| invalid_config("native receive requires a typed loan verifier"))?(
+            &args.native,
+            &frame,
+        )?;
+    }
+    Ok(frame.try_contiguous_payload().unwrap_or(&[]).to_vec())
 }
 
 struct OwnedListener(mpsc::UnboundedSender<UOwnedFrame>);

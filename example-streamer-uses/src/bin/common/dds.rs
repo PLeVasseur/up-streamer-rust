@@ -9,10 +9,10 @@ use tokio::sync::mpsc;
 use up_rust::frame::metadata::try_project_umessage_to_frame_metadata;
 use up_rust::selected_wire_user_api::UWithNativePrefixWire as _;
 use up_rust::{
-    PayloadCodecIdentity, PayloadEncoding, StableContainerPayload, UCode, UFrameMetadata,
-    UFrameView, UListener, UMessage, UMessageBuilder, UOwnedFrame, UOwnedListener, UOwnedTransport,
-    UStatus, UTransport, UTxBuffer, UTxLoanSpec, UUri, UZeroCopyListener, UZeroCopyRxLease,
-    UZeroCopyTransport, UZeroCopyTransportImpl,
+    PayloadCodecIdentity, PayloadEncoding, UCode, UFrameMetadata, UFrameView, UListener, UMessage,
+    UMessageBuilder, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UTransport, UTxBuffer,
+    UTxLoanSpec, UUri, UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport,
+    UZeroCopyTransportImpl,
 };
 use up_transport_dds::owned::UPTransportDdsOwned;
 use up_transport_dds::zero_copy::DdsZeroCopyCore;
@@ -23,7 +23,7 @@ mod payloads;
 
 use payloads::{
     arrow_payload_bytes, native_payload_bytes, omgidl_payload_bytes, xcdrv2_payload_bytes,
-    SelectedWireNativePayload,
+    NativeContext,
 };
 
 const ENTITY_ID: u32 = 0x5BA0;
@@ -48,7 +48,7 @@ enum RouteFamily {
     CopyMinimized,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum Encoding {
     Native,
     Protobuf,
@@ -67,6 +67,8 @@ enum ReliabilityArg {
 #[derive(Debug, Parser)]
 #[command(version, about = "Dust DDS uProtocol Streamer role process")]
 struct Args {
+    #[arg(skip)]
+    native: NativeContext,
     /// DDS domain used for discovery and RTPS traffic.
     #[arg(long, default_value_t = 80)]
     domain_id: i32,
@@ -109,7 +111,11 @@ struct Args {
 }
 
 pub(crate) async fn run(role: Role) -> Result<(), UStatus> {
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = NativeContext::from_env()?;
+    if args.encoding == Encoding::Native {
+        args.native.identity()?;
+    }
     match args.route_family {
         RouteFamily::Classic => run_classic(role, &args).await,
         RouteFamily::OwnedFrame => run_owned(role, &args).await,
@@ -142,14 +148,14 @@ fn timeout(args: &Args) -> Duration {
     Duration::from_millis(args.timeout_ms)
 }
 
-fn encoding(value: Encoding) -> PayloadEncoding {
-    match value {
-        Encoding::Native => StableContainerPayload::<SelectedWireNativePayload>::encoding(),
+fn encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
+    Ok(match args.encoding {
+        Encoding::Native => args.native.encoding()?,
         Encoding::Protobuf => up_rust::ProtobufWire::encoding(),
         Encoding::Xcdrv2 => up_wire_xcdrv2::XcdrV2Wire::encoding(),
         Encoding::Arrow => up_wire_arrow::ArrowWire::encoding(),
         Encoding::OmgIdl => up_wire_omgidl::OmgIdlWire::encoding(),
-    }
+    })
 }
 
 fn topic(authority: &str, resource_id: u16) -> Result<UUri, UStatus> {
@@ -172,19 +178,19 @@ fn outbound_message(role: Role, args: &Args) -> Result<UMessage, UStatus> {
     let result = match role {
         Role::Publisher => {
             UMessageBuilder::publish(topic(&args.local_authority, args.topic_resource_id)?)
-                .build_with_payload(payload, encoding(args.encoding))
+                .build_with_payload(payload, encoding(args)?)
         }
         Role::Notifier => UMessageBuilder::notification(
             topic(&args.local_authority, args.topic_resource_id)?,
             endpoint(&args.peer_authority)?,
         )
-        .build_with_payload(payload, encoding(args.encoding)),
+        .build_with_payload(payload, encoding(args)?),
         Role::Client => UMessageBuilder::request(
             method(&args.peer_authority, args.method_resource_id)?,
             endpoint(&args.local_authority)?,
             u32::try_from(args.timeout_ms).unwrap_or(u32::MAX),
         )
-        .build_with_payload(payload, encoding(args.encoding)),
+        .build_with_payload(payload, encoding(args)?),
         Role::Subscriber | Role::Notifyee | Role::Server => {
             return Err(invalid("passive role has no outbound request"));
         }
@@ -227,9 +233,16 @@ fn response_metadata(request: &UFrameMetadata, args: &Args) -> Result<UFrameMeta
         .cloned()
         .ok_or_else(|| invalid("request metadata has no sink"))?;
     UFrameMetadata::response(source, request.source().clone(), request.id().clone())
-        .with_payload_encoding(encoding(args.encoding))
+        .with_payload_encoding(encoding(args)?)
         .build()
         .map_err(|error| invalid(format!("build response metadata: {error}")))
+        .and_then(|metadata| {
+            if args.encoding == Encoding::Native {
+                args.native.stamp(metadata)
+            } else {
+                Ok(metadata)
+            }
+        })
 }
 
 fn response_message(request: &UMessage, args: &Args) -> Result<UMessage, UStatus> {
@@ -243,7 +256,7 @@ fn response_message(request: &UMessage, args: &Args) -> Result<UMessage, UStatus
             request
                 .payload()
                 .map_or_else(Vec::new, |bytes| bytes.to_vec()),
-            encoding(args.encoding),
+            encoding(args)?,
         )
         .map_err(|error| invalid(format!("build response message: {error}")))
 }
@@ -281,6 +294,9 @@ async fn run_classic(role: Role, args: &Args) -> Result<(), UStatus> {
         transport.send(outbound_message(role, args)?).await?;
     }
     let message = receive(&mut rx, timeout(args), "classic message").await?;
+    if args.encoding == Encoding::Native {
+        args.native.verify_classic(&message)?;
+    }
     if matches!(role, Role::Server) {
         transport.wait_ready(2, timeout(args))?;
         transport.send(response_message(&message, args)?).await?;
@@ -305,7 +321,7 @@ async fn run_owned(role: Role, args: &Args) -> Result<(), UStatus> {
     )?);
     if matches!(role, Role::Publisher | Role::Notifier) {
         transport.wait_ready(2, timeout(args))?;
-        let frame = frame_from_message(&outbound_message(role, args)?)?;
+        let frame = frame_from_message(&outbound_message(role, args)?, args)?;
         let len = frame.payload_bytes().len();
         transport.send_owned(frame).await?;
         print_sent(role, len);
@@ -321,10 +337,14 @@ async fn run_owned(role: Role, args: &Args) -> Result<(), UStatus> {
     if matches!(role, Role::Client) {
         transport.wait_ready(2, timeout(args))?;
         transport
-            .send_owned(frame_from_message(&outbound_message(role, args)?)?)
+            .send_owned(frame_from_message(&outbound_message(role, args)?, args)?)
             .await?;
     }
     let frame = receive(&mut rx, timeout(args), "owned frame").await?;
+    if args.encoding == Encoding::Native {
+        args.native
+            .verify_owned(frame.metadata(), frame.payload_bytes())?;
+    }
     if matches!(role, Role::Server) {
         transport.wait_ready(2, timeout(args))?;
         transport
@@ -341,9 +361,13 @@ async fn run_owned(role: Role, args: &Args) -> Result<(), UStatus> {
     Ok(())
 }
 
-fn frame_from_message(message: &UMessage) -> Result<UOwnedFrame, UStatus> {
-    let metadata = try_project_umessage_to_frame_metadata(message)
-        .map_err(|error| invalid(format!("project frame metadata: {error}")))?;
+fn frame_from_message(message: &UMessage, args: &Args) -> Result<UOwnedFrame, UStatus> {
+    let metadata = if args.encoding == Encoding::Native {
+        args.native.project_classic(message)?
+    } else {
+        try_project_umessage_to_frame_metadata(message)
+            .map_err(|error| invalid(format!("project frame metadata: {error}")))?
+    };
     match message.payload() {
         Some(payload) => UOwnedFrame::with_payload(metadata, payload.to_vec()),
         None => UOwnedFrame::without_payload(metadata),
@@ -375,9 +399,19 @@ where
         Role::Publisher | Role::Notifier | Role::Client
     )) + 1;
     core.wait_ready(required_matches, timeout(args))?;
-    let transport = Arc::new(core.into_native_prefix_wire_transport(wire));
+    let transport = if args.encoding == Encoding::Native {
+        up_rust::UWireTransport::with_native_profile(
+            core,
+            wire,
+            up_rust::wire_implementer_api::NativePrefixFrameMetadataCodec,
+            args.native.agreement()?.clone(),
+        )
+    } else {
+        core.into_native_prefix_wire_transport(wire)
+    };
+    let transport = Arc::new(transport);
     if matches!(role, Role::Publisher | Role::Notifier) {
-        let frame = frame_from_message(&outbound_message(role, args)?)?;
+        let frame = frame_from_message(&outbound_message(role, args)?, args)?;
         let payload_len = frame.payload_bytes().len();
         send_zero_copy(&transport, frame, args).await?;
         print_sent(role, payload_len);
@@ -397,12 +431,17 @@ where
     if matches!(role, Role::Client) {
         send_zero_copy(
             &transport,
-            frame_from_message(&outbound_message(role, args)?)?,
+            frame_from_message(&outbound_message(role, args)?, args)?,
             args,
         )
         .await?;
     }
     let frame = receive(&mut rx, timeout(args), "copy-minimized frame").await?;
+    if args.encoding == Encoding::Native {
+        // DDS exposes an owned receive view, not a native borrowing capability.
+        // Validate the full representation before copying its bytes for the echo.
+        args.native.verify_view(&frame)?;
+    }
     let payload = frame.try_contiguous_payload().unwrap_or(&[]).to_vec();
     if matches!(role, Role::Server) {
         let response =

@@ -11,9 +11,12 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+pub mod native_profile;
+
 use std::{fmt, str::FromStr};
 
 #[cfg(any(
+    feature = "owned-frame-transport",
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",
     feature = "lola-transport",
@@ -36,7 +39,22 @@ use std::sync::Arc;
 use up_rust::selected_wire_user_api::{
     ProtobufWire, ProtobufWireTransport, UNativePrefixWireTransport, UWithNativePrefixWire as _,
 };
-use up_rust::{StableContainerWireFormat, StableContainerWireTransport, UCode, UStatus};
+#[cfg(any(
+    feature = "owned-frame-transport",
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport",
+    feature = "dds-zero-copy"
+))]
+use up_rust::NativeProfileAgreement;
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport",
+    feature = "dds-zero-copy"
+))]
+use up_rust::StableContainerWireTransport;
+use up_rust::{UCode, UStatus};
 #[cfg(any(
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",
@@ -143,6 +161,12 @@ impl fmt::Display for RouteWireFormat {
     }
 }
 
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport",
+    feature = "dds-zero-copy"
+))]
 macro_rules! selected_transport_type {
     (native, $core:ty) => {
         StableContainerWireTransport<$core>
@@ -182,6 +206,8 @@ macro_rules! define_route_wire_family {
                 egress: &Self,
                 options: CopyMinimizedRouteOptions,
             ) -> Result<(), UStatus> {
+                #[cfg(not(any(feature = "zenoh-zero-copy", feature = "iceoryx2-zero-copy", feature = "lola-transport", feature = "dds-zero-copy")))]
+                let _ = (streamer, options);
                 #[allow(unreachable_patterns)]
                 match (self, egress) {
                     #[cfg(feature = "zenoh-zero-copy")]
@@ -227,6 +253,8 @@ macro_rules! define_route_wire_family {
                 ingress: &Endpoint,
                 options: CopyMinimizedRouteOptions,
             ) -> Result<(), UStatus> {
+                #[cfg(not(any(feature = "zenoh-zero-copy", feature = "iceoryx2-zero-copy", feature = "lola-transport", feature = "dds-zero-copy")))]
+                let _ = (streamer, ingress, options);
                 #[allow(unreachable_patterns)]
                 match self {
                     #[cfg(feature = "zenoh-zero-copy")]
@@ -247,6 +275,8 @@ macro_rules! define_route_wire_family {
                 streamer: &mut UStreamer,
                 egress: &Endpoint,
             ) -> Result<(), UStatus> {
+                #[cfg(not(any(feature = "zenoh-zero-copy", feature = "iceoryx2-zero-copy", feature = "lola-transport", feature = "dds-zero-copy")))]
+                let _ = (streamer, egress);
                 #[allow(unreachable_patterns)]
                 match self {
                     #[cfg(feature = "zenoh-zero-copy")]
@@ -268,6 +298,8 @@ macro_rules! define_route_wire_family {
                 ingress: &OwnedFrameEndpoint,
                 options: CopyMinimizedRouteOptions,
             ) -> Result<(), UStatus> {
+                #[cfg(not(any(feature = "zenoh-zero-copy", feature = "iceoryx2-zero-copy", feature = "lola-transport", feature = "dds-zero-copy")))]
+                let _ = (streamer, ingress, options);
                 #[allow(unreachable_patterns)]
                 match self {
                     #[cfg(feature = "zenoh-zero-copy")]
@@ -288,6 +320,8 @@ macro_rules! define_route_wire_family {
                 streamer: &mut UStreamer,
                 egress: &OwnedFrameEndpoint,
             ) -> Result<(), UStatus> {
+                #[cfg(not(any(feature = "zenoh-zero-copy", feature = "iceoryx2-zero-copy", feature = "lola-transport", feature = "dds-zero-copy")))]
+                let _ = (streamer, egress);
                 #[allow(unreachable_patterns)]
                 match self {
                     #[cfg(feature = "zenoh-zero-copy")]
@@ -350,16 +384,28 @@ impl RouteOwnedEndpoint {
     }
 }
 
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport",
+    feature = "dds-zero-copy"
+))]
 macro_rules! make_route_endpoint {
-    ($transport:ident, $name:expr, $authority:expr, $core:expr, $format:expr) => {
-        match $format {
-            RouteWireFormat::Native => RouteWireEndpoint::Native(NativeRouteEndpoint::$transport(
-                ZeroCopyFrameEndpoint::new(
-                    $name,
-                    $authority,
-                    Arc::new($core.into_native_prefix_wire_transport(StableContainerWireFormat)),
-                ),
-            )),
+    ($transport:ident, $name:expr, $authority:expr, $core:expr, $format:expr, $profile:expr) => {
+        Ok(match $format {
+            RouteWireFormat::Native => {
+                let profile = $profile.ok_or_else(|| {
+                    invalid_config("native endpoint requires an explicit loaded profile agreement")
+                })?;
+                RouteWireEndpoint::Native(NativeRouteEndpoint::$transport(
+                    ZeroCopyFrameEndpoint::new(
+                        $name,
+                        $authority,
+                        Arc::new($core.into_stable_container_transport(profile.clone())),
+                    )
+                    .with_native_profile(Arc::new(profile.profile().clone())),
+                ))
+            }
             RouteWireFormat::Protobuf => RouteWireEndpoint::Protobuf(
                 ProtobufRouteEndpoint::$transport(ZeroCopyFrameEndpoint::new(
                     $name,
@@ -388,7 +434,7 @@ macro_rules! make_route_endpoint {
                     Arc::new($core.into_native_prefix_wire_transport(OmgIdlWire)),
                 ),
             )),
-        }
+        })
     };
 }
 
@@ -398,8 +444,9 @@ pub fn zenoh_endpoint(
     authority: &str,
     core: ZenohZeroCopyCore,
     format: RouteWireFormat,
-) -> RouteWireEndpoint {
-    make_route_endpoint!(Zenoh, name, authority, core, format)
+    profile: Option<&NativeProfileAgreement>,
+) -> Result<RouteWireEndpoint, UStatus> {
+    make_route_endpoint!(Zenoh, name, authority, core, format, profile)
 }
 
 #[cfg(feature = "iceoryx2-zero-copy")]
@@ -408,8 +455,9 @@ pub fn iceoryx2_endpoint(
     authority: &str,
     core: Iceoryx2PubSub,
     format: RouteWireFormat,
-) -> RouteWireEndpoint {
-    make_route_endpoint!(Iceoryx2, name, authority, core, format)
+    profile: Option<&NativeProfileAgreement>,
+) -> Result<RouteWireEndpoint, UStatus> {
+    make_route_endpoint!(Iceoryx2, name, authority, core, format, profile)
 }
 
 #[cfg(feature = "lola-transport")]
@@ -418,8 +466,9 @@ pub fn lola_endpoint(
     authority: &str,
     core: LolaZeroCopyCore,
     format: RouteWireFormat,
-) -> RouteWireEndpoint {
-    make_route_endpoint!(Lola, name, authority, core, format)
+    profile: Option<&NativeProfileAgreement>,
+) -> Result<RouteWireEndpoint, UStatus> {
+    make_route_endpoint!(Lola, name, authority, core, format, profile)
 }
 
 #[cfg(feature = "dds-zero-copy")]
@@ -428,8 +477,9 @@ pub fn dds_endpoint(
     authority: &str,
     core: DdsZeroCopyCore,
     format: RouteWireFormat,
-) -> RouteWireEndpoint {
-    make_route_endpoint!(Dds, name, authority, core, format)
+    profile: Option<&NativeProfileAgreement>,
+) -> Result<RouteWireEndpoint, UStatus> {
+    make_route_endpoint!(Dds, name, authority, core, format, profile)
 }
 
 #[cfg(feature = "owned-frame-transport")]
@@ -438,11 +488,19 @@ fn owned_endpoint(
     authority: &str,
     transport: Arc<dyn up_rust::UOwnedTransport>,
     route_wire_format: RouteWireFormat,
-) -> RouteOwnedEndpoint {
-    RouteOwnedEndpoint {
-        endpoint: OwnedFrameEndpoint::from_owned(name, authority, transport),
-        route_wire_format,
+    profile: Option<&NativeProfileAgreement>,
+) -> Result<RouteOwnedEndpoint, UStatus> {
+    let mut endpoint = OwnedFrameEndpoint::from_owned(name, authority, transport);
+    if route_wire_format == RouteWireFormat::Native {
+        let profile = profile.ok_or_else(|| {
+            invalid_config("native owned endpoint requires an explicit loaded profile agreement")
+        })?;
+        endpoint = endpoint.with_native_profile(Arc::new(profile.profile().clone()));
     }
+    Ok(RouteOwnedEndpoint {
+        endpoint,
+        route_wire_format,
+    })
 }
 
 #[cfg(any(
@@ -451,17 +509,22 @@ fn owned_endpoint(
     feature = "lola-owned-frame"
 ))]
 macro_rules! make_owned_endpoint {
-    ($name:expr, $authority:expr, $core:expr, $format:expr) => {{
+    ($name:expr, $authority:expr, $core:expr, $format:expr, $profile:expr) => {{
         let transport: Arc<dyn up_rust::UOwnedTransport> = match $format {
             RouteWireFormat::Native => {
-                Arc::new($core.with_selected_wire(StableContainerWireFormat))
+                let profile = $profile.ok_or_else(|| {
+                    invalid_config(
+                        "native owned adapter requires an explicit loaded profile agreement",
+                    )
+                })?;
+                Arc::new($core.into_stable_container_transport(profile.clone()))
             }
             RouteWireFormat::Protobuf => Arc::new($core.with_selected_wire(ProtobufWire)),
             RouteWireFormat::XcdrV2 => Arc::new($core.with_selected_wire(XcdrV2Wire)),
             RouteWireFormat::Arrow => Arc::new($core.with_selected_wire(ArrowWire)),
             RouteWireFormat::OmgIdl => Arc::new($core.with_selected_wire(OmgIdlWire)),
         };
-        owned_endpoint($name, $authority, transport, $format)
+        owned_endpoint($name, $authority, transport, $format, $profile)
     }};
 }
 
@@ -471,8 +534,9 @@ pub fn zenoh_owned_endpoint(
     authority: &str,
     core: ZenohOwnedCore,
     format: RouteWireFormat,
-) -> RouteOwnedEndpoint {
-    make_owned_endpoint!(name, authority, core, format)
+    profile: Option<&NativeProfileAgreement>,
+) -> Result<RouteOwnedEndpoint, UStatus> {
+    make_owned_endpoint!(name, authority, core, format, profile)
 }
 
 #[cfg(feature = "iceoryx2-owned-frame")]
@@ -481,8 +545,9 @@ pub fn iceoryx2_owned_endpoint(
     authority: &str,
     core: BenchmarkOwnedIceoryx2Core,
     format: RouteWireFormat,
-) -> RouteOwnedEndpoint {
-    make_owned_endpoint!(name, authority, core, format)
+    profile: Option<&NativeProfileAgreement>,
+) -> Result<RouteOwnedEndpoint, UStatus> {
+    make_owned_endpoint!(name, authority, core, format, profile)
 }
 
 #[cfg(feature = "lola-owned-frame")]
@@ -491,8 +556,9 @@ pub fn lola_owned_endpoint(
     authority: &str,
     core: LolaOwnedCore,
     format: RouteWireFormat,
-) -> RouteOwnedEndpoint {
-    make_owned_endpoint!(name, authority, core, format)
+    profile: Option<&NativeProfileAgreement>,
+) -> Result<RouteOwnedEndpoint, UStatus> {
+    make_owned_endpoint!(name, authority, core, format, profile)
 }
 
 #[cfg(feature = "dds-owned-frame")]
@@ -501,8 +567,9 @@ pub fn dds_owned_endpoint(
     authority: &str,
     transport: UPTransportDdsOwned,
     format: RouteWireFormat,
-) -> RouteOwnedEndpoint {
-    owned_endpoint(name, authority, Arc::new(transport), format)
+    profile: Option<&NativeProfileAgreement>,
+) -> Result<RouteOwnedEndpoint, UStatus> {
+    owned_endpoint(name, authority, Arc::new(transport), format, profile)
 }
 
 pub async fn add_route_wire_format(

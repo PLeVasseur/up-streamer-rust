@@ -18,8 +18,12 @@ fn method_uri_from(endpoint: &UUri) -> UUri {
     endpoint.clone_with_resource_id(0)
 }
 
+fn event_uri_from(endpoint: &UUri) -> UUri {
+    endpoint.clone_with_resource_id(0x8000)
+}
+
 pub fn publish_from_local_client_for_remote_client(local_id: u32) -> UMessage {
-    UMessageBuilder::publish(local_client_uuri(local_id))
+    UMessageBuilder::publish(event_uri_from(&local_client_uuri(local_id)))
         .build()
         .expect("publish message should build")
 }
@@ -28,9 +32,12 @@ pub fn notification_from_local_client_for_remote_client(
     local_id: u32,
     remote_uuri: UUri,
 ) -> UMessage {
-    UMessageBuilder::notification(local_client_uuri(local_id), method_uri_from(&remote_uuri))
-        .build()
-        .expect("notification message should build")
+    UMessageBuilder::notification(
+        event_uri_from(&local_client_uuri(local_id)),
+        method_uri_from(&remote_uuri),
+    )
+    .build()
+    .expect("notification message should build")
 }
 
 pub fn request_from_local_client_for_remote_client(local_id: u32, remote_uuri: UUri) -> UMessage {
@@ -54,7 +61,7 @@ pub fn response_from_local_client_for_remote_client(local_id: u32, remote_uuri: 
 }
 
 pub fn publish_from_remote_client_for_local_client(remote_uuri: UUri) -> UMessage {
-    UMessageBuilder::publish(remote_uuri)
+    UMessageBuilder::publish(event_uri_from(&remote_uuri))
         .build()
         .expect("publish message should build")
 }
@@ -63,9 +70,12 @@ pub fn notification_from_remote_client_for_local_client(
     remote_uuri: UUri,
     local_id: u32,
 ) -> UMessage {
-    UMessageBuilder::notification(remote_uuri, method_uri_from(&local_client_uuri(local_id)))
-        .build()
-        .expect("notification message should build")
+    UMessageBuilder::notification(
+        event_uri_from(&remote_uuri),
+        method_uri_from(&local_client_uuri(local_id)),
+    )
+    .build()
+    .expect("notification message should build")
 }
 
 pub fn request_from_remote_client_for_local_client(remote_uuri: UUri, local_id: u32) -> UMessage {

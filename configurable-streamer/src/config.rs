@@ -22,6 +22,58 @@ pub struct Config {
     pub(crate) transports: Transports,
 }
 
+impl Config {
+    /// Resolve immutable peer agreements before opening endpoints or routes.
+    pub(crate) fn load_native_profiles(
+        &mut self,
+        base: &std::path::Path,
+    ) -> Result<(), up_rust::UStatus> {
+        use configurable_streamer_wire_support::native_profile::{
+            load_native_agreement, load_native_agreement_from_env,
+        };
+        let shared = load_native_agreement_from_env()?;
+        let mut groups = vec![
+            &mut self.transports.zenoh.endpoints,
+            &mut self.transports.mqtt.endpoints,
+        ];
+        if let Some(transport) = &mut self.transports.iceoryx2 {
+            groups.push(&mut transport.endpoints);
+        }
+        if let Some(transport) = &mut self.transports.lola {
+            groups.push(&mut transport.endpoints);
+        }
+        if let Some(transport) = &mut self.transports.vsomeip {
+            groups.push(&mut transport.endpoints);
+        }
+        if let Some(transport) = &mut self.transports.dds {
+            groups.push(&mut transport.endpoints);
+        }
+        for endpoints in groups {
+            for endpoint in endpoints {
+                endpoint.native_profile = match (
+                    &endpoint.native_profile_file,
+                    &endpoint.native_peer_profile_file,
+                ) {
+                    (None, None) => shared.clone(),
+                    (Some(local), Some(peer)) => {
+                        Some(load_native_agreement(&base.join(local), &base.join(peer))?)
+                    }
+                    _ => {
+                        return Err(up_rust::UStatus::fail_with_code(
+                            up_rust::UCode::InvalidArgument,
+                            format!(
+                                "endpoint {} requires both local and peer native profile paths",
+                                endpoint.endpoint
+                            ),
+                        ))
+                    }
+                };
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct UpStreamerConfig {
@@ -222,6 +274,12 @@ pub struct EndpointConfig {
     /// whose wire carries no payload-encoding identity.
     #[serde(default)]
     pub(crate) payload_encoding_id: Option<u32>,
+    #[serde(default)]
+    pub(crate) native_profile_file: Option<String>,
+    #[serde(default)]
+    pub(crate) native_peer_profile_file: Option<String>,
+    #[serde(skip)]
+    pub(crate) native_profile: Option<up_rust::NativeProfileAgreement>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]

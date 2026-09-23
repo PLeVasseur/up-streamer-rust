@@ -31,6 +31,8 @@ const DEFAULT_BROKER_URI: &str = "localhost:1883";
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: common::native::NativeContext,
     /// Authority for the local service identity
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
@@ -52,7 +54,8 @@ struct Args {
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = common::native::NativeContext::load()?;
 
     info!("Started mqtt_server.");
 
@@ -85,7 +88,7 @@ async fn main() -> Result<(), UStatus> {
         .register_listener(
             &source_filter,
             Some(&sink_filter),
-            service_request_responder.clone(),
+            common::native::listener(&args.native, service_request_responder.clone()),
         )
         .await?;
 

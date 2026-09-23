@@ -19,7 +19,7 @@ use clap::{Parser, ValueEnum};
 use common::cli;
 use common::payloads::{
     arrow_payload_bytes, native_payload_alignment, native_payload_bytes, omgidl_payload_bytes,
-    xcdrv2_payload_bytes, SelectedWireNativePayload,
+    xcdrv2_payload_bytes, NativeContext,
 };
 use common::protobuf_payload;
 use hello_world_protos::hello_world_topics::Timer;
@@ -28,10 +28,10 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use up_rust::selected_wire_user_api::ProtobufWire;
-use up_rust::StableContainerWireFormat;
 use up_rust::{
-    PayloadCodecIdentity, PayloadEncoding, StableContainerPayload, UFrameMetadata, UMessageBuilder,
-    UOwnedFrame, UOwnedTransport, UStatus, UTransport, UTxBuffer, UTxLoanSpec, UZeroCopyTransport,
+    PayloadCodecIdentity, PayloadEncoding, UFrameMetadata, UMessageBuilder, UOwnedFrame,
+    UOwnedTransport, UStatus, UTransport, UTxBuffer, UTxLoanSpec, UWithNativePrefixWire,
+    UZeroCopyTransport,
 };
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
@@ -66,6 +66,8 @@ enum Encoding {
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: NativeContext,
     /// The endpoint for Zenoh client to connect to
     #[arg(short, long, default_value = DEFAULT_ENDPOINT)]
     endpoint: String,
@@ -111,7 +113,11 @@ struct Args {
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = NativeContext::from_env()?;
+    if args.encoding == Encoding::Native {
+        args.native.identity()?;
+    }
 
     let uentity = cli::parse_u32_status("--uentity", &args.uentity)?;
     let uversion = cli::parse_u8_status("--uversion", &args.uversion)?;
@@ -166,7 +172,7 @@ async fn main() -> Result<(), UStatus> {
             builder
                 .build_with_payload(
                     selected_payload_bytes(&args)?,
-                    selected_payload_encoding(args.encoding),
+                    selected_payload_encoding(&args)?,
                 )
                 .map_err(|error| {
                     invalid_config(format!("failed to build publish message: {error:?}"))
@@ -195,9 +201,14 @@ async fn run_selected_wire_publisher(
     let local_uri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
     let source = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
     let metadata = UFrameMetadata::publish(source)
-        .with_payload_encoding(selected_payload_encoding(args.encoding))
+        .with_payload_encoding(selected_payload_encoding(args)?)
         .build()
         .map_err(|error| invalid_config(format!("failed to build frame metadata: {error:?}")))?;
+    let metadata = if args.encoding == Encoding::Native {
+        args.native.stamp(metadata)?
+    } else {
+        metadata
+    };
     let payload = selected_payload_bytes(args)?;
     let zenoh_config = zenoh_config_from_args(args)?;
 
@@ -206,7 +217,7 @@ async fn run_selected_wire_publisher(
             let transport = Arc::new(
                 ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
                     .await?
-                    .with_selected_wire(StableContainerWireFormat),
+                    .into_stable_container_transport(args.native.agreement()?.clone()),
             ) as Arc<dyn UOwnedTransport>;
             send_owned_repeated(&transport, metadata, &payload, args.selected_send_count).await?;
         }
@@ -246,7 +257,7 @@ async fn run_selected_wire_publisher(
             let transport = Arc::new(
                 ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
                     .await?
-                    .with_selected_wire(StableContainerWireFormat),
+                    .into_stable_container_transport(args.native.agreement()?.clone()),
             );
             send_zero_copy_repeated(
                 &transport,
@@ -367,14 +378,14 @@ where
     Ok(())
 }
 
-fn selected_payload_encoding(encoding: Encoding) -> PayloadEncoding {
-    match encoding {
-        Encoding::Native => StableContainerPayload::<SelectedWireNativePayload>::encoding(),
+fn selected_payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
+    Ok(match args.encoding {
+        Encoding::Native => args.native.encoding()?,
         Encoding::Protobuf => ProtobufWire::encoding(),
         Encoding::Xcdrv2 => XcdrV2Wire::encoding(),
         Encoding::Arrow => ArrowWire::encoding(),
         Encoding::Omgidl => OmgIdlWire::encoding(),
-    }
+    })
 }
 
 fn selected_payload_bytes(args: &Args) -> Result<Vec<u8>, UStatus> {

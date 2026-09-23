@@ -15,7 +15,7 @@ mod common;
 
 use clap::{Parser, ValueEnum};
 use common::cli;
-use common::{native_message_payload_parts, xcdrv2_message_payload_parts, PublishReceiver};
+use common::{xcdrv2_message_payload_parts, PublishReceiver};
 use std::sync::Arc;
 use std::thread;
 use tracing::{trace, warn};
@@ -36,7 +36,6 @@ const DEFAULT_VSOMEIP_CONFIG: &str = concat!(
     "/vsomeip-configs/someip_subscriber.json"
 );
 const DEFAULT_UENTITY_NUM: u32 = 0x5BB0;
-const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"SSUB");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum Encoding {
@@ -48,6 +47,8 @@ enum Encoding {
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: common::native::NativeContext,
     /// Authority for the local subscriber identity
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
@@ -87,7 +88,11 @@ struct Args {
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = common::native::NativeContext::load()?;
+    if args.encoding == Encoding::Native {
+        args.native.identity()?;
+    }
 
     println!("mE_subscriber");
 
@@ -131,7 +136,8 @@ async fn main() -> Result<(), UStatus> {
         source_resource,
     )?;
 
-    let publish_receiver: Arc<dyn UListener> = Arc::new(PublishReceiver);
+    let publish_receiver: Arc<dyn UListener> =
+        common::native::listener(&args.native, Arc::new(PublishReceiver));
     // TODO: Need to revisit how the vsomeip config file is used in non point-to-point cases
     subscriber
         .register_listener(&source_filter, None, publish_receiver.clone())
@@ -146,9 +152,7 @@ async fn main() -> Result<(), UStatus> {
 
 fn payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
     match args.encoding {
-        Encoding::Native => {
-            native_message_payload_parts(NATIVE_PAYLOAD_MAGIC, 0, "").map(|(_, encoding)| encoding)
-        }
+        Encoding::Native => args.native.encoding(),
         Encoding::Protobuf => Ok(PayloadEncoding::PROTOBUF),
         Encoding::Xcdrv2 => xcdrv2_message_payload_parts(0, args.uauthority.clone(), "")
             .map(|(_, encoding)| encoding),

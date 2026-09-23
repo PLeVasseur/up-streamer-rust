@@ -24,11 +24,11 @@ use up_rust::selected_wire_user_api::ProtobufWire;
     feature = "iceoryx2-owned-frame",
     feature = "lola-owned-frame"
 ))]
-use up_rust::StableContainerWireFormat;
+use up_rust::UWithNativePrefixWire;
 use up_rust::{
-    PayloadCodecIdentity, PayloadEncoding, StableContainerPayload, StablePayloadInit, UCode,
-    UFrameMetadata, UFrameView, UMessage, UMessageBuilder, UOwnedFrame, UOwnedTransport, UStatus,
-    UTxBuffer, UTxLoanSpec, UUri, UZeroCopyRxLease, UZeroCopyTransport,
+    PayloadCodecIdentity, PayloadEncoding, StablePayloadInit, UCode, UFrameMetadata, UFrameView,
+    UMessage, UMessageBuilder, UOwnedFrame, UOwnedTransport, UStatus, UTxBuffer, UTxLoanSpec, UUri,
+    UZeroCopyRxLease, UZeroCopyTransport,
 };
 #[cfg(feature = "iceoryx2-owned-frame")]
 use up_transport_iceoryx2_rust::BenchmarkOwnedIceoryx2Core;
@@ -87,20 +87,15 @@ enum FlowRole {
 const NATIVE_FLOW_PAYLOAD_CAPACITY: usize = 256;
 const NATIVE_FLOW_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"UPNF");
 
-#[repr(C)]
-#[derive(Clone, Copy, up_rust::StablePayload, up_rust::StablePayloadInit)]
-#[stable_payload(type_name = "org.eclipse.uprotocol.streamer.payload_flow.NativeFlowPayloadV1")]
-struct NativeFlowPayload {
-    magic: u32,
-    schema_version: u32,
-    payload_len: u32,
-    payload_checksum: u32,
-    payload_bytes: [u8; NATIVE_FLOW_PAYLOAD_CAPACITY],
-}
+use configurable_streamer_wire_support::native_profile::{NativeFlowPayload, NativePayloadContext};
+
+type NativeContext = NativePayloadContext<NativeFlowPayload>;
 
 #[derive(Parser)]
 #[command()]
 struct Cli {
+    #[arg(skip)]
+    native: NativeContext,
     #[arg(long, value_enum)]
     mode: FlowMode,
     #[arg(long, value_enum)]
@@ -163,7 +158,11 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    cli.native = NativeContext::from_env()?;
+    if cli.wire_format == FlowWireFormat::Native {
+        cli.native.identity()?;
+    }
     match cli.mode {
         FlowMode::OwnedFrame => run_owned(&cli).await,
         FlowMode::CopyMinimized => run_zero_copy(&cli).await,
@@ -185,7 +184,7 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
                 &transport,
                 &topic_uri(cli.peer_authority.as_str(), cli.topic_resource_id)?,
                 None,
-                cli.timeout_ms,
+                cli,
             )
             .await?;
             println!(
@@ -210,8 +209,7 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
             println!("READY listener_registered");
             let source = topic_uri(cli.peer_authority.as_str(), cli.topic_resource_id)?;
             let sink = endpoint_uri(cli.local_authority.as_str())?;
-            let payload =
-                receive_owned_payload(&transport, &source, Some(&sink), cli.timeout_ms).await?;
+            let payload = receive_owned_payload(&transport, &source, Some(&sink), cli).await?;
             println!(
                 "FLOW observed_payload_bytes={} role=notify_receiver",
                 payload.len()
@@ -228,7 +226,7 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
             let sink = endpoint_uri(cli.local_authority.as_str())?;
             let response = if cli.send_count <= 1 {
                 send_owned_frame(&transport, metadata, &payload).await?;
-                receive_owned_payload(&transport, &source, Some(&sink), cli.timeout_ms).await?
+                receive_owned_payload(&transport, &source, Some(&sink), cli).await?
             } else {
                 let send_transport = transport.clone();
                 let send_payload = payload.clone();
@@ -242,8 +240,7 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
                     )
                     .await
                 });
-                let response =
-                    receive_owned_payload(&transport, &source, Some(&sink), cli.timeout_ms).await;
+                let response = receive_owned_payload(&transport, &source, Some(&sink), cli).await;
                 send_task.abort();
                 let _ = send_task.await;
                 response?
@@ -258,8 +255,7 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
             println!("READY listener_registered");
             let source = endpoint_wildcard(cli.peer_authority.as_str())?;
             let sink = method_uri(cli.local_authority.as_str(), cli.method_resource_id)?;
-            let request =
-                receive_owned_frame(&transport, &source, Some(&sink), cli.timeout_ms).await?;
+            let request = receive_owned_frame(&transport, &source, Some(&sink), cli).await?;
             let payload = request.payload_bytes().to_vec();
             let response_metadata = response_metadata(cli, request.metadata())?;
             tokio::time::sleep(Duration::from_millis(cli.rpc_response_delay_ms)).await;
@@ -281,7 +277,7 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
                 Arc::new(
                     zenoh_zero_copy_core(cli)
                         .await?
-                        .with_selected_wire(StableContainerWireFormat),
+                        .into_stable_container_transport(cli.native.agreement()?.clone()),
                 ),
                 cli,
             )
@@ -314,7 +310,10 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
         #[cfg(feature = "iceoryx2-zero-copy")]
         (FlowTransport::Iceoryx2, FlowWireFormat::Native) => {
             run_zero_copy_transport(
-                Arc::new(Iceoryx2PubSub::new().with_selected_wire(StableContainerWireFormat)),
+                Arc::new(
+                    Iceoryx2PubSub::new()
+                        .into_stable_container_transport(cli.native.agreement()?.clone()),
+                ),
                 cli,
             )
             .await
@@ -339,7 +338,7 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
         (FlowTransport::Lola, FlowWireFormat::Native) => {
             let core = lola_transport(cli)?.zero_copy_core();
             run_zero_copy_transport(
-                Arc::new(core.with_selected_wire(StableContainerWireFormat)),
+                Arc::new(core.into_stable_container_transport(cli.native.agreement()?.clone())),
                 cli,
             )
             .await
@@ -376,7 +375,7 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
 )]
 async fn run_zero_copy_transport<T>(transport: Arc<T>, cli: &Cli) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
+    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
     T::Tx: UTxBuffer,
     T::Rx: UZeroCopyRxLease,
 {
@@ -491,7 +490,7 @@ async fn owned_transport(cli: &Cli) -> Result<Arc<dyn UOwnedTransport>, UStatus>
         (FlowTransport::Zenoh, FlowWireFormat::Native) => Ok(Arc::new(
             zenoh_owned_core(cli)
                 .await?
-                .with_selected_wire(StableContainerWireFormat),
+                .into_stable_container_transport(cli.native.agreement()?.clone()),
         )),
         #[cfg(feature = "zenoh-owned-frame")]
         (FlowTransport::Zenoh, FlowWireFormat::Protobuf) => Ok(Arc::new(
@@ -506,7 +505,7 @@ async fn owned_transport(cli: &Cli) -> Result<Arc<dyn UOwnedTransport>, UStatus>
         #[cfg(feature = "iceoryx2-owned-frame")]
         (FlowTransport::Iceoryx2, FlowWireFormat::Native) => Ok(Arc::new(
             BenchmarkOwnedIceoryx2Core::new(Iceoryx2PubSub::new())
-                .with_selected_wire(StableContainerWireFormat),
+                .into_stable_container_transport(cli.native.agreement()?.clone()),
         )),
         #[cfg(feature = "iceoryx2-owned-frame")]
         (FlowTransport::Iceoryx2, FlowWireFormat::Protobuf) => Ok(Arc::new(
@@ -538,7 +537,7 @@ fn lola_owned_transport(
     match cli.wire_format {
         FlowWireFormat::Native => Ok(Arc::new(
             LolaOwnedCore::new(transport.zero_copy_core())
-                .with_selected_wire(StableContainerWireFormat),
+                .into_stable_container_transport(cli.native.agreement()?.clone()),
         )),
         FlowWireFormat::Protobuf => Ok(Arc::new(
             LolaOwnedCore::new(transport.zero_copy_core()).with_selected_wire(ProtobufWire),
@@ -748,9 +747,9 @@ async fn receive_owned_payload(
     transport: &Arc<dyn UOwnedTransport>,
     source_filter: &UUri,
     sink_filter: Option<&UUri>,
-    timeout_ms: u64,
+    cli: &Cli,
 ) -> Result<Vec<u8>, UStatus> {
-    receive_owned_frame(transport, source_filter, sink_filter, timeout_ms)
+    receive_owned_frame(transport, source_filter, sink_filter, cli)
         .await
         .map(|frame| frame.payload_bytes().to_vec())
 }
@@ -759,9 +758,9 @@ async fn receive_owned_frame(
     transport: &Arc<dyn UOwnedTransport>,
     source_filter: &UUri,
     sink_filter: Option<&UUri>,
-    timeout_ms: u64,
+    cli: &Cli,
 ) -> Result<UOwnedFrame, UStatus> {
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    let deadline = Instant::now() + Duration::from_millis(cli.timeout_ms);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
@@ -776,7 +775,13 @@ async fn receive_owned_frame(
         )
         .await
         {
-            Ok(Ok(frame)) => return Ok(frame),
+            Ok(Ok(frame)) => {
+                if cli.wire_format == FlowWireFormat::Native {
+                    cli.native
+                        .verify_owned(frame.metadata(), frame.payload_bytes())?;
+                }
+                return Ok(frame);
+            }
             Ok(Err(error)) if error.code() == UCode::NotFound => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -886,7 +891,7 @@ async fn receive_zero_copy_payload<T>(
     timeout_ms: u64,
 ) -> Result<Vec<u8>, UStatus>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
+    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
     T::Rx: UZeroCopyRxLease,
 {
     receive_zero_copy_frame(transport, source_filter, sink_filter, timeout_ms)
@@ -909,7 +914,7 @@ async fn receive_zero_copy_frame<T>(
     timeout_ms: u64,
 ) -> Result<T::Rx, UStatus>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
+    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
     T::Rx: UZeroCopyRxLease,
 {
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
@@ -927,7 +932,16 @@ where
         )
         .await
         {
-            Ok(Ok(frame)) => return Ok(frame),
+            Ok(Ok(frame)) => {
+                if let Some(profile) = transport.native_profile() {
+                    NativeContext::from_agreement(profile.clone())?.verify_view(&frame)?;
+                } else if frame.metadata().native_type_token().is_some() {
+                    return Err(invalid_config(
+                        "native receive has no configured adapter agreement",
+                    ));
+                }
+                return Ok(frame);
+            }
             Ok(Err(error)) if error.code() == UCode::NotFound => {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -993,7 +1007,7 @@ fn response_metadata(
         .ok_or_else(|| invalid_config("request metadata missing sink"))?;
     let sink = request_metadata.source().clone();
     let mut builder = UFrameMetadata::response(source, sink, request_metadata.id().clone())
-        .with_payload_encoding(payload_encoding(cli.wire_format));
+        .with_payload_encoding(payload_encoding(cli)?);
     if let Some(priority) = request_metadata.priority() {
         builder = builder.with_priority(priority);
     }
@@ -1003,19 +1017,29 @@ fn response_metadata(
     builder
         .build()
         .map_err(|error| invalid_config(format!("failed to build response metadata: {error:?}")))
+        .and_then(|metadata| stamp_metadata(cli, metadata))
 }
 
 fn frame_metadata(cli: &Cli, message: UMessage) -> Result<UFrameMetadata, UStatus> {
     up_rust::frame::metadata::try_project_attributes_to_frame_metadata(
         message.attributes(),
-        Some(payload_encoding(cli.wire_format)),
+        Some(payload_encoding(cli)?),
     )
     .map_err(|error| invalid_config(format!("failed to build frame metadata: {error:?}")))
+    .and_then(|metadata| stamp_metadata(cli, metadata))
 }
 
-fn payload_encoding(wire_format: FlowWireFormat) -> PayloadEncoding {
-    match wire_format {
-        FlowWireFormat::Native => StableContainerPayload::<NativeFlowPayload>::encoding(),
+fn stamp_metadata(cli: &Cli, metadata: UFrameMetadata) -> Result<UFrameMetadata, UStatus> {
+    if cli.wire_format == FlowWireFormat::Native {
+        cli.native.stamp(metadata)
+    } else {
+        Ok(metadata)
+    }
+}
+
+fn payload_encoding(cli: &Cli) -> Result<PayloadEncoding, UStatus> {
+    Ok(match cli.wire_format {
+        FlowWireFormat::Native => cli.native.encoding()?,
         FlowWireFormat::Protobuf => ProtobufWire::encoding(),
         #[cfg(any(
             feature = "zenoh-zero-copy",
@@ -1035,7 +1059,7 @@ fn payload_encoding(wire_format: FlowWireFormat) -> PayloadEncoding {
             feature = "lola-owned-frame"
         )))]
         FlowWireFormat::Xcdrv2 => PayloadEncoding::RAW,
-    }
+    })
 }
 
 fn payload_bytes(cli: &Cli) -> Result<Vec<u8>, UStatus> {

@@ -1,4 +1,5 @@
 pub(crate) mod cli;
+pub(crate) mod native;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
 pub(crate) mod payloads;
 
@@ -57,9 +58,11 @@ impl UListener for ServiceResponseListener {
             panic!("No payload bytes");
         };
 
-        match HelloResponse::parse_from_bytes(&payload_bytes) {
-            Ok(hello_response) => debug!("Here we received response: {hello_response:?}"),
-            Err(err) => error!("Unable to parse into HelloResponse: {err:?}"),
+        if msg.payload_encoding() == Some(PayloadEncoding::PROTOBUF) {
+            match HelloResponse::parse_from_bytes(&payload_bytes) {
+                Ok(hello_response) => debug!("Here we received response: {hello_response:?}"),
+                Err(err) => error!("Unable to parse into HelloResponse: {err:?}"),
+            }
         }
         info!(
             "FLOW observed_payload_bytes={} role=classic_response_listener",
@@ -90,25 +93,36 @@ impl UListener for ServiceRequestResponder {
             panic!("No bytes available");
         };
         let (response_payload, response_encoding) =
-            match HelloRequest::parse_from_bytes(&payload_bytes) {
-                Ok(hello_request) => {
-                    debug!("hello_request: {hello_request:?}");
-                    let hello_response = HelloResponse {
-                        message: format!("The response to the request: {}", hello_request.name),
-                        ..Default::default()
-                    };
-                    (protobuf_payload(&hello_response), PayloadEncoding::PROTOBUF)
-                }
-                Err(err) => {
-                    error!("Unable to parse HelloRequest: {err:?}");
-                    let response_encoding = match message_payload_encoding(&msg) {
-                        Ok(encoding) => encoding,
-                        Err(error) => {
-                            error!("Unable to preserve request payload encoding: {error:?}");
-                            return;
-                        }
-                    };
-                    (payload_bytes.to_vec(), response_encoding)
+            if msg.payload_encoding() != Some(PayloadEncoding::PROTOBUF) {
+                let encoding = match message_payload_encoding(&msg) {
+                    Ok(encoding) => encoding,
+                    Err(error) => {
+                        error!("Unable to preserve request identity: {error}");
+                        return;
+                    }
+                };
+                (payload_bytes.to_vec(), encoding)
+            } else {
+                match HelloRequest::parse_from_bytes(&payload_bytes) {
+                    Ok(hello_request) => {
+                        debug!("hello_request: {hello_request:?}");
+                        let hello_response = HelloResponse {
+                            message: format!("The response to the request: {}", hello_request.name),
+                            ..Default::default()
+                        };
+                        (protobuf_payload(&hello_response), PayloadEncoding::PROTOBUF)
+                    }
+                    Err(err) => {
+                        error!("Unable to parse HelloRequest: {err:?}");
+                        let response_encoding = match message_payload_encoding(&msg) {
+                            Ok(encoding) => encoding,
+                            Err(error) => {
+                                error!("Unable to preserve request payload encoding: {error:?}");
+                                return;
+                            }
+                        };
+                        (payload_bytes.to_vec(), response_encoding)
+                    }
                 }
             };
 
@@ -127,8 +141,9 @@ pub(crate) fn native_message_payload_parts(
     magic: u32,
     sequence: u32,
     payload: &str,
+    context: &native::NativeContext,
 ) -> Result<(Vec<u8>, PayloadEncoding), UStatus> {
-    native_message_payload_parts_impl(magic, sequence, payload)
+    native_message_payload_parts_impl(magic, sequence, payload, context)
 }
 
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
@@ -137,12 +152,12 @@ fn native_message_payload_parts_impl(
     magic: u32,
     sequence: u32,
     payload: &str,
+    context: &native::NativeContext,
 ) -> Result<(Vec<u8>, PayloadEncoding), UStatus> {
-    use up_rust::StableContainerPayload;
-
+    let encoding = context.encoding()?;
     Ok((
         payloads::native_payload_bytes(magic, sequence, payload)?,
-        StableContainerPayload::<payloads::SelectedWireNativePayload>::encoding(),
+        encoding,
     ))
 }
 
@@ -152,6 +167,7 @@ fn native_message_payload_parts_impl(
     _magic: u32,
     _sequence: u32,
     _payload: &str,
+    _context: &native::NativeContext,
 ) -> Result<(Vec<u8>, PayloadEncoding), UStatus> {
     Err(invalid_argument(
         "native selected-wire payload examples require selected-wire-common and up-wire-xcdrv2 features",
@@ -174,11 +190,11 @@ fn xcdrv2_message_payload_parts_impl(
     source: String,
     payload: &str,
 ) -> Result<(Vec<u8>, PayloadEncoding), UStatus> {
-    use up_rust::PayloadCodec;
+    use up_rust::PayloadCodecIdentity;
 
     Ok((
         payloads::xcdrv2_payload_bytes(sequence, source, payload)?,
-        up_wire_xcdrv2::XcdrV2Wire::payload_encoding(),
+        up_wire_xcdrv2::XcdrV2Wire::encoding(),
     ))
 }
 

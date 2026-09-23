@@ -5,17 +5,32 @@ use std::mem::{self, MaybeUninit};
 use up_rust::{EncodePayload, StablePayloadInit, UCode, UStatus};
 use up_wire_xcdrv2::{XcdrV2Payload, XcdrV2Type};
 
-pub(crate) const EXAMPLE_PAYLOAD_CAPACITY: usize = 256;
+pub(crate) use configurable_streamer_wire_support::native_profile::{
+    SelectedWireNativePayload, PAYLOAD_CAPACITY as EXAMPLE_PAYLOAD_CAPACITY,
+};
+pub(crate) type NativeContext =
+    configurable_streamer_wire_support::native_profile::NativePayloadContext<
+        SelectedWireNativePayload,
+    >;
 
-#[repr(C)]
-#[derive(Clone, Copy, up_rust::StablePayload, up_rust::StablePayloadInit)]
-#[stable_payload(type_name = "org.eclipse.uprotocol.examples.SelectedWireNativePayloadV1")]
-pub(crate) struct SelectedWireNativePayload {
-    magic: u32,
-    sequence: u32,
-    payload_len: u32,
-    checksum: u32,
-    payload: [u8; EXAMPLE_PAYLOAD_CAPACITY],
+pub(crate) type NativeLoanVerifier<Rx> = fn(&NativeContext, &Rx) -> Result<(), UStatus>;
+
+/// Validate the worker's native representation using its configured adapter.
+/// Serialized routes remain opaque. No payload bytes or expected type fabricate
+/// the carried encoding/token pair.
+pub(crate) fn verify_received_frame(
+    transport: &impl up_rust::UHasWire,
+    frame: &impl up_rust::UFrameView,
+) -> Result<(), UStatus> {
+    if let Some(profile) = transport.native_profile() {
+        NativeContext::from_agreement(profile.clone())?.verify_view(frame)
+    } else if frame.metadata().native_type_token().is_some() {
+        Err(invalid_config(
+            "native receive has no configured adapter agreement",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, XcdrV2Type)]

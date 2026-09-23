@@ -15,7 +15,7 @@ mod common;
 
 use clap::{Parser, ValueEnum};
 use common::cli;
-use common::{native_message_payload_parts, xcdrv2_message_payload_parts, ServiceRequestResponder};
+use common::{xcdrv2_message_payload_parts, ServiceRequestResponder};
 use std::sync::Arc;
 use std::thread;
 use tracing::{info, trace, warn};
@@ -32,7 +32,6 @@ const DEFAULT_VSOMEIP_CONFIG: &str = concat!(
     "/vsomeip-configs/someip_server.json"
 );
 const DEFAULT_UENTITY_NUM: u32 = 0x4321;
-const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"SSRV");
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum Encoding {
@@ -44,6 +43,8 @@ enum Encoding {
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: common::native::NativeContext,
     /// Authority for the local service identity
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
@@ -71,7 +72,11 @@ struct Args {
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = common::native::NativeContext::load()?;
+    if args.encoding == Encoding::Native {
+        args.native.identity()?;
+    }
 
     info!("Started someip_server");
 
@@ -113,7 +118,7 @@ async fn main() -> Result<(), UStatus> {
         .register_listener(
             &source_filter,
             Some(&sink_filter),
-            service_request_responder.clone(),
+            common::native::listener(&args.native, service_request_responder.clone()),
         )
         .await?;
 
@@ -126,9 +131,7 @@ async fn main() -> Result<(), UStatus> {
 
 fn payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
     match args.encoding {
-        Encoding::Native => {
-            native_message_payload_parts(NATIVE_PAYLOAD_MAGIC, 0, "").map(|(_, encoding)| encoding)
-        }
+        Encoding::Native => args.native.encoding(),
         Encoding::Protobuf => Ok(PayloadEncoding::PROTOBUF),
         Encoding::Xcdrv2 => xcdrv2_message_payload_parts(0, args.uauthority.clone(), "")
             .map(|(_, encoding)| encoding),

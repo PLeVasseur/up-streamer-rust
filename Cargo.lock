@@ -637,6 +637,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-buffer"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
+dependencies = [
+ "hybrid-array",
+]
+
+[[package]]
 name = "bollard"
 version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -791,9 +800,9 @@ checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
 name = "chacha20"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -847,7 +856,7 @@ version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
 dependencies = [
- "crypto-common",
+ "crypto-common 0.1.7",
  "inout",
 ]
 
@@ -987,6 +996,9 @@ dependencies = [
 name = "configurable-streamer-wire-support"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+ "test-case",
  "up-rust",
  "up-streamer",
  "up-transport-dds",
@@ -1003,6 +1015,12 @@ name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
+
+[[package]]
+name = "const-oid"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 
 [[package]]
 name = "const-random"
@@ -1227,6 +1245,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto-common"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce6e4c961d6cd6c9a86db418387425e8bdeaf05b3c8bc1411e6dca4c252f1453"
+dependencies = [
+ "hybrid-array",
+]
+
+[[package]]
 name = "csv"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1399,7 +1426,7 @@ version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
- "const-oid",
+ "const-oid 0.9.6",
  "pem-rfc7468",
  "zeroize",
 ]
@@ -1433,10 +1460,21 @@ version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292"
 dependencies = [
- "block-buffer",
- "const-oid",
- "crypto-common",
+ "block-buffer 0.10.4",
+ "const-oid 0.9.6",
+ "crypto-common 0.1.7",
  "subtle",
+]
+
+[[package]]
+name = "digest"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
+dependencies = [
+ "block-buffer 0.12.1",
+ "const-oid 0.10.2",
+ "crypto-common 0.2.2",
 ]
 
 [[package]]
@@ -1640,6 +1678,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "clap",
+ "configurable-streamer-wire-support",
  "hello-world-protos",
  "json5",
  "protobuf",
@@ -2076,7 +2115,7 @@ version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c49c37c09c17a53d937dfbb742eb3a961d65a994e6bcdcf37e7399d0cc8ab5e"
 dependencies = [
- "digest",
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -2149,6 +2188,15 @@ name = "humantime"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
+
+[[package]]
+name = "hybrid-array"
+version = "0.4.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "27f864f10dfb56725ce5ce5472bc52252c8f93a4ab86327122cebf62c5f59a17"
+dependencies = [
+ "typenum",
+]
 
 [[package]]
 name = "hyper"
@@ -4500,8 +4548,8 @@ version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8573f03f5883dcaebdfcf4725caa1ecb9c15b2ef50c43a07b816e06799bb12d"
 dependencies = [
- "const-oid",
- "digest",
+ "const-oid 0.9.6",
+ "digest 0.10.7",
  "num-bigint-dig",
  "num-integer",
  "num-traits",
@@ -4572,9 +4620,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "log",
  "once_cell",
@@ -4913,7 +4961,7 @@ checksum = "a978451301f4db1d02937a4ab3ccce137717b81826e79b7d49ffe3244a13c3b8"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
- "digest",
+ "digest 0.10.7",
 ]
 
 [[package]]
@@ -4930,7 +4978,18 @@ checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.2.17",
- "digest",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.3.0",
+ "digest 0.11.3",
 ]
 
 [[package]]
@@ -4945,7 +5004,7 @@ version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77fd7028345d415a4034cf8777cd4f8ab1851274233b45f84e3d955502d93874"
 dependencies = [
- "digest",
+ "digest 0.10.7",
  "keccak",
 ]
 
@@ -5005,7 +5064,7 @@ version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77549399552de45a898a580c1b41d445bf730df867cc44e6c0233bbc4b8329de"
 dependencies = [
- "digest",
+ "digest 0.10.7",
  "rand_core 0.6.4",
 ]
 
@@ -5181,11 +5240,14 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "configurable-streamer-wire-support",
  "libc",
  "serde",
  "serde_json",
- "sha2",
+ "sha2 0.10.9",
  "signal-hook",
+ "test-case",
+ "up-rust",
 ]
 
 [[package]]
@@ -5368,6 +5430,39 @@ name = "termtree"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f50febec83f5ee1df3015341d8bd429f2d1cc62bcba7ea2076759d315084683"
+
+[[package]]
+name = "test-case"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "124953e7f67cb0b2fcfb87e899e4ae5a64fb68e2e160767933cc67b646fb0042"
+dependencies = [
+ "test-case-macros",
+]
+
+[[package]]
+name = "test-case-core"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd097615b407247e102046ba34426bb594923ab3554cf0f3cdfed050f1a5a3e8"
+dependencies = [
+ "cfg-if",
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
+
+[[package]]
+name = "test-case-macros"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4ce35ece947bccac166e1ded639133827a953f69a48ba134d17f91108333082"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+ "test-case-core",
+]
 
 [[package]]
 name = "testcontainers"
@@ -6080,7 +6175,7 @@ dependencies = [
 [[package]]
 name = "up-rust"
 version = "0.10.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-rust.git?rev=c1d13ca31859b9cc0086ef5d4b953907f24094ec#c1d13ca31859b9cc0086ef5d4b953907f24094ec"
+source = "git+https://github.com/PLeVasseur/up-rust.git?rev=3fcaa348455d167b9092fd71eaa7e7d1eed88051#3fcaa348455d167b9092fd71eaa7e7d1eed88051"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6090,8 +6185,8 @@ dependencies = [
  "protobuf-codegen",
  "protoc-bin-vendored",
  "rand 0.10.2",
- "regex",
- "thiserror 1.0.69",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
  "tokio",
  "tracing",
  "up-rust-macros",
@@ -6102,7 +6197,7 @@ dependencies = [
 [[package]]
 name = "up-rust-macros"
 version = "0.10.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-rust.git?rev=c1d13ca31859b9cc0086ef5d4b953907f24094ec#c1d13ca31859b9cc0086ef5d4b953907f24094ec"
+source = "git+https://github.com/PLeVasseur/up-rust.git?rev=3fcaa348455d167b9092fd71eaa7e7d1eed88051#3fcaa348455d167b9092fd71eaa7e7d1eed88051"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6122,6 +6217,8 @@ dependencies = [
  "futures",
  "integration-test-utils",
  "protobuf",
+ "serde_json",
+ "test-case",
  "tokio",
  "tokio-condvar",
  "tracing",
@@ -6134,7 +6231,7 @@ dependencies = [
 [[package]]
 name = "up-transport-dds"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-dds-rust.git?rev=c64ae30e29d0bf6f7a6c7638e4009eb8dd1b8227#c64ae30e29d0bf6f7a6c7638e4009eb8dd1b8227"
+source = "git+https://github.com/PLeVasseur/up-transport-dds-rust.git?rev=c7f7f5abbca279b216ad2786ce8bbc75aa7c4fb6#c7f7f5abbca279b216ad2786ce8bbc75aa7c4fb6"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6150,7 +6247,7 @@ dependencies = [
 [[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=df6fd48a285d5009626cf729bcf32e46f6be1182#df6fd48a285d5009626cf729bcf32e46f6be1182"
+source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=7196dc4811f23c10061646fbc0fe2955d3a03792#7196dc4811f23c10061646fbc0fe2955d3a03792"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6166,7 +6263,7 @@ dependencies = [
 [[package]]
 name = "up-transport-lola-rust"
 version = "0.2.0"
-source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=4c4608b817517dea96801c4f797ada45e9532b8a#4c4608b817517dea96801c4f797ada45e9532b8a"
+source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=ace28a589676f0e02ee5d42a21137e780820105e#ace28a589676f0e02ee5d42a21137e780820105e"
 dependencies = [
  "async-trait",
  "tokio",
@@ -6176,7 +6273,7 @@ dependencies = [
 [[package]]
 name = "up-transport-mqtt5"
 version = "0.4.0"
-source = "git+https://github.com/PLeVasseur/up-client-mqtt5-rust.git?rev=e5e712ef65ef0f18140278176b6900a1dd359ad2#e5e712ef65ef0f18140278176b6900a1dd359ad2"
+source = "git+https://github.com/PLeVasseur/up-client-mqtt5-rust.git?rev=64fb54d627387218a3b03df32b105ff0bd5c1dd4#64fb54d627387218a3b03df32b105ff0bd5c1dd4"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -6197,7 +6294,7 @@ dependencies = [
 [[package]]
 name = "up-transport-vsomeip"
 version = "0.6.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=5ca969eaa3ddb085b5a7ee20e51111d2cec72111#5ca969eaa3ddb085b5a7ee20e51111d2cec72111"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=163d2700dea9f35dfe4c8c7e3eabc6ccb7bda3b7#163d2700dea9f35dfe4c8c7e3eabc6ccb7bda3b7"
 dependencies = [
  "async-trait",
  "bimap",
@@ -6218,7 +6315,7 @@ dependencies = [
 [[package]]
 name = "up-transport-zenoh"
 version = "0.9.0"
-source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=3e2a8e494be9196f9ea6866de8076ee48acc6fcf#3e2a8e494be9196f9ea6866de8076ee48acc6fcf"
+source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=47a3cc4d2f16ed0a927831a47bb1fd96bbb0b8eb#47a3cc4d2f16ed0a927831a47bb1fd96bbb0b8eb"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -6241,7 +6338,7 @@ dependencies = [
 [[package]]
 name = "up-wire-arrow"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-wire-arrow-rust.git?rev=073da57dec677497285fb40250eecc8181ac506b#073da57dec677497285fb40250eecc8181ac506b"
+source = "git+https://github.com/PLeVasseur/up-wire-arrow-rust.git?rev=0e46c84b0d6f3c2995dd57a9cc5adc81e3811d73#0e46c84b0d6f3c2995dd57a9cc5adc81e3811d73"
 dependencies = [
  "arrow-array",
  "arrow-ipc",
@@ -6253,7 +6350,7 @@ dependencies = [
 [[package]]
 name = "up-wire-omgidl"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-wire-omgidl-rust.git?rev=266466f2a72948ed283e63c298e2e621aee53d95#266466f2a72948ed283e63c298e2e621aee53d95"
+source = "git+https://github.com/PLeVasseur/up-wire-omgidl-rust.git?rev=b80726969204d09f5823c8ddef74d8d60b8df33c#b80726969204d09f5823c8ddef74d8d60b8df33c"
 dependencies = [
  "bytes",
  "dust_dds",
@@ -6263,7 +6360,7 @@ dependencies = [
 [[package]]
 name = "up-wire-xcdrv2"
 version = "0.0.0"
-source = "git+https://github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=78c7002b0a6257e27165a059e04398732f8baf26#78c7002b0a6257e27165a059e04398732f8baf26"
+source = "git+https://github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=d0377c6bf75091eb66699955e5068148a8c76311#d0377c6bf75091eb66699955e5068148a8c76311"
 dependencies = [
  "up-rust",
  "up-wire-xcdrv2-macros",
@@ -6272,7 +6369,7 @@ dependencies = [
 [[package]]
 name = "up-wire-xcdrv2-macros"
 version = "0.0.0"
-source = "git+https://github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=78c7002b0a6257e27165a059e04398732f8baf26#78c7002b0a6257e27165a059e04398732f8baf26"
+source = "git+https://github.com/PLeVasseur/up-wire-xcdrv2-rust.git?rev=d0377c6bf75091eb66699955e5068148a8c76311#d0377c6bf75091eb66699955e5068148a8c76311"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6442,7 +6539,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 [[package]]
 name = "vsomeip-proc-macro"
 version = "0.6.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=5ca969eaa3ddb085b5a7ee20e51111d2cec72111#5ca969eaa3ddb085b5a7ee20e51111d2cec72111"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=163d2700dea9f35dfe4c8c7e3eabc6ccb7bda3b7#163d2700dea9f35dfe4c8c7e3eabc6ccb7bda3b7"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6453,7 +6550,7 @@ dependencies = [
 [[package]]
 name = "vsomeip-sys"
 version = "0.6.0-SNAPSHOT"
-source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=5ca969eaa3ddb085b5a7ee20e51111d2cec72111#5ca969eaa3ddb085b5a7ee20e51111d2cec72111"
+source = "git+https://github.com/PLeVasseur/up-client-vsomeip-rust.git?rev=163d2700dea9f35dfe4c8c7e3eabc6ccb7bda3b7#163d2700dea9f35dfe4c8c7e3eabc6ccb7bda3b7"
 dependencies = [
  "autocxx",
  "autocxx-build",

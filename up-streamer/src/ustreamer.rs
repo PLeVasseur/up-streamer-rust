@@ -721,6 +721,10 @@ impl UStreamer {
         in_ep: &Endpoint,
         out_ep: &Endpoint,
     ) -> Result<(), UStatus> {
+        crate::endpoint::native_route_agreement(
+            in_ep.native_profile.as_ref(),
+            out_ep.native_profile.as_ref(),
+        )?;
         let route_label = Self::route_label(in_ep, out_ep);
         debug!(
             event = events::ROUTE_ADD_START,
@@ -1168,6 +1172,10 @@ impl UStreamer {
             ));
         }
 
+        crate::endpoint::native_route_agreement(
+            ingress.native_profile.as_ref(),
+            egress.native_profile.as_ref(),
+        )?;
         let route_key = OwnedRouteKey::new(ingress, egress);
         if self.owned_routes.contains_key(&route_key) {
             return Err(UStatus::fail_with_code(
@@ -1243,6 +1251,10 @@ impl UStreamer {
                 "ingress and egress authorities must differ",
             ));
         }
+        let native_profile = crate::endpoint::native_route_agreement(
+            ingress.native_profile.as_ref(),
+            egress.native_profile.as_ref(),
+        )?;
         let route_key = AdapterRouteKey::classic_to_owned(ingress, egress);
         if self.classic_to_owned_routes.contains_key(&route_key) {
             return Err(UStatus::fail_with_code(
@@ -1282,6 +1294,7 @@ impl UStreamer {
             route_label,
             egress.clone(),
             rx,
+            native_profile,
         ));
         self.classic_to_owned_routes.insert(
             route_key,
@@ -1314,6 +1327,10 @@ impl UStreamer {
                 "ingress and egress authorities must differ",
             ));
         }
+        let native_profile = crate::endpoint::native_route_agreement(
+            ingress.native_profile.as_ref(),
+            egress.native_profile.as_ref(),
+        )?;
         let route_key = AdapterRouteKey::owned_to_classic(ingress, egress);
         if self.owned_to_classic_routes.contains_key(&route_key) {
             return Err(UStatus::fail_with_code(
@@ -1349,6 +1366,7 @@ impl UStreamer {
             route_label,
             egress.clone(),
             rx,
+            native_profile,
         ));
         self.owned_to_classic_routes.insert(
             route_key,
@@ -1388,6 +1406,10 @@ impl UStreamer {
                 "ingress and egress authorities must differ",
             ));
         }
+        let native_profile = crate::endpoint::native_route_agreement(
+            ingress.native_profile.as_ref(),
+            egress.native_profile.as_ref(),
+        )?;
         let route_key = AdapterRouteKey::classic_to_copy_minimized(ingress, egress);
         if self
             .classic_to_copy_minimized_routes
@@ -1431,6 +1453,7 @@ impl UStreamer {
             route_label.clone(),
             message_rx,
             frame_tx,
+            native_profile,
         ));
         let dispatch_task = tokio::spawn(Self::copy_minimized_dispatch_loop(
             route_label,
@@ -1477,6 +1500,10 @@ impl UStreamer {
                 "ingress and egress authorities must differ",
             ));
         }
+        let native_profile = crate::endpoint::native_route_agreement(
+            ingress.native_profile.as_ref(),
+            egress.native_profile.as_ref(),
+        )?;
         let route_key = AdapterRouteKey::copy_minimized_to_classic(ingress, egress);
         if self
             .copy_minimized_to_classic_routes
@@ -1523,6 +1550,7 @@ impl UStreamer {
             route_label,
             egress.clone(),
             rx,
+            native_profile,
         ));
         let binding = CopyMinimizedToClassicRouteBinding {
             _ingress: ingress.clone(),
@@ -1536,6 +1564,35 @@ impl UStreamer {
         Ok(())
     }
 
+    #[cfg(feature = "owned-frame-transport")]
+    fn trace_native_projection(
+        route_label: &str,
+        direction: &str,
+        profile: Option<&up_rust::NativeProfileAgreement>,
+        encoding: Option<up_rust::PayloadEncoding>,
+        token: Option<up_rust::NativeTypeToken>,
+    ) {
+        if !tracing::enabled!(tracing::Level::INFO) {
+            return;
+        }
+        let (Some(profile), Some(encoding), Some(token)) = (profile, encoding, token) else {
+            return;
+        };
+        let profile = profile.profile();
+        let evidence = serde_json::json!({
+            "route": route_label,
+            "direction": direction,
+            "domain": profile.domain(),
+            "version": profile.version(),
+            "profile_digest": profile.content_digest(),
+            "encoding_id": encoding.id(),
+            "native_type_token": token.as_u32(),
+            "token_before": (direction == "frame_to_classic").then_some(token.as_u32()),
+            "token_after": (direction == "classic_to_frame").then_some(token.as_u32()),
+        });
+        tracing::info!("NATIVE_PROJECTION_VERIFIED {evidence}");
+    }
+
     /// Projects classic messages into owned frames, feeding a CM egress loop.
     #[cfg(all(
         feature = "owned-frame-transport",
@@ -1545,22 +1602,26 @@ impl UStreamer {
         route_label: String,
         mut rx: mpsc::Receiver<UMessage>,
         tx: mpsc::Sender<UOwnedFrame>,
+        native_profile: Option<up_rust::NativeProfileAgreement>,
     ) {
         while let Some(message) = rx.recv().await {
-            let metadata =
-                match up_rust::frame::metadata::try_project_umessage_to_frame_metadata(&message) {
-                    Ok(metadata) => metadata,
-                    Err(error) => {
-                        warn!(
-                            event = "classic_ingress_unprojectable",
-                            component = COMPONENT,
-                            route_label = route_label.as_str(),
-                            err = %error,
-                            "classic message not projectable to frame metadata; dropped loudly"
-                        );
-                        continue;
-                    }
-                };
+            let projection = match native_profile.as_ref() {
+                Some(profile) => up_rust::frame::metadata::try_project_umessage_to_frame_metadata_with_native_profile(&message, profile),
+                None => up_rust::frame::metadata::try_project_umessage_to_frame_metadata(&message),
+            };
+            let metadata = match projection {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    warn!(
+                        event = "classic_ingress_unprojectable",
+                        component = COMPONENT,
+                        route_label = route_label.as_str(),
+                        err = %error,
+                        "classic message not projectable to frame metadata; dropped loudly"
+                    );
+                    continue;
+                }
+            };
             let payload = message.payload();
             let frame = match UOwnedFrame::new(metadata, payload) {
                 Ok(frame) => frame,
@@ -1575,6 +1636,13 @@ impl UStreamer {
                     continue;
                 }
             };
+            Self::trace_native_projection(
+                &route_label,
+                "classic_to_frame",
+                native_profile.as_ref(),
+                frame.metadata().payload_encoding().copied(),
+                frame.metadata().native_type_token(),
+            );
             if tx.send(frame).await.is_err() {
                 return;
             }
@@ -1589,10 +1657,24 @@ impl UStreamer {
         route_label: String,
         egress: Endpoint,
         mut rx: mpsc::Receiver<Rx>,
+        native_profile: Option<up_rust::NativeProfileAgreement>,
     ) where
         Rx: UZeroCopyRxLease + Send + 'static,
     {
         while let Some(lease) = rx.recv().await {
+            if let (Some(retained), Some(agreed)) =
+                (lease.native_profile(), native_profile.as_ref())
+            {
+                if retained.profile() != agreed.profile() {
+                    warn!(
+                        event = "native_profile_generation_mismatch",
+                        component = COMPONENT,
+                        route_label = route_label.as_str(),
+                        "received frame belongs to another native profile generation"
+                    );
+                    continue;
+                }
+            }
             let frame = match Self::owned_frame_from_zero_copy(&lease) {
                 Ok(frame) => frame,
                 Err(error) => {
@@ -1608,20 +1690,38 @@ impl UStreamer {
             };
             let payload = frame.payload().cloned();
             let metadata = frame.into_metadata();
-            let message =
-                match up_rust::frame::metadata::try_project_frame_to_umessage(metadata, payload) {
-                    Ok(message) => message,
-                    Err(error) => {
-                        warn!(
-                            event = "classic_egress_unrepresentable",
-                            component = COMPONENT,
-                            route_label = route_label.as_str(),
-                            err = %error,
-                            "frame not representable as classic message; dropped loudly"
-                        );
-                        continue;
-                    }
-                };
+            let identity = (
+                metadata.payload_encoding().copied(),
+                metadata.native_type_token(),
+            );
+            let projection = match native_profile.as_ref() {
+                Some(profile) => {
+                    up_rust::frame::metadata::try_project_frame_to_umessage_with_native_profile(
+                        metadata, payload, profile,
+                    )
+                }
+                None => up_rust::frame::metadata::try_project_frame_to_umessage(metadata, payload),
+            };
+            let message = match projection {
+                Ok(message) => message,
+                Err(error) => {
+                    warn!(
+                        event = "classic_egress_unrepresentable",
+                        component = COMPONENT,
+                        route_label = route_label.as_str(),
+                        err = %error,
+                        "frame not representable as classic message; dropped loudly"
+                    );
+                    continue;
+                }
+            };
+            Self::trace_native_projection(
+                &route_label,
+                "frame_to_classic",
+                native_profile.as_ref(),
+                identity.0,
+                identity.1,
+            );
             if let Err(error) = egress.transport.send(message).await {
                 warn!(
                     event = "copy_minimized_to_classic_egress_send_failed",
@@ -1640,22 +1740,26 @@ impl UStreamer {
         route_label: String,
         egress: OwnedFrameEndpoint,
         mut rx: mpsc::Receiver<UMessage>,
+        native_profile: Option<up_rust::NativeProfileAgreement>,
     ) {
         while let Some(message) = rx.recv().await {
-            let metadata =
-                match up_rust::frame::metadata::try_project_umessage_to_frame_metadata(&message) {
-                    Ok(metadata) => metadata,
-                    Err(error) => {
-                        warn!(
-                            event = "classic_ingress_unprojectable",
-                            component = COMPONENT,
-                            route_label = route_label.as_str(),
-                            err = %error,
-                            "classic message not projectable to frame metadata; dropped loudly"
-                        );
-                        continue;
-                    }
-                };
+            let projection = match native_profile.as_ref() {
+                Some(profile) => up_rust::frame::metadata::try_project_umessage_to_frame_metadata_with_native_profile(&message, profile),
+                None => up_rust::frame::metadata::try_project_umessage_to_frame_metadata(&message),
+            };
+            let metadata = match projection {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    warn!(
+                        event = "classic_ingress_unprojectable",
+                        component = COMPONENT,
+                        route_label = route_label.as_str(),
+                        err = %error,
+                        "classic message not projectable to frame metadata; dropped loudly"
+                    );
+                    continue;
+                }
+            };
             let payload = message.payload();
             let frame = match UOwnedFrame::new(metadata, payload) {
                 Ok(frame) => frame,
@@ -1670,6 +1774,13 @@ impl UStreamer {
                     continue;
                 }
             };
+            Self::trace_native_projection(
+                &route_label,
+                "classic_to_frame",
+                native_profile.as_ref(),
+                frame.metadata().payload_encoding().copied(),
+                frame.metadata().native_type_token(),
+            );
             if let Err(error) = egress.transport.send_owned(frame).await {
                 warn!(
                     event = "classic_to_owned_egress_send_failed",
@@ -1688,24 +1799,43 @@ impl UStreamer {
         route_label: String,
         egress: Endpoint,
         mut rx: mpsc::Receiver<UOwnedFrame>,
+        native_profile: Option<up_rust::NativeProfileAgreement>,
     ) {
         while let Some(frame) = rx.recv().await {
             let payload = frame.payload().cloned();
             let metadata = frame.into_metadata();
-            let message =
-                match up_rust::frame::metadata::try_project_frame_to_umessage(metadata, payload) {
-                    Ok(message) => message,
-                    Err(error) => {
-                        warn!(
-                            event = "classic_egress_unrepresentable",
-                            component = COMPONENT,
-                            route_label = route_label.as_str(),
-                            err = %error,
-                            "frame not representable as classic message; dropped loudly"
-                        );
-                        continue;
-                    }
-                };
+            let identity = (
+                metadata.payload_encoding().copied(),
+                metadata.native_type_token(),
+            );
+            let projection = match native_profile.as_ref() {
+                Some(profile) => {
+                    up_rust::frame::metadata::try_project_frame_to_umessage_with_native_profile(
+                        metadata, payload, profile,
+                    )
+                }
+                None => up_rust::frame::metadata::try_project_frame_to_umessage(metadata, payload),
+            };
+            let message = match projection {
+                Ok(message) => message,
+                Err(error) => {
+                    warn!(
+                        event = "classic_egress_unrepresentable",
+                        component = COMPONENT,
+                        route_label = route_label.as_str(),
+                        err = %error,
+                        "frame not representable as classic message; dropped loudly"
+                    );
+                    continue;
+                }
+            };
+            Self::trace_native_projection(
+                &route_label,
+                "frame_to_classic",
+                native_profile.as_ref(),
+                identity.0,
+                identity.1,
+            );
             if let Err(error) = egress.transport.send(message).await {
                 warn!(
                     event = "owned_to_classic_egress_send_failed",
@@ -1815,6 +1945,10 @@ impl UStreamer {
             ));
         }
 
+        crate::endpoint::native_route_agreement(
+            ingress.native_profile.as_ref(),
+            egress.native_profile.as_ref(),
+        )?;
         let route_key = ZeroCopyRouteKey::new(ingress, egress);
         if self.copy_minimized_routes.contains_key(&route_key) {
             return Err(UStatus::fail_with_code(
@@ -1911,6 +2045,27 @@ impl UStreamer {
             ));
         }
 
+        crate::endpoint::native_route_agreement(
+            ingress.native_profile.as_ref(),
+            egress.native_profile.as_ref(),
+        )?;
+        for (declared, configured) in [
+            (
+                ingress.native_profile.as_deref(),
+                ingress.transport.native_profile(),
+            ),
+            (
+                egress.native_profile.as_deref(),
+                egress.transport.native_profile(),
+            ),
+        ] {
+            if declared != configured.map(up_rust::NativeProfileAgreement::profile) {
+                return Err(UStatus::fail_with_code(
+                    UCode::InvalidArgument,
+                    "selected-wire endpoint declaration differs from its adapter native profile",
+                ));
+            }
+        }
         let route_key = ZeroCopyRouteKey::new(ingress, egress);
         if self.copy_minimized_routes.contains_key(&route_key) {
             return Err(UStatus::fail_with_code(
@@ -2010,6 +2165,10 @@ impl UStreamer {
             ));
         }
 
+        crate::endpoint::native_route_agreement(
+            ingress.native_profile.as_ref(),
+            egress.native_profile.as_ref(),
+        )?;
         let route_key = AdapterRouteKey::owned_to_copy_minimized(ingress, egress);
         if self.owned_to_copy_minimized_routes.contains_key(&route_key) {
             return Err(UStatus::fail_with_code(
@@ -2090,6 +2249,10 @@ impl UStreamer {
             ));
         }
 
+        crate::endpoint::native_route_agreement(
+            ingress.native_profile.as_ref(),
+            egress.native_profile.as_ref(),
+        )?;
         let route_key = AdapterRouteKey::copy_minimized_to_owned(ingress, egress);
         if self.copy_minimized_to_owned_routes.contains_key(&route_key) {
             return Err(UStatus::fail_with_code(

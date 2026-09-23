@@ -33,12 +33,17 @@ lola-owned-frame = ["owned-frame-transport", "dep:up-transport-lola-rust", "up-t
 dds-owned-frame = ["owned-frame-transport", "dep:up-transport-dds"]
 
 [dependencies]
-up-rust = { workspace = true }
+up-rust = { workspace = true, features = ["zero-copy-transport", "selected-wire-user-api"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
 up-streamer = { path = "../../up-streamer", features = ["experimental-copy-minimized-routing"] }
 up-transport-zenoh = { workspace = true, optional = true }
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "4c4608b817517dea96801c4f797ada45e9532b8a", optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "ace28a589676f0e02ee5d42a21137e780820105e", optional = true }
 up-transport-dds = { workspace = true, optional = true }
 up-wire-arrow = { workspace = true, optional = true }
 up-wire-omgidl = { workspace = true, optional = true }
 up-wire-xcdrv2 = { workspace = true, optional = true }
+
+[dev-dependencies]
+test-case = "3.3"

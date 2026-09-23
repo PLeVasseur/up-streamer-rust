@@ -35,6 +35,8 @@ const DEFAULT_BROKER_URI: &str = "localhost:1883";
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: common::native::NativeContext,
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
     #[arg(long, default_value = DEFAULT_UENTITY)]
@@ -58,7 +60,8 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = common::native::NativeContext::load()?;
     info!("Started mqtt_notifyee.");
 
     let uentity = cli::parse_u32_status("--uentity", &args.uentity)?;
@@ -89,7 +92,8 @@ async fn main() -> Result<(), UStatus> {
     mqtt5_transport.connect().await?;
     let notifyee: Arc<dyn UTransport> = Arc::new(mqtt5_transport);
 
-    let listener: Arc<dyn UListener> = Arc::new(PublishReceiver);
+    let listener: Arc<dyn UListener> =
+        common::native::listener(&args.native, Arc::new(PublishReceiver));
     notifyee
         .register_listener(&source_filter, Some(&local_uuri), listener)
         .await?;

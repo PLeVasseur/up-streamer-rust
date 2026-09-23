@@ -14,9 +14,10 @@
 mod config;
 
 use crate::config::{
-    Config, DdsReliability, DdsTransport, EndpointConfig, ForwardingRouteConfig, RoutingMode,
-    SubscriptionProviderMode,
+    Config, EndpointConfig, ForwardingRouteConfig, RoutingMode, SubscriptionProviderMode,
 };
+#[cfg(feature = "dds-transport")]
+use crate::config::{DdsReliability, DdsTransport};
 use clap::Parser;
 #[cfg(feature = "owned-frame-transport")]
 use configurable_streamer_wire_support::RouteOwnedEndpoint;
@@ -113,8 +114,17 @@ fn invalid_config(message: impl Into<String>) -> UStatus {
 fn insert_configured_endpoint(
     endpoints: &mut HashMap<String, ConfiguredEndpoint>,
     endpoint_config: &EndpointConfig,
-    endpoint: ConfiguredEndpoint,
+    mut endpoint: ConfiguredEndpoint,
 ) -> Result<(), UStatus> {
+    if let Some(profile) = endpoint_config.native_profile.as_ref() {
+        endpoint.standard = endpoint
+            .standard
+            .take()
+            .map(|endpoint| endpoint.with_native_profile(Arc::new(profile.profile().clone())));
+        info!(event = "native_profile_configured", endpoint = endpoint_config.endpoint.as_str(),
+            domain = profile.profile().domain(), version = profile.profile().version(),
+            content_digest = ?profile.profile().content_digest(), "loaded matching native profile generation");
+    }
     if endpoints
         .insert(endpoint_config.endpoint.clone(), endpoint)
         .is_some()
@@ -271,6 +281,7 @@ fn collect_route_wire_formats(
     Ok(route_wire_formats)
 }
 
+#[cfg(feature = "vsomeip-transport")]
 fn resolve_payload_encoding(
     endpoint_config: &EndpointConfig,
 ) -> Result<Option<up_rust::PayloadEncoding>, UStatus> {
@@ -286,6 +297,7 @@ fn resolve_payload_encoding(
         })
 }
 
+#[cfg(feature = "vsomeip-transport")]
 fn resolve_vsomeip_payload_encoding(
     endpoint_configs: &[EndpointConfig],
 ) -> Result<up_rust::PayloadEncoding, UStatus> {
@@ -432,7 +444,8 @@ async fn zenoh_route_wire_endpoints(
                     &endpoint_config.authority,
                     core,
                     *route_wire_format,
-                ),
+                    endpoint_config.native_profile.as_ref(),
+                )?,
             );
         }
     }
@@ -489,7 +502,8 @@ async fn zenoh_owned_frame_endpoints(
                     &endpoint_config.authority,
                     core,
                     *route_wire_format,
-                ),
+                    endpoint_config.native_profile.as_ref(),
+                )?,
             );
         }
     }
@@ -861,7 +875,8 @@ fn register_dds_endpoints(
                                 &endpoint_config.authority,
                                 transport,
                                 *format,
-                            ),
+                                endpoint_config.native_profile.as_ref(),
+                            )?,
                         );
                     }
                 }
@@ -898,7 +913,8 @@ fn register_dds_endpoints(
                                 &endpoint_config.authority,
                                 core,
                                 *format,
-                            ),
+                                endpoint_config.native_profile.as_ref(),
+                            )?,
                         );
                     }
                 }
@@ -969,7 +985,8 @@ fn register_iceoryx2_endpoints(
                             &endpoint_config.authority,
                             transport.clone(),
                             *route_wire_format,
-                        ),
+                            endpoint_config.native_profile.as_ref(),
+                        )?,
                     );
                 }
             }
@@ -989,7 +1006,8 @@ fn register_iceoryx2_endpoints(
                                 transport.clone(),
                             ),
                             *route_wire_format,
-                        ),
+                            endpoint_config.native_profile.as_ref(),
+                        )?,
                     );
                 }
             }
@@ -1052,7 +1070,8 @@ fn register_lola_endpoints(
                             &endpoint_config.authority,
                             transport.zero_copy_core(),
                             *route_wire_format,
-                        ),
+                            endpoint_config.native_profile.as_ref(),
+                        )?,
                     );
                 }
             }
@@ -1070,7 +1089,8 @@ fn register_lola_endpoints(
                             &endpoint_config.authority,
                             up_transport_lola_rust::LolaOwnedCore::new(transport.zero_copy_core()),
                             *route_wire_format,
-                        ),
+                            endpoint_config.native_profile.as_ref(),
+                        )?,
                     );
                 }
             }
@@ -1939,7 +1959,7 @@ async fn main() -> Result<(), UStatus> {
         feature = "lola-owned-frame"
     ))]
     let config_dir = config_parent(&args.config);
-    let mut file = File::open(args.config)
+    let mut file = File::open(&args.config)
         .map_err(|e| UStatus::fail_with_code(UCode::NotFound, format!("File not found: {e:?}")))?;
     let mut contents = String::new();
     file.read_to_string(&mut contents).map_err(|e| {
@@ -1955,6 +1975,11 @@ async fn main() -> Result<(), UStatus> {
             format!("Unable to parse config file: {e:?}"),
         )
     })?;
+    config.load_native_profiles(
+        std::path::Path::new(&args.config)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(".")),
+    )?;
     #[cfg(any(
         feature = "experimental-copy-minimized-routing",
         feature = "owned-frame-transport"

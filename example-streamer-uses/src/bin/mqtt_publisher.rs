@@ -17,6 +17,7 @@ use chrono::Local;
 use chrono::Timelike;
 use clap::{Parser, ValueEnum};
 use common::cli;
+use common::native::NativeContext;
 use common::{native_message_payload_parts, protobuf_payload, xcdrv2_message_payload_parts};
 use hello_world_protos::hello_world_topics::Timer;
 use hello_world_protos::timeofday::TimeOfDay;
@@ -43,6 +44,8 @@ enum Encoding {
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: NativeContext,
     /// Authority for the local publisher identity and publish source URI
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
@@ -76,7 +79,11 @@ struct Args {
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = NativeContext::load()?;
+    if args.encoding == Encoding::Native {
+        args.native.identity()?;
+    }
 
     info!("Started mqtt_publisher.");
 
@@ -156,9 +163,12 @@ fn selected_payload_parts(
     sequence: u32,
 ) -> Result<(Vec<u8>, up_rust::PayloadEncoding), UStatus> {
     match args.encoding {
-        Encoding::Native => {
-            native_message_payload_parts(NATIVE_PAYLOAD_MAGIC, sequence, &args.payload)
-        }
+        Encoding::Native => native_message_payload_parts(
+            NATIVE_PAYLOAD_MAGIC,
+            sequence,
+            &args.payload,
+            &args.native,
+        ),
         Encoding::Protobuf => unreachable!("protobuf is handled by the classic protobuf path"),
         Encoding::Xcdrv2 => {
             xcdrv2_message_payload_parts(sequence, args.uauthority.clone(), &args.payload)

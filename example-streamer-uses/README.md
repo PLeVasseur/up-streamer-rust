@@ -107,6 +107,22 @@ Deterministic sender controls (active client/publisher binaries only):
 
 Running with no extra flags keeps prior behavior (defaults are aligned with previous constants).
 
+## Native payload configuration
+
+Native workers require a loaded local/peer agreement. Set both
+`UPROTOCOL_NATIVE_PROFILE` and `UPROTOCOL_NATIVE_PEER_PROFILE` to the complete
+deployment documents before starting a native sender or receiver. These inputs
+are read once at startup; an absent/mismatched native agreement is an error, not
+an inferred encoding or automatic ID0 fallback. The selected-wire build features
+provide the shared native fixture catalog.
+
+See [native deployment profiles](../configurable-streamer/README.md#native-deployment-profiles)
+for generation, private allocations and endpoint configuration. The matrix
+orchestrator supplies these paths for native rows and requires real sink identity
+verification evidence. Byte-copy receive paths check the full identity and field
+representation; typed loan paths additionally use the SDK's alignment, lifetime
+and provenance gate.
+
 ## DDS roles
 
 `dds_publisher`, `dds_subscriber`, `dds_notifier`, `dds_notifyee`, `dds_client`,

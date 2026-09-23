@@ -14,6 +14,11 @@
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use clap::Parser;
+use configurable_streamer_wire_support::native_profile::{
+    matrix_table_profile_document, NativeProfileDocument, NativeVerification,
+    SelectedWireNativePayload, LOCAL_PROFILE_ENV, MATRIX_SELECTED_NATIVE_ID,
+    NATIVE_VERIFIED_MARKER, PEER_PROFILE_ENV,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -33,6 +38,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 use std::{io::ErrorKind, thread};
+use up_rust::StablePayload;
 
 const AUTHORITY_A: &str = "authority-a";
 const AUTHORITY_B: &str = "authority-b";
@@ -69,7 +75,7 @@ const DDS_MIN_UNPRIVILEGED_PORT: i32 = 1_024;
 const DDS_PORT_MODULUS: i32 = 65_536;
 const SUMMARY_SCHEMA_VERSION: &str = "6.0";
 const CHECKPOINT_SCHEMA_VERSION: &str = "1.0";
-const BUNDLE_SCHEMA_VERSION: &str = "3.0";
+const BUNDLE_SCHEMA_VERSION: &str = "4.0";
 const SHARD_MANIFEST_SCHEMA_VERSION: &str = "2.0";
 const MERGED_SUMMARY_SCHEMA_VERSION: &str = "2.0";
 const MATRIX_CARGO_PROFILE: &str = "matrix";
@@ -302,6 +308,57 @@ struct LolaManifestPaths {
     streamer: PathBuf,
     active: PathBuf,
     passive: PathBuf,
+}
+
+/// Independently loaded process-local and peer inputs, copied from the frozen bundle.
+struct NativeProfilePaths {
+    streamer: PathBuf,
+    source: PathBuf,
+    sink: PathBuf,
+}
+
+impl NativeProfilePaths {
+    fn new(row_dir: &Path) -> Self {
+        Self {
+            streamer: row_dir.join("native-streamer-profile.json"),
+            source: row_dir.join("native-source-profile.json"),
+            sink: row_dir.join("native-sink-profile.json"),
+        }
+    }
+
+    fn write(&self, document: &NativeProfileDocument) -> Result<()> {
+        document
+            .resolve()
+            .map_err(|error| anyhow!("invalid bundled native profile: {error}"))?;
+        for path in [&self.streamer, &self.source, &self.sink] {
+            atomic_write_json(path, document)?;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o444))?;
+        }
+        Ok(())
+    }
+
+    fn peer(&self, side: &str) -> &Path {
+        match side {
+            "source" => &self.source,
+            "sink" => &self.sink,
+            _ => unreachable!("unknown native endpoint side"),
+        }
+    }
+
+    fn role_env(&self, active: bool, base: &[(String, String)]) -> Vec<(String, String)> {
+        let mut env = base.to_vec();
+        env.push((
+            LOCAL_PROFILE_ENV.to_owned(),
+            self.peer(if active { "source" } else { "sink" })
+                .display()
+                .to_string(),
+        ));
+        env.push((
+            PEER_PROFILE_ENV.to_owned(),
+            self.streamer.display().to_string(),
+        ));
+        env
+    }
 }
 
 impl LolaManifestPaths {
@@ -910,6 +967,7 @@ struct BundleManifest {
     cargo_profile: CargoProfileSummary,
     orchestrator_commit: Option<String>,
     dependency_sha256: String,
+    native_profile: NativeProfileDocument,
     files: Vec<BundleFile>,
 }
 
@@ -1465,6 +1523,13 @@ fn run(cli: Cli) -> Result<bool> {
         &criteria,
         &bundle,
     )?;
+    write_native_expectations(
+        &artifacts_root,
+        &all_selected_rows,
+        cli.iterations,
+        &bundle,
+        &identities,
+    )?;
     let shard = if let (Some(count), Some(index), Some(assignments)) =
         (cli.shard_count, cli.shard_index, shard_assignments.as_ref())
     {
@@ -1758,6 +1823,7 @@ fn prepare_shards(cli: &Cli) -> Result<bool> {
     let criteria = load_criteria(cli.criteria.as_deref())?;
     let identities =
         execution_identities(&repo_root, &matrix_rows(), &rows, cli, &criteria, &bundle)?;
+    write_native_expectations(&artifacts_root, &rows, cli.iterations, &bundle, &identities)?;
     let manifests = shard_manifests(
         &rows,
         cli.iterations,
@@ -4421,6 +4487,21 @@ fn run_row_attempt(
         bundle,
         cli.tokio_worker_threads,
     );
+    let native_profiles = if row.encoding == WireEncoding::Native {
+        let paths = NativeProfilePaths::new(&row_dir);
+        paths.write(&bundle.manifest.native_profile)?;
+        Some(paths)
+    } else {
+        None
+    };
+    let active_env = native_profiles.as_ref().map_or_else(
+        || process_env.clone(),
+        |paths| paths.role_env(true, &process_env),
+    );
+    let passive_env = native_profiles.as_ref().map_or_else(
+        || process_env.clone(),
+        |paths| paths.role_env(false, &process_env),
+    );
     let mut native_library_paths = BTreeMap::new();
     if let Some(path) = &lola_bridge_lib {
         native_library_paths.insert("lola".to_string(), path.display().to_string());
@@ -4541,7 +4622,7 @@ fn run_row_attempt(
             &bundle.executable(&passive_spec.binary)?,
             &passive_spec.args,
             repo_root,
-            &process_env,
+            &passive_env,
             &row_dir,
             Some(&namespace),
         )?;
@@ -4619,7 +4700,7 @@ fn run_row_attempt(
             &bundle.executable(&active_spec.binary)?,
             &active_spec.args,
             repo_root,
-            &process_env,
+            &active_env,
             &row_dir,
             Some(&namespace),
         )?;
@@ -4679,7 +4760,13 @@ fn run_row_attempt(
         passive_completion?;
 
         let validation_started = Instant::now();
-        let validation = validate_flow_logs(row, &active.log_path, &passive.log_path);
+        let validation = validate_flow_logs(
+            row,
+            &active.log_path,
+            &passive.log_path,
+            &streamer.log_path,
+            &bundle.manifest.native_profile,
+        );
         timings.validation_us = duration_us(validation_started.elapsed());
         validation?;
         let teardown_started = Instant::now();
@@ -5066,6 +5153,15 @@ fn write_config(
     let sink_endpoint = endpoint_name(row.sink, "sink");
     let source_lola = lola_info(row, AUTHORITY_A, "source", lola_run_namespace);
     let sink_lola = lola_info(row, AUTHORITY_B, "sink", lola_run_namespace);
+    let native_paths = if row.encoding == WireEncoding::Native {
+        Some(NativeProfilePaths::new(
+            config_path
+                .parent()
+                .context("Streamer config has no parent directory")?,
+        ))
+    } else {
+        None
+    };
 
     let mut zenoh_endpoints = Vec::new();
     let mut mqtt_endpoints = Vec::new();
@@ -5091,6 +5187,7 @@ fn write_config(
         source_lola.as_ref(),
         lola_manifest_path,
         row.role,
+        native_paths.as_ref(),
     );
     push_endpoint(
         &mut zenoh_endpoints,
@@ -5109,6 +5206,7 @@ fn write_config(
         sink_lola.as_ref(),
         lola_manifest_path,
         row.role,
+        native_paths.as_ref(),
     );
 
     let mut transports = json!({
@@ -5184,6 +5282,7 @@ fn push_endpoint(
     lola: Option<&LolaEndpointInfo>,
     lola_manifest_path: Option<&Path>,
     role: RoleStyle,
+    native_paths: Option<&NativeProfilePaths>,
 ) {
     let forwarding_routes = if role == RoleStyle::NotifierNotifyee
         && side == "sink"
@@ -5199,6 +5298,10 @@ fn push_endpoint(
         "routing_mode": profile.kind.routing_mode(),
         "forwarding_routes": forwarding_routes,
     });
+    if let Some(paths) = native_paths {
+        value["native_profile_file"] = json!(paths.streamer);
+        value["native_peer_profile_file"] = json!(paths.peer(side));
+    }
     if profile.kind == EndpointKind::CopyMinimized {
         value["copy_minimized_payload_alignment"] = json!(8);
     }
@@ -6289,9 +6392,40 @@ fn role_binary_suffix(role: RoleStyle, active: bool) -> &'static str {
     }
 }
 
-fn validate_flow_logs(row: &MatrixRow, active_log: &Path, passive_log: &Path) -> Result<()> {
+fn validate_flow_logs(
+    row: &MatrixRow,
+    active_log: &Path,
+    passive_log: &Path,
+    streamer_log: &Path,
+    native_profile: &NativeProfileDocument,
+) -> Result<()> {
     let active = fs::read_to_string(active_log).unwrap_or_default();
     let passive = fs::read_to_string(passive_log).unwrap_or_default();
+    if row.encoding == WireEncoding::Native {
+        let expected = expected_native_identity(native_profile)?;
+        let passive_verified =
+            validate_native_worker_log(&passive, passive_log, row.sink.kind, &expected)?;
+        let active_verified = if row.role == RoleStyle::ClientServerRpc {
+            validate_native_worker_log(&active, active_log, row.source.kind, &expected)?
+        } else {
+            Vec::new()
+        };
+        let projections =
+            validate_native_projection_log(row, &fs::read_to_string(streamer_log)?, &expected)?;
+        let path = passive_log
+            .parent()
+            .context("native worker log has no parent directory")?
+            .join("native-verification.json");
+        atomic_write_json(
+            &path,
+            &json!({
+                "row_id": row.id,
+                "passive": passive_verified,
+                "active_rpc_response": active_verified,
+                "streamer_projections": projections,
+            }),
+        )?;
+    }
     if row.uses_classic() {
         return validate_classic_aware_logs(row, &active, active_log, &passive, passive_log);
     }
@@ -6310,6 +6444,250 @@ fn validate_flow_logs(row: &MatrixRow, active_log: &Path, passive_log: &Path) ->
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NativeProjection {
+    route: String,
+    direction: String,
+    domain: String,
+    version: u32,
+    profile_digest: [u8; 32],
+    encoding_id: u32,
+    native_type_token: u32,
+    token_before: Option<u32>,
+    token_after: Option<u32>,
+}
+
+fn validate_native_projection_log(
+    row: &MatrixRow,
+    contents: &str,
+    expected: &NativeVerification,
+) -> Result<Vec<NativeProjection>> {
+    let mut projections = Vec::new();
+    for line in contents.lines() {
+        let Some((_, json)) = line.split_once("NATIVE_PROJECTION_VERIFIED ") else {
+            continue;
+        };
+        // tracing may append terminal formatting after the JSON message; decode
+        // one complete JSON value rather than treating color bytes as metadata.
+        let projection = serde_json::Deserializer::from_str(json)
+            .into_iter::<NativeProjection>()
+            .next()
+            .context("empty native projection record")??;
+        let tokens_match = match projection.direction.as_str() {
+            "classic_to_frame" => {
+                projection.token_before.is_none()
+                    && projection.token_after == Some(expected.native_type_token)
+            }
+            "frame_to_classic" => {
+                projection.token_before == Some(expected.native_type_token)
+                    && projection.token_after.is_none()
+            }
+            _ => false,
+        };
+        if !tokens_match
+            || projection.domain != expected.domain
+            || projection.version != expected.version
+            || projection.profile_digest != expected.profile_digest
+            || projection.encoding_id != expected.encoding_id
+            || projection.native_type_token != expected.native_type_token
+        {
+            return Err(anyhow!(
+                "native projection does not match the frozen profile/identity transition for {}",
+                row.id
+            ));
+        }
+        projections.push(projection);
+    }
+    let source_classic = row.source.kind == EndpointKind::Classic;
+    let sink_classic = row.sink.kind == EndpointKind::Classic;
+    if source_classic == sink_classic {
+        if !projections.is_empty() {
+            return Err(anyhow!(
+                "unexpected classic/native projection for {}",
+                row.id
+            ));
+        }
+    } else {
+        let forward = if source_classic {
+            "classic_to_frame"
+        } else {
+            "frame_to_classic"
+        };
+        if !projections.iter().any(|value| value.direction == forward) {
+            return Err(anyhow!(
+                "missing {forward} native projection evidence for {}",
+                row.id
+            ));
+        }
+        if row.role == RoleStyle::ClientServerRpc {
+            let reverse = if source_classic {
+                "frame_to_classic"
+            } else {
+                "classic_to_frame"
+            };
+            if !projections.iter().any(|value| value.direction == reverse) {
+                return Err(anyhow!(
+                    "missing {reverse} native RPC response projection for {}",
+                    row.id
+                ));
+            }
+        }
+    }
+    Ok(projections)
+}
+
+fn expected_native_identity(document: &NativeProfileDocument) -> Result<NativeVerification> {
+    let profile = document
+        .resolve()
+        .map_err(|error| anyhow!("invalid native expectation profile: {error}"))?;
+    let up_rust::NativeProfileMode::Table(table) = profile.mode() else {
+        return Err(anyhow!(
+            "the matrix deployment explicitly selects table mode"
+        ));
+    };
+    let representation = SelectedWireNativePayload::native_representation();
+    let (encoding, _) = table
+        .entries()
+        .find(|(_, value)| *value == &representation)
+        .context("matrix worker representation is absent from the frozen table")?;
+    Ok(NativeVerification {
+        domain: profile.domain().to_owned(),
+        version: profile.version(),
+        profile_digest: profile.content_digest(),
+        type_name: SelectedWireNativePayload::TYPE_NAME.to_owned(),
+        encoding_id: encoding.id(),
+        native_type_token: representation.token().as_u32(),
+        identity_source: String::new(),
+    })
+}
+
+fn validate_native_worker_log(
+    contents: &str,
+    path: &Path,
+    endpoint: EndpointKind,
+    expected: &NativeVerification,
+) -> Result<Vec<NativeVerification>> {
+    if contents.contains("native_sink_identity_rejected") {
+        return Err(anyhow!("native identity rejection in {}", path.display()));
+    }
+    let mut verified = Vec::new();
+    for line in contents.lines() {
+        let Some(json) = line.strip_prefix(NATIVE_VERIFIED_MARKER) else {
+            continue;
+        };
+        let observed: NativeVerification = serde_json::from_str(json)
+            .with_context(|| format!("malformed native verification in {}", path.display()))?;
+        let source_matches = match endpoint {
+            EndpointKind::Classic => observed.identity_source == "agreed_classic_encoding",
+            EndpointKind::OwnedFrame => observed.identity_source == "carried_frame",
+            EndpointKind::CopyMinimized => matches!(
+                observed.identity_source.as_str(),
+                "carried_frame" | "carried_native_loan"
+            ),
+        };
+        let mut expected = expected.clone();
+        expected
+            .identity_source
+            .clone_from(&observed.identity_source);
+        if !source_matches || observed != expected {
+            return Err(anyhow!(
+                "native sink identity/profile does not match the frozen expectation in {}",
+                path.display()
+            ));
+        }
+        verified.push(observed);
+    }
+    if verified.is_empty() {
+        return Err(anyhow!(
+            "native sink verification is missing in {}",
+            path.display()
+        ));
+    }
+    Ok(verified)
+}
+
+fn native_hop_expectation(
+    source: EndpointProfile,
+    sink: EndpointProfile,
+    identity: &NativeVerification,
+) -> serde_json::Value {
+    let source_token = (source.kind != EndpointKind::Classic).then_some(identity.native_type_token);
+    let sink_token = (sink.kind != EndpointKind::Classic).then_some(identity.native_type_token);
+    json!({
+        "source_profile": source.id,
+        "sink_profile": sink.id,
+        "encoding_id": identity.encoding_id,
+        "source_encoding_origin": if source.physical == PhysicalTransport::Vsomeip { "explicit_binding_configuration" } else { "carried_encoding" },
+        "source_carrier_token": source_token,
+        "sink_carrier_token": sink_token,
+        "bridge_action": match (source.kind == EndpointKind::Classic, sink.kind == EndpointKind::Classic) {
+            (true, true) => "preserve_opaque_classic_encoding",
+            (true, false) => "recover_from_carried_encoding_and_agreement",
+            (false, true) => "verify_pair_before_token_removal",
+            (false, false) => "preserve_encoding_and_token",
+        },
+        "sink_verification": if sink.kind == EndpointKind::Classic { "agreed_classic_encoding" } else { "carried_frame_pair" },
+    })
+}
+
+fn write_native_expectations(
+    root: &Path,
+    selection: &[MatrixRow],
+    iterations: usize,
+    bundle: &RunBundle,
+    identities: &ExecutionIdentities,
+) -> Result<()> {
+    let identity = expected_native_identity(&bundle.manifest.native_profile)?;
+    let rows: Vec<_> = matrix_rows().into_iter().filter(|row| row.encoding == WireEncoding::Native).map(|row| {
+        let support = support_status(&row);
+        let runnable = support.classification == RowClassification::Pass;
+        json!({
+            "row_id": row.id,
+            "role": row.role,
+            "source": row.source.id,
+            "sink": row.sink.id,
+            "selected": selection.iter().any(|selected| selected.id == row.id),
+            "expected_classification": support.classification,
+            "classification_reason": support.reason,
+            "mode": "table",
+            "typed_representation": identity.type_name,
+            "domain": identity.domain,
+            "version": identity.version,
+            "profile_digest": identity.profile_digest,
+            "encoding_id": identity.encoding_id,
+            "native_type_token": identity.native_type_token,
+            "request_or_event_hops": runnable.then(|| native_hop_expectation(row.source, row.sink, &identity)),
+            "rpc_response_hops": (runnable && row.role == RoleStyle::ClientServerRpc).then(|| native_hop_expectation(row.sink, row.source, &identity)),
+            "observation_files": runnable.then(|| (0..iterations).map(|iteration| format!("{}/native-verification.json", row_run_id(&row, iterations, iteration))).collect::<Vec<_>>()),
+            "structural_not_applicable": (!runnable).then_some("no route is activated for this approved structural unsupported row"),
+        })
+    }).collect();
+    let path = root.join("native-row-expectations.json");
+    atomic_write_json(
+        &path,
+        &json!({
+            "schema_version": "1.0",
+            "bundle_sha256": identities.bundle_sha256,
+            "dependency_sha256": identities.dependency_sha256,
+            "profile_document": bundle.manifest.native_profile,
+            "required_owner_tests": [
+                "native_profile::tests::worker_checks_carried_pair_before_native_bytes",
+                "native_profile::tests::classic_sink_uses_carried_encoding",
+                "native_profile::tests::recursive_field_validation_is_not_skipped",
+                "native_profile::tests::in_flight_generation_and_loan_capability_remain_authoritative",
+                "native_route_rejects_mismatches_before_activation",
+            ],
+            "rows": rows,
+        }),
+    )?;
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o444))?;
+    atomic_write_json(
+        &root.join("native-row-expectations-sha256.json"),
+        &json!({ "sha256": sha256_file(&path)? }),
+    )
 }
 
 fn validate_classic_aware_logs(
@@ -7334,6 +7712,7 @@ fn stage_run_bundle(
         cargo_profile: matrix_cargo_profile(),
         orchestrator_commit: git_output(repo_root, &["rev-parse", "HEAD"]),
         dependency_sha256: dependency_sha256(repo_root)?,
+        native_profile: matrix_table_profile_document(),
         files,
     };
     let manifest_path = root.join("manifest.json");
@@ -7573,6 +7952,15 @@ fn validate_bundle_manifest_structure(manifest: &BundleManifest) -> Result<()> {
             "run bundle Cargo profile is not the matrix profile"
         ));
     }
+    if manifest.native_profile != matrix_table_profile_document() {
+        return Err(anyhow!(
+            "bundle native profile differs from the explicit matrix deployment contract"
+        ));
+    }
+    manifest
+        .native_profile
+        .resolve()
+        .map_err(|error| anyhow!("invalid bundle native profile: {error}"))?;
     let target_directory = Path::new(&manifest.target_directory);
     if !target_directory.is_absolute()
         || target_directory.file_name().and_then(|name| name.to_str())
@@ -7791,7 +8179,7 @@ fn bundle_identity_sha256(manifest: &BundleManifest) -> Result<String> {
             )
         })
         .collect();
-    sha256_serializable(&(&manifest.cargo_profile, files))
+    sha256_serializable(&(&manifest.cargo_profile, &manifest.native_profile, files))
 }
 
 fn load_criteria(path: Option<&Path>) -> Result<MatrixCriteria> {
@@ -8358,11 +8746,11 @@ impl WireEncoding {
 
     fn payload_encoding_id(self) -> u32 {
         match self {
-            Self::Native => 0x1AC0_57DA,
+            Self::Native => MATRIX_SELECTED_NATIVE_ID,
             Self::Protobuf => 2,
-            Self::Xcdrv2 => 9,
-            Self::Arrow => 10,
-            Self::Omgidl => 11,
+            Self::Xcdrv2 => 0xF001,
+            Self::Arrow => 0xF002,
+            Self::Omgidl => 0xF003,
         }
     }
 }
@@ -8406,6 +8794,208 @@ impl MatrixRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use test_case::test_case;
+
+    #[test_case(EndpointKind::Classic, "agreed_classic_encoding"; "classic recovery")]
+    #[test_case(EndpointKind::OwnedFrame, "carried_frame"; "owned native frame")]
+    #[test_case(EndpointKind::CopyMinimized, "carried_frame"; "validated byte view")]
+    #[test_case(EndpointKind::CopyMinimized, "carried_native_loan"; "typed loan")]
+    fn native_observation_requires_the_actual_profile_and_identity(
+        endpoint: EndpointKind,
+        identity_source: &str,
+    ) {
+        let expected = expected_native_identity(&matrix_table_profile_document()).unwrap();
+        let mut observed = expected.clone();
+        observed.identity_source = identity_source.to_owned();
+        let contents = format!(
+            "{NATIVE_VERIFIED_MARKER}{}\n",
+            serde_json::to_string(&observed).unwrap()
+        );
+        assert_eq!(
+            validate_native_worker_log(&contents, Path::new("sink.log"), endpoint, &expected)
+                .unwrap(),
+            vec![observed]
+        );
+    }
+
+    #[test_case("missing"; "payload counts alone are insufficient")]
+    #[test_case("encoding"; "wrong allocation")]
+    #[test_case("token"; "wrong native token")]
+    #[test_case("domain"; "foreign deployment")]
+    #[test_case("version"; "stale generation")]
+    #[test_case("content"; "same name and generation but foreign table")]
+    #[test_case("type"; "foreign representation")]
+    #[test_case("source"; "unapproved identity recovery")]
+    #[test_case("rejected"; "rejection cannot hide behind a later success")]
+    #[test_case("malformed"; "malformed verification record")]
+    fn native_observation_fails_closed(mutation: &str) {
+        let expected = expected_native_identity(&matrix_table_profile_document()).unwrap();
+        let mut observed = expected.clone();
+        observed.identity_source = "carried_frame".to_owned();
+        match mutation {
+            "encoding" => observed.encoding_id ^= 1,
+            "token" => observed.native_type_token ^= 1,
+            "domain" => observed.domain.push_str(".foreign"),
+            "version" => observed.version += 1,
+            "content" => observed.profile_digest[0] ^= 1,
+            "type" => observed.type_name.push_str("Foreign"),
+            "source" => observed.identity_source = "guessed_from_bytes".to_owned(),
+            _ => {}
+        }
+        let contents = match mutation {
+            "missing" => "FLOW observed_payload_bytes=272".to_owned(),
+            "malformed" => format!("{NATIVE_VERIFIED_MARKER}{{"),
+            "rejected" => format!(
+                "native_sink_identity_rejected\n{NATIVE_VERIFIED_MARKER}{}",
+                serde_json::to_string(&observed).unwrap()
+            ),
+            _ => format!(
+                "{NATIVE_VERIFIED_MARKER}{}",
+                serde_json::to_string(&observed).unwrap()
+            ),
+        };
+        assert!(validate_native_worker_log(
+            &contents,
+            Path::new("sink.log"),
+            EndpointKind::OwnedFrame,
+            &expected
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn bundled_profile_is_hashed_and_cannot_drift_from_the_deployment_contract() {
+        let original = test_bundle_manifest();
+        let mut changed = original.clone();
+        changed.native_profile.version += 1;
+        assert_ne!(
+            bundle_identity_sha256(&original).unwrap(),
+            bundle_identity_sha256(&changed).unwrap()
+        );
+        assert!(validate_bundle_manifest_structure(&changed).is_err());
+    }
+
+    #[test]
+    fn native_role_configuration_is_explicit_and_peer_scoped() {
+        let paths = NativeProfilePaths::new(Path::new("/artifacts/native-row"));
+        let base = vec![("LANG".to_owned(), "C.UTF-8".to_owned())];
+        let source: BTreeMap<_, _> = paths.role_env(true, &base).into_iter().collect();
+        let sink: BTreeMap<_, _> = paths.role_env(false, &base).into_iter().collect();
+        assert_eq!(
+            source[LOCAL_PROFILE_ENV],
+            paths.source.display().to_string()
+        );
+        assert_eq!(sink[LOCAL_PROFILE_ENV], paths.sink.display().to_string());
+        assert_eq!(
+            source[PEER_PROFILE_ENV],
+            paths.streamer.display().to_string()
+        );
+        assert_eq!(sink[PEER_PROFILE_ENV], paths.streamer.display().to_string());
+        assert_eq!(base.len(), 1);
+    }
+
+    #[test]
+    fn native_expectations_preserve_the_existing_matrix_partition() {
+        let rows = matrix_rows();
+        assert_eq!(rows.len(), 2160);
+        let native: Vec<_> = rows
+            .iter()
+            .filter(|row| row.encoding == WireEncoding::Native)
+            .collect();
+        assert_eq!(native.len(), 432);
+        assert_eq!(
+            native
+                .iter()
+                .filter(|row| support_status(row).classification == RowClassification::Pass)
+                .count(),
+            396
+        );
+        assert_eq!(
+            native
+                .iter()
+                .filter(|row| support_status(row).classification == RowClassification::Unsupported)
+                .count(),
+            36
+        );
+        let expected = expected_native_identity(&matrix_table_profile_document()).unwrap();
+        assert_eq!(
+            WireEncoding::Native.payload_encoding_id(),
+            expected.encoding_id
+        );
+        assert_ne!(
+            WireEncoding::Xcdrv2.payload_encoding_id(),
+            expected.encoding_id
+        );
+        assert_ne!(
+            WireEncoding::Arrow.payload_encoding_id(),
+            expected.encoding_id
+        );
+        assert_ne!(
+            WireEncoding::Omgidl.payload_encoding_id(),
+            expected.encoding_id
+        );
+    }
+
+    #[test_case("valid", true; "both RPC projection directions observed")]
+    #[test_case("missing_forward", false; "missing request token recovery")]
+    #[test_case("missing_reverse", false; "missing response token removal")]
+    #[test_case("token", false; "wrong projected token")]
+    #[test_case("generation", false; "projection from foreign generation")]
+    #[test_case("unexpected_boundary", false; "frame-only route cannot hide classic conversion")]
+    fn native_hop_observations_match_actual_boundary_transitions(mutation: &str, accepted: bool) {
+        let expected = expected_native_identity(&matrix_table_profile_document()).unwrap();
+        let row = matrix_rows()
+            .into_iter()
+            .find(|row| {
+                row.encoding == WireEncoding::Native
+                    && row.role == RoleStyle::ClientServerRpc
+                    && row.source.id != row.sink.id
+                    && row.sink.kind == EndpointKind::OwnedFrame
+                    && row.source.kind
+                        == if mutation == "unexpected_boundary" {
+                            EndpointKind::OwnedFrame
+                        } else {
+                            EndpointKind::Classic
+                        }
+            })
+            .unwrap();
+        let projection = |direction: &str| {
+            json!({
+                "route": "source-to-sink",
+                "direction": direction,
+                "domain": expected.domain,
+                "version": expected.version,
+                "profile_digest": expected.profile_digest,
+                "encoding_id": expected.encoding_id,
+                "native_type_token": expected.native_type_token,
+                "token_before": (direction == "frame_to_classic").then_some(expected.native_type_token),
+                "token_after": (direction == "classic_to_frame").then_some(expected.native_type_token),
+            })
+        };
+        let mut observations = vec![
+            projection("classic_to_frame"),
+            projection("frame_to_classic"),
+        ];
+        match mutation {
+            "missing_forward" => {
+                observations.remove(0);
+            }
+            "missing_reverse" => {
+                observations.pop();
+            }
+            "token" => observations[0]["token_after"] = json!(expected.native_type_token ^ 1),
+            "generation" => observations[0]["version"] = json!(expected.version + 1),
+            _ => {}
+        }
+        let log = observations
+            .into_iter()
+            .map(|value| format!("\u{1b}[32m INFO NATIVE_PROJECTION_VERIFIED {value}\u{1b}[0m\n"))
+            .collect::<String>();
+        assert_eq!(
+            validate_native_projection_log(&row, &log, &expected).is_ok(),
+            accepted
+        );
+    }
 
     fn test_resource_limits(jobs: usize, lola_jobs: usize) -> BTreeMap<ResourceClass, usize> {
         ResourceClass::ORDERED
@@ -8469,6 +9059,7 @@ mod tests {
             cargo_profile: matrix_cargo_profile(),
             orchestrator_commit: Some("commit".to_string()),
             dependency_sha256: sha256_bytes(b"dependencies"),
+            native_profile: matrix_table_profile_document(),
             files: vec![
                 BundleFile {
                     kind: BundleFileKind::MatrixExecutable,
@@ -10153,6 +10744,7 @@ mod tests {
                 cargo_profile: matrix_cargo_profile(),
                 orchestrator_commit: None,
                 dependency_sha256: "dependencies".to_string(),
+                native_profile: matrix_table_profile_document(),
                 files: Vec::new(),
             },
         };
@@ -10226,6 +10818,7 @@ mod tests {
             cargo_profile: matrix_cargo_profile(),
             orchestrator_commit: None,
             dependency_sha256: sha256_bytes(b"dependencies"),
+            native_profile: matrix_table_profile_document(),
             files: vec![staged.clone()],
         };
         let manifest_path = root.join("manifest.json");
@@ -10403,6 +10996,7 @@ mod tests {
                 cargo_profile: matrix_cargo_profile(),
                 orchestrator_commit: None,
                 dependency_sha256: "dependencies".to_string(),
+                native_profile: matrix_table_profile_document(),
                 files: Vec::new(),
             },
         };

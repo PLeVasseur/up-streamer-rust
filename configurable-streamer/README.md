@@ -93,6 +93,38 @@ The closed selected-wire set is `up_native`, `protobuf`, `xcdrv2`, `arrow`, and
 the same concrete wire and native-prefix metadata codec before the typed
 Streamer route call is available.
 
+### Native deployment profiles
+
+`up_native` routes require an explicit, matching deployment profile on both
+endpoints. Each endpoint can specify `native_profile_file` and
+`native_peer_profile_file`, resolved relative to the main configuration file.
+Startup loads the local and actual adjacent peer documents, checks their complete
+domain/version/mode/representation tables, and retains that immutable agreement.
+Missing or conflicting native configuration fails before route activation.
+
+The document model and fixture catalog are owned by
+`configurable_streamer_wire_support::native_profile`. Use
+`matrix_table_profile_document()` to produce the complete matrix deployment
+document, including canonical representation bytes. The explicit table reserves
+`0xF101` for the role payload and `0xF102` for the payload-flow payload; serialized
+XCDRv2/Arrow/OMG IDL use `0xF001`/`0xF002`/`0xF003`. These are deployment-private
+agreements, not public registry assignments or type-name hashes. A contract-defined
+document explicitly binds ID0 to one operation/subscription and representation;
+table mode never falls back to ID0.
+
+For a process sharing one agreed deployment profile, the alternative startup
+inputs are `UPROTOCOL_NATIVE_PROFILE` and `UPROTOCOL_NATIVE_PEER_PROFILE` (both
+required together). Per-endpoint file settings override that shared pair. The
+matrix orchestrator generates separate source/Streamer/sink documents from the
+immutable run bundle and scopes these inputs to native rows.
+
+Classic bridges verify the encoding/token pair before token removal and recover
+the token only from the received encoding and agreed profile. Native role workers
+emit `NATIVE_IDENTITY_VERIFIED` after validating the actual received identity and
+representation; Streamer emits `NATIVE_PROJECTION_VERIFIED` for checked classic/frame
+transitions. The orchestrator checks these records against its frozen native
+expectations in addition to the existing payload-flow checks.
+
 DDS is configured as one optional grouped transport. `domain_id`, `origin_id`,
 `qos.reliability`, `history_depth`, and `readiness` are explicit. The streamer
 derives a unique origin for each endpoint/family/wire instance, waits for the
