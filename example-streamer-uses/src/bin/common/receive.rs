@@ -102,10 +102,9 @@ where
     T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
     T::Rx: UZeroCopyRxLease + Send + 'static,
 {
-    use up_rust::UFrameView;
     zero_copy(transport, source, sink, timeout_ms)
         .await
-        .map(|frame| frame.try_contiguous_payload().unwrap_or(&[]).to_vec())
+        .and_then(|frame| super::payloads::copy_payload_bytes(&frame))
 }
 
 async fn receive<T>(

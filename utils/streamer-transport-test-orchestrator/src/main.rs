@@ -5214,7 +5214,10 @@ fn write_config(
         "mqtt": { "config_file": mqtt_config, "endpoints": mqtt_endpoints },
     });
     if !iceoryx2_endpoints.is_empty() {
-        transports["iceoryx2"] = json!({ "endpoints": iceoryx2_endpoints });
+        transports["iceoryx2"] = json!({
+            "endpoints": iceoryx2_endpoints,
+            "publisher_readiness": { "minimum_subscribers": 1, "timeout_ms": 5000 }
+        });
     }
     if !lola_endpoints.is_empty() {
         transports["lola"] = json!({ "endpoints": lola_endpoints });

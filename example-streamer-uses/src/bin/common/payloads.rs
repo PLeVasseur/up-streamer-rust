@@ -14,6 +14,7 @@ pub(crate) type NativeContext =
     >;
 
 pub(crate) type NativeLoanVerifier<Rx> = fn(&NativeContext, &Rx) -> Result<(), UStatus>;
+pub(crate) use configurable_streamer_wire_support::payload_bytes::copy_payload_bytes;
 
 /// Validate the worker's native representation using its configured adapter.
 /// Serialized routes remain opaque. No payload bytes or expected type fabricate

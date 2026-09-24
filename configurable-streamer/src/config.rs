@@ -212,6 +212,16 @@ pub struct MqttTransport {
 #[serde(deny_unknown_fields)]
 pub struct Iceoryx2Transport {
     pub(crate) endpoints: Vec<EndpointConfig>,
+    /// Optional actual subscriber discovery before a TX loan becomes sendable.
+    #[serde(default)]
+    pub(crate) publisher_readiness: Option<Iceoryx2PublisherReadiness>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct Iceoryx2PublisherReadiness {
+    pub(crate) minimum_subscribers: usize,
+    pub(crate) timeout_ms: u64,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -312,6 +322,23 @@ impl MqttTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn iceoryx2_readiness_is_optional_and_explicitly_bounded() {
+        let legacy: Iceoryx2Transport = json5::from_str("{ endpoints: [] }").unwrap();
+        assert!(legacy.publisher_readiness.is_none());
+        let finite: Iceoryx2Transport = json5::from_str(
+            "{ endpoints: [], publisher_readiness: { minimum_subscribers: 1, timeout_ms: 5000 } }",
+        )
+        .unwrap();
+        let readiness = finite.publisher_readiness.unwrap();
+        assert_eq!(readiness.minimum_subscribers, 1);
+        assert_eq!(readiness.timeout_ms, 5000);
+        assert!(json5::from_str::<Iceoryx2Transport>(
+            "{ endpoints: [], publisher_readiness: { minimum_subscribers: 1 } }"
+        )
+        .is_err());
+    }
 
     fn base_config(route_fragment: &str) -> String {
         format!(

@@ -447,7 +447,7 @@ where
         // Validate the full representation before copying its bytes for the echo.
         args.native.verify_view(&frame)?;
     }
-    let payload = frame.try_contiguous_payload().unwrap_or(&[]).to_vec();
+    let payload = payloads::copy_payload_bytes(&frame)?;
     if matches!(role, Role::Server) {
         let response =
             UOwnedFrame::with_payload(response_metadata(frame.metadata(), args)?, payload.clone())

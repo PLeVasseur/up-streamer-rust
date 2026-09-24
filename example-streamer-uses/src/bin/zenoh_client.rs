@@ -28,9 +28,9 @@ use tracing::{debug, info};
 use up_rust::selected_wire_user_api::ProtobufWire;
 use up_rust::UWithNativePrefixWire;
 use up_rust::{
-    PayloadCodecIdentity, PayloadEncoding, UCode, UFrameMetadata, UFrameView, UMessageBuilder,
-    UOwnedFrame, UOwnedTransport, UStatus, UTransport, UTxBuffer, UTxLoanSpec, UUri,
-    UZeroCopyRxLease, UZeroCopyTransport,
+    PayloadCodecIdentity, PayloadEncoding, UCode, UFrameMetadata, UMessageBuilder, UOwnedFrame,
+    UOwnedTransport, UStatus, UTransport, UTxBuffer, UTxLoanSpec, UUri, UZeroCopyRxLease,
+    UZeroCopyTransport,
 };
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
@@ -689,7 +689,7 @@ where
                         invalid_config("native receive requires a typed loan verifier")
                     })?(native, &frame)?;
                 }
-                return Ok(frame.try_contiguous_payload().unwrap_or(&[]).to_vec());
+                return common::payloads::copy_payload_bytes(&frame);
             }
             Ok(Err(error)) if error.code() == UCode::NotFound => {
                 tokio::time::sleep(Duration::from_millis(10)).await;

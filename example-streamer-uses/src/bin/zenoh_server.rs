@@ -579,7 +579,7 @@ where
             let sink = method_uri(cli.local_authority.as_str(), cli.method_resource_id)?;
             let request =
                 receive_passive_zero_copy_frame(&transport, &source, Some(&sink), cli).await?;
-            let payload = request.try_contiguous_payload().unwrap_or(&[]).to_vec();
+            let payload = common::payloads::copy_payload_bytes(&request)?;
             let response_metadata = response_metadata(cli, request.metadata())?;
             tokio::time::sleep(Duration::from_millis(cli.rpc_response_delay_ms)).await;
             send_zero_copy_frame_repeated(&transport, response_metadata, &payload, cli).await?;
@@ -1061,7 +1061,7 @@ where
 {
     receive_zero_copy_frame(transport, source_filter, sink_filter, timeout_ms)
         .await
-        .map(|frame| frame.try_contiguous_payload().unwrap_or(&[]).to_vec())
+        .and_then(|frame| common::payloads::copy_payload_bytes(&frame))
 }
 
 async fn receive_passive_zero_copy_payload<T>(
@@ -1076,7 +1076,7 @@ where
 {
     receive_passive_zero_copy_frame(transport, source_filter, sink_filter, cli)
         .await
-        .map(|frame| frame.try_contiguous_payload().unwrap_or(&[]).to_vec())
+        .and_then(|frame| common::payloads::copy_payload_bytes(&frame))
 }
 
 async fn receive_passive_zero_copy_frame<T>(

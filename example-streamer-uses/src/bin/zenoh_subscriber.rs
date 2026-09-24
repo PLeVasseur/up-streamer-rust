@@ -27,8 +27,8 @@ use tracing::info;
 use up_rust::selected_wire_user_api::ProtobufWire;
 use up_rust::UWithNativePrefixWire;
 use up_rust::{
-    UCode, UFrameView, UListener, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus,
-    UTransport, UUri, UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport,
+    UCode, UListener, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UTransport, UUri,
+    UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport,
 };
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
@@ -375,7 +375,7 @@ where
             &frame,
         )?;
     }
-    Ok(frame.try_contiguous_payload().unwrap_or(&[]).to_vec())
+    common::payloads::copy_payload_bytes(&frame)
 }
 
 struct OwnedListener(mpsc::UnboundedSender<UOwnedFrame>);

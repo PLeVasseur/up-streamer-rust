@@ -12,6 +12,7 @@
  ********************************************************************************/
 
 pub mod native_profile;
+pub mod payload_bytes;
 
 use std::{fmt, str::FromStr};
 

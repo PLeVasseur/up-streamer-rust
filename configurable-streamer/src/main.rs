@@ -2177,11 +2177,18 @@ async fn main() -> Result<(), UStatus> {
             feature = "iceoryx2-owned-frame"
         ))]
         {
+            let mut core_config = up_transport_iceoryx2_rust::Iceoryx2PubSubConfig::default();
+            if let Some(readiness) = &iceoryx2_config.publisher_readiness {
+                core_config = core_config.with_publisher_readiness(
+                    readiness.minimum_subscribers,
+                    std::time::Duration::from_millis(readiness.timeout_ms),
+                );
+            }
             register_iceoryx2_endpoints(
                 &mut endpoints,
                 &iceoryx2_config.endpoints,
                 &route_wire_formats,
-                Iceoryx2PubSub::new(),
+                Iceoryx2PubSub::with_config(core_config),
             )?;
         }
         #[cfg(not(any(

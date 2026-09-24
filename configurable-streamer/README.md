@@ -216,6 +216,21 @@ Depending on the setup you want to test, chose any of these examples:
 
 The two entities will run forever and exchange messages between each other.
 
+## Finite iceoryx2 egress readiness
+
+An optional `transports.iceoryx2.publisher_readiness` object configures actual
+native subscriber discovery before returning a sendable TX loan:
+
+```json5
+publisher_readiness: { minimum_subscribers: 1, timeout_ms: 5000 }
+```
+
+This is useful for a finite sender forwarding its first message to a separate
+process with a wildcard subscription. An absent peer produces a bounded
+`DeadlineExceeded` result. Omitting the object preserves ordinary peerless
+publication. The setting does not add application retransmissions or alter
+iceoryx2 history depth. The matrix selects it explicitly for iceoryx2 egress.
+
 ## Going forward from here
 
 If you have familiarized yourself with the streamer to this point you should be able to continue by yourself.
