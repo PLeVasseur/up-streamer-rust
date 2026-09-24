@@ -986,6 +986,12 @@ impl UStreamer {
     ) {
         while let Some(frame) = rx.recv().await {
             debug!(event = "owned_egress_begin", route = %route_label, source = %frame.metadata().source(), sink = ?frame.metadata().sink(), payload_bytes = frame.payload_bytes().len(), "owned egress begins");
+            crate::flow_observation::emit(crate::flow_observation::frame(
+                "ingress",
+                &route_label,
+                &frame,
+            ));
+            let observation = crate::flow_observation::frame("egress", &route_label, &frame);
             if let Err(error) = egress.transport.send_owned(frame).await {
                 warn!(
                     event = "owned_route_egress_send_failed",
@@ -997,6 +1003,7 @@ impl UStreamer {
                     "owned route egress send failed"
                 );
             } else {
+                crate::flow_observation::emit(observation);
                 debug!(event = "owned_egress_complete", route = %route_label, "owned egress completed");
             }
         }
@@ -1033,12 +1040,23 @@ impl UStreamer {
 
             let payload_len = spec.payload_len();
             let payload_alignment = spec.payload_alignment_proof().as_usize();
+            crate::flow_observation::emit(crate::flow_observation::frame(
+                "ingress",
+                &route_label,
+                &frame,
+            ));
             let send_result = match egress_transport.loan_validated_tx(spec).await {
                 Ok(mut tx) => match copy_frame_payload_to_tx(&frame, &mut tx) {
-                    Ok(copy_diagnostics) => egress_transport
-                        .send_validated_zero_copy(tx)
-                        .await
-                        .map(|()| copy_diagnostics),
+                    Ok(copy_diagnostics) => {
+                        let observation = crate::flow_observation::loan(&route_label, &tx);
+                        egress_transport
+                            .send_validated_zero_copy(tx)
+                            .await
+                            .map(|()| {
+                                crate::flow_observation::emit(observation);
+                                copy_diagnostics
+                            })
+                    }
                     Err(error) => Err(error),
                 },
                 Err(error) => Err(error),
@@ -1132,6 +1150,11 @@ impl UStreamer {
         Rx: UZeroCopyRxLease + Send + 'static,
     {
         while let Some(frame) = rx.recv().await {
+            crate::flow_observation::emit(crate::flow_observation::frame(
+                "ingress",
+                &route_label,
+                &frame,
+            ));
             let frame = match Self::owned_frame_from_zero_copy(&frame) {
                 Ok(frame) => frame,
                 Err(error) => {
@@ -1148,6 +1171,7 @@ impl UStreamer {
                 }
             };
 
+            let observation = crate::flow_observation::frame("egress", &route_label, &frame);
             if let Err(error) = egress.transport.send_owned(frame).await {
                 warn!(
                     event = "copy_minimized_to_owned_egress_send_failed",
@@ -1158,6 +1182,8 @@ impl UStreamer {
                     err = %error,
                     "copy-minimized to owned-frame route egress send failed"
                 );
+            } else {
+                crate::flow_observation::emit(observation);
             }
         }
     }
@@ -1666,6 +1692,11 @@ impl UStreamer {
         Rx: UZeroCopyRxLease + Send + 'static,
     {
         while let Some(lease) = rx.recv().await {
+            crate::flow_observation::emit(crate::flow_observation::frame(
+                "ingress",
+                &route_label,
+                &lease,
+            ));
             if let (Some(retained), Some(agreed)) =
                 (lease.native_profile(), native_profile.as_ref())
             {
@@ -1726,6 +1757,7 @@ impl UStreamer {
                 identity.0,
                 identity.1,
             );
+            let observation = crate::flow_observation::message("egress", &route_label, &message);
             if let Err(error) = egress.transport.send(message).await {
                 warn!(
                     event = "copy_minimized_to_classic_egress_send_failed",
@@ -1735,6 +1767,8 @@ impl UStreamer {
                     err = %error,
                     "copy-minimized to classic route egress send failed"
                 );
+            } else {
+                crate::flow_observation::emit(observation);
             }
         }
     }
@@ -1747,6 +1781,11 @@ impl UStreamer {
         native_profile: Option<up_rust::NativeProfileAgreement>,
     ) {
         while let Some(message) = rx.recv().await {
+            crate::flow_observation::emit(crate::flow_observation::message(
+                "ingress",
+                &route_label,
+                &message,
+            ));
             let projection = match native_profile.as_ref() {
                 Some(profile) => up_rust::frame::metadata::try_project_umessage_to_frame_metadata_with_native_profile(&message, profile),
                 None => up_rust::frame::metadata::try_project_umessage_to_frame_metadata(&message),
@@ -1785,6 +1824,7 @@ impl UStreamer {
                 frame.metadata().payload_encoding().copied(),
                 frame.metadata().native_type_token(),
             );
+            let observation = crate::flow_observation::frame("egress", &route_label, &frame);
             if let Err(error) = egress.transport.send_owned(frame).await {
                 warn!(
                     event = "classic_to_owned_egress_send_failed",
@@ -1794,6 +1834,8 @@ impl UStreamer {
                     err = %error,
                     "classic to owned route egress send failed"
                 );
+            } else {
+                crate::flow_observation::emit(observation);
             }
         }
     }
@@ -1806,6 +1848,11 @@ impl UStreamer {
         native_profile: Option<up_rust::NativeProfileAgreement>,
     ) {
         while let Some(frame) = rx.recv().await {
+            crate::flow_observation::emit(crate::flow_observation::frame(
+                "ingress",
+                &route_label,
+                &frame,
+            ));
             let payload = frame.payload().cloned();
             let metadata = frame.into_metadata();
             let identity = (
@@ -1840,6 +1887,7 @@ impl UStreamer {
                 identity.0,
                 identity.1,
             );
+            let observation = crate::flow_observation::message("egress", &route_label, &message);
             if let Err(error) = egress.transport.send(message).await {
                 warn!(
                     event = "owned_to_classic_egress_send_failed",
@@ -1849,6 +1897,8 @@ impl UStreamer {
                     err = %error,
                     "owned to classic route egress send failed"
                 );
+            } else {
+                crate::flow_observation::emit(observation);
             }
         }
     }

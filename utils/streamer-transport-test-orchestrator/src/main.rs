@@ -4494,13 +4494,15 @@ fn run_row_attempt(
     } else {
         None
     };
+    let active_base_env = role_physical_env(row, true, &process_env);
+    let passive_base_env = role_physical_env(row, false, &process_env);
     let active_env = native_profiles.as_ref().map_or_else(
-        || process_env.clone(),
-        |paths| paths.role_env(true, &process_env),
+        || active_base_env.clone(),
+        |paths| paths.role_env(true, &active_base_env),
     );
     let passive_env = native_profiles.as_ref().map_or_else(
-        || process_env.clone(),
-        |paths| paths.role_env(false, &process_env),
+        || passive_base_env.clone(),
+        |paths| paths.role_env(false, &passive_base_env),
     );
     let mut native_library_paths = BTreeMap::new();
     if let Some(path) = &lola_bridge_lib {
@@ -4570,6 +4572,30 @@ fn run_row_attempt(
     )?;
     timings.config_us = duration_us(config_started.elapsed());
 
+    bridge_control::verify(
+        row,
+        bundle,
+        repo_root,
+        &row_dir,
+        &process_env,
+        &active_env,
+        &passive_env,
+        &zenoh_config_paths,
+        &vsomeip_config_paths,
+        cli,
+        cancellation,
+    )?;
+    atomic_write_json(
+        &row_dir.join("physical-topology.json"),
+        &json!({
+            "schema": 1, "row_id": row.id,
+            "source_profile": row.source.id, "sink_profile": row.sink.id,
+            "source_iceoryx2_namespace": (row.source.physical == PhysicalTransport::Iceoryx2).then(|| iceoryx2_namespace_prefix(&row.id, "source")),
+            "sink_iceoryx2_namespace": (row.sink.physical == PhysicalTransport::Iceoryx2).then(|| iceoryx2_namespace_prefix(&row.id, "sink")),
+            "configuration": config_path,
+            "bridge_off_required": row.source.physical == PhysicalTransport::Iceoryx2 && row.sink.physical == PhysicalTransport::Iceoryx2,
+        }),
+    )?;
     let streamer_started = Instant::now();
     let mut streamer = spawn_process(
         bundle,
@@ -4789,7 +4815,9 @@ fn run_row_attempt(
     timings.teardown_us = timings
         .teardown_us
         .saturating_add(duration_us(teardown_started.elapsed()));
-    let result = result.and(cleanup_result);
+    let result = result
+        .and(cleanup_result)
+        .and_then(|()| flow_oracle::verify(row, &row_dir, bundle));
     if row.uses_lola() && result.is_ok() {
         timings.cooldown.push(CooldownEvidence {
             phase: "post_success_quiescence",
@@ -4942,6 +4970,7 @@ fn skipped_build_summary(target_directory: &Path, rows: &[MatrixRow]) -> BuildSu
 
 fn configurable_streamer_features(rows: &[MatrixRow]) -> Vec<&'static str> {
     let mut features = vec![
+        "flow-evidence",
         "experimental-copy-minimized-routing",
         "zenoh-zero-copy",
         "iceoryx2-zero-copy",
@@ -4962,6 +4991,7 @@ fn configurable_streamer_features(rows: &[MatrixRow]) -> Vec<&'static str> {
 
 fn example_streamer_features(rows: &[MatrixRow]) -> Vec<&'static str> {
     let mut features = vec![
+        "flow-evidence",
         "zenoh-transport",
         "zenoh-selected-wire",
         "iceoryx2-selected-wire",
@@ -5214,6 +5244,17 @@ fn write_config(
         "mqtt": { "config_file": mqtt_config, "endpoints": mqtt_endpoints },
     });
     if !iceoryx2_endpoints.is_empty() {
+        for endpoint in &mut iceoryx2_endpoints {
+            let side = if endpoint["authority"] == AUTHORITY_A {
+                "source"
+            } else {
+                "sink"
+            };
+            endpoint["iceoryx2_namespace"] = json!({
+                "root_path": ICEORYX2_ROOT_PATH,
+                "prefix": iceoryx2_namespace_prefix(&row.id, side),
+            });
+        }
         transports["iceoryx2"] = json!({
             "endpoints": iceoryx2_endpoints,
             "publisher_readiness": { "minimum_subscribers": 1, "timeout_ms": 5000 }
@@ -6395,6 +6436,9 @@ fn role_binary_suffix(role: RoleStyle, active: bool) -> &'static str {
     }
 }
 
+mod bridge_control;
+mod flow_oracle;
+
 fn validate_flow_logs(
     row: &MatrixRow,
     active_log: &Path,
@@ -7502,6 +7546,8 @@ fn row_env(
     tokio_worker_threads: usize,
 ) -> Vec<(String, String)> {
     let mut env = vec![
+        ("UPROTOCOL_FLOW_EVIDENCE_RUN".to_string(), format!("{}::{}", bundle.root.display(), row.id)),
+        ("UPROTOCOL_FLOW_EVIDENCE_ACTOR".to_string(), "streamer".to_string()),
         (
             "RUST_LOG".to_string(),
             "info,configurable_streamer=debug,up_streamer=debug,example_streamer_uses=debug,up_transport_zenoh=debug,up_transport_iceoryx2_rust=debug,up_transport_lola_rust=debug,up_transport_dds=debug".to_string(),
@@ -7529,6 +7575,36 @@ fn row_env(
             "VSOMEIP_INSTALL_PATH".to_string(),
             bundle.root.display().to_string(),
         ));
+    }
+    env
+}
+
+fn iceoryx2_namespace_prefix(row_id: &str, side: &str) -> String {
+    format!(
+        "u{:08x}_{}_",
+        stable_hash(row_id),
+        if side == "source" { "a" } else { "b" }
+    )
+}
+
+fn role_physical_env(
+    row: &MatrixRow,
+    active: bool,
+    base: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut env = base.to_vec();
+    for (key, value) in &mut env {
+        if key == "UPROTOCOL_FLOW_EVIDENCE_ACTOR" {
+            *value = if active { "active" } else { "passive" }.into();
+        }
+    }
+    let profile = if active { row.source } else { row.sink };
+    if profile.physical == PhysicalTransport::Iceoryx2 {
+        for (key, value) in &mut env {
+            if key == "UP_ICEORYX2_PREFIX" {
+                *value = iceoryx2_namespace_prefix(&row.id, if active { "source" } else { "sink" });
+            }
+        }
     }
     env
 }

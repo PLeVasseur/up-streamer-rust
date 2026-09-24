@@ -37,6 +37,160 @@ use up_transport_zenoh::ZenohZeroCopyCore;
 #[derive(Default)]
 struct EmptySubscription;
 
+#[cfg(feature = "owned-frame-transport")]
+struct PhysicalReceiver(tokio::sync::mpsc::UnboundedSender<(String, Vec<u8>)>);
+
+#[cfg(feature = "owned-frame-transport")]
+#[async_trait]
+impl<Rx: UZeroCopyRxLease + Send + 'static> UZeroCopyListener<Rx> for PhysicalReceiver {
+    async fn on_receive_zero_copy(&self, frame: Rx) {
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        frame.payload_reader().read_to_end(&mut bytes).unwrap();
+        self.0
+            .send((frame.metadata().id().to_hyphenated_string(), bytes))
+            .unwrap();
+    }
+}
+
+#[cfg(feature = "owned-frame-transport")]
+#[test_case(true; "owned to copy minimized requires bridge and stops after source")]
+#[test_case(false; "copy minimized to owned requires bridge and stops after source")]
+#[tokio::test]
+async fn physical_islands_require_bridge_and_do_not_reflect(owned_ingress: bool) {
+    use up_streamer::OwnedFrameEndpoint;
+    use up_transport_iceoryx2_rust::{BenchmarkOwnedIceoryx2Core, Iceoryx2PubSubConfig};
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let a = format!("a_{unique:x}_");
+    let b = format!("b_{unique:x}_");
+    // Native connection filenames include IDs in addition to this root/prefix.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("target/bi")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    std::fs::create_dir_all(&root).unwrap();
+    let core = |prefix: &str| {
+        Iceoryx2PubSub::with_config(
+            Iceoryx2PubSubConfig::static_allocation(65536)
+                .with_namespace(&root, prefix)
+                .unwrap(),
+        )
+    };
+    let producer = Arc::new(core(&a).with_selected_wire(ProtobufWire));
+    let recipient = Arc::new(core(&b).with_selected_wire(ProtobufWire));
+    let source = UUri::try_from_parts("authority-a", 0x5BA0, 1, 0x8001).unwrap();
+    let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+    let listener = Arc::new(PhysicalReceiver(sender));
+    recipient
+        .register_validated_zero_copy_listener(&source, None, listener.clone())
+        .await
+        .unwrap();
+    let send = |value: u8| {
+        let producer = producer.clone();
+        let source = source.clone();
+        async move {
+            let metadata = UFrameMetadata::publish(source)
+                .with_payload_encoding(PayloadEncoding::PROTOBUF)
+                .build()
+                .unwrap();
+            let id = metadata.id().to_hyphenated_string();
+            let mut loan = producer
+                .loan_validated_tx(UTxLoanSpec::payload(metadata, 8, 8).unwrap())
+                .await
+                .unwrap();
+            loan.payload_mut().fill(value);
+            producer.send_validated_zero_copy(loan).await.unwrap();
+            id
+        }
+    };
+    send(99).await;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), receiver.recv())
+            .await
+            .is_err(),
+        "separate native buses delivered without a bridge"
+    );
+    let owned_a = OwnedFrameEndpoint::from_owned(
+        "a",
+        "authority-a",
+        Arc::new(BenchmarkOwnedIceoryx2Core::new(core(&a)).with_selected_wire(ProtobufWire)),
+    );
+    let owned_b = OwnedFrameEndpoint::from_owned(
+        "b",
+        "authority-b",
+        Arc::new(BenchmarkOwnedIceoryx2Core::new(core(&b)).with_selected_wire(ProtobufWire)),
+    );
+    let cm_a = ZeroCopyFrameEndpoint::new(
+        "a",
+        "authority-a",
+        Arc::new(core(&a).with_selected_wire(ProtobufWire)),
+    );
+    let cm_b = ZeroCopyFrameEndpoint::new(
+        "b",
+        "authority-b",
+        Arc::new(core(&b).with_selected_wire(ProtobufWire)),
+    );
+    let mut streamer = UStreamer::new("physical-bridge", 4, seeded_publish_subscription())
+        .await
+        .unwrap();
+    if owned_ingress {
+        streamer
+            .add_owned_to_copy_minimized_route_ref(&owned_a, &cm_b)
+            .await
+            .unwrap();
+    } else {
+        streamer
+            .add_copy_minimized_to_owned_route_ref(&cm_a, &owned_b)
+            .await
+            .unwrap();
+    }
+    let mut expected = std::collections::BTreeMap::new();
+    for value in 0..5u8 {
+        expected.insert(send(value).await, vec![value; 8]);
+        sleep(Duration::from_millis(50)).await;
+    }
+    drop(producer);
+    for _ in 0..5 {
+        let (id, bytes) = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            expected.remove(&id).as_deref(),
+            Some(bytes.as_slice()),
+            "foreign, duplicate or corrupted frame"
+        );
+    }
+    assert!(expected.is_empty());
+    assert!(
+        tokio::time::timeout(Duration::from_millis(350), receiver.recv())
+            .await
+            .is_err(),
+        "frames recirculated after the source stopped"
+    );
+    if owned_ingress {
+        streamer
+            .delete_owned_to_copy_minimized_route_ref(&owned_a, &cm_b)
+            .await
+            .unwrap();
+    } else {
+        streamer
+            .delete_copy_minimized_to_owned_route_ref(&cm_a, &owned_b)
+            .await
+            .unwrap();
+    }
+    recipient
+        .unregister_validated_zero_copy_listener(&source, None, listener)
+        .await
+        .unwrap();
+}
+
 #[async_trait]
 impl USubscription for EmptySubscription {
     async fn subscribe(

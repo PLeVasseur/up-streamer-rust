@@ -155,7 +155,7 @@ async fn main() -> Result<(), UStatus> {
                 })?
         };
         info!("Sending Notification message:\n{notification:?}");
-        notifier.send(notification).await?;
+        common::proof::send(notifier.as_ref(), notification).await?;
         sent_count += 1;
     }
 

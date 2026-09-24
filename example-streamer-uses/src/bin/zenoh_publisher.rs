@@ -180,7 +180,7 @@ async fn main() -> Result<(), UStatus> {
         };
         println!("Sending Publish message:\n{publish_msg:?}");
 
-        publisher.send(publish_msg).await?;
+        common::proof::send(publisher.as_ref(), publish_msg).await?;
         sent_count += 1;
     }
 
@@ -339,13 +339,13 @@ async fn send_owned_repeated(
     count: usize,
 ) -> Result<(), UStatus> {
     for _ in 0..count.max(1) {
-        transport
-            .send_owned(
-                UOwnedFrame::with_payload(metadata.clone(), payload.to_vec()).map_err(|error| {
-                    invalid_config(format!("failed to build owned frame: {error:?}"))
-                })?,
-            )
-            .await?;
+        common::proof::send_owned(
+            transport.as_ref(),
+            UOwnedFrame::with_payload(metadata.clone(), payload.to_vec()).map_err(|error| {
+                invalid_config(format!("failed to build owned frame: {error:?}"))
+            })?,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -370,7 +370,7 @@ where
             )?)
             .await?;
         tx.payload_mut().copy_from_slice(payload);
-        transport.send_validated_zero_copy(tx).await?;
+        common::proof::send_loan(transport.as_ref(), tx).await?;
         if attempt + 1 < args.selected_send_count.max(1) {
             tokio::time::sleep(Duration::from_millis(args.send_interval_ms)).await;
         }

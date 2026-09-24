@@ -184,7 +184,7 @@ async fn main() -> Result<(), UStatus> {
         };
         info!("Sending Request message:\n{request_msg:?}");
 
-        client.send(request_msg).await?;
+        common::proof::send(client.as_ref(), request_msg).await?;
         sent_count += 1;
     }
 

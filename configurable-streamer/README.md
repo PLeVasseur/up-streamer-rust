@@ -218,6 +218,22 @@ The two entities will run forever and exchange messages between each other.
 
 ## Finite iceoryx2 egress readiness
 
+### Physical bridge domains
+
+When configuring multiple iceoryx2 endpoints, give each an explicit, distinct
+native namespace. Logical authority names are not physical bus boundaries:
+
+```json5
+iceoryx2_namespace: { root_path: "/tmp/bridge-iox", prefix: "ingress_" }
+```
+
+The peer role on that side uses the same `UP_ICEORYX2_ROOT_PATH` and
+`UP_ICEORYX2_PREFIX`. The other bridge side uses a different prefix, such as
+`egress_`. Missing or overlapping prefixes are rejected before native activation,
+preventing reflective same-bus routes. Prefixes must be 1..32 alphanumeric or
+underscore bytes and root paths absolute. A single endpoint may retain the
+existing process-environment defaults.
+
 An optional `transports.iceoryx2.publisher_readiness` object configures actual
 native subscriber discovery before returning a sendable TX loan:
 

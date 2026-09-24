@@ -1741,6 +1741,7 @@ dependencies = [
  "json5",
  "protobuf",
  "serde",
+ "streamer-flow-evidence",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -5311,6 +5312,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "streamer-flow-evidence"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "up-rust",
+]
+
+[[package]]
 name = "streamer-transport-test-orchestrator"
 version = "0.1.0"
 dependencies = [
@@ -5323,6 +5334,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "signal-hook",
+ "streamer-flow-evidence",
  "test-case",
  "up-rust",
 ]
@@ -6295,6 +6307,7 @@ dependencies = [
  "integration-test-utils",
  "protobuf",
  "serde_json",
+ "streamer-flow-evidence",
  "test-case",
  "tokio",
  "tokio-condvar",
@@ -6324,7 +6337,7 @@ dependencies = [
 [[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=6b50a5da090a158d307343ab7b18b7ad6985b2a7#6b50a5da090a158d307343ab7b18b7ad6985b2a7"
+source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=eaec5c8e0415e22c30cbba6a31a51065f21d4c53#eaec5c8e0415e22c30cbba6a31a51065f21d4c53"
 dependencies = [
  "async-trait",
  "bytes",

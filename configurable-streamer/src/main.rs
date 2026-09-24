@@ -960,9 +960,14 @@ fn register_iceoryx2_endpoints(
     endpoints: &mut HashMap<String, ConfiguredEndpoint>,
     endpoint_configs: &[EndpointConfig],
     route_wire_formats: &HashMap<String, HashSet<RouteWireFormat>>,
-    transport: Iceoryx2PubSub,
+    transport_config: up_transport_iceoryx2_rust::Iceoryx2PubSubConfig,
 ) -> Result<(), UStatus> {
     for endpoint_config in endpoint_configs {
+        let mut config = transport_config.clone();
+        if let Some(namespace) = &endpoint_config.iceoryx2_namespace {
+            config = config.with_namespace(&namespace.root_path, &namespace.prefix)?;
+        }
+        let transport = Iceoryx2PubSub::with_config(config);
         if endpoint_config.routing_mode == RoutingMode::Owned {
             return Err(invalid_config(format!(
                 "iceoryx2 endpoint {} must use copy_minimized or owned_frame routing",
@@ -1975,6 +1980,7 @@ async fn main() -> Result<(), UStatus> {
             format!("Unable to parse config file: {e:?}"),
         )
     })?;
+    config.validate_physical_domains()?;
     config.load_native_profiles(
         std::path::Path::new(&args.config)
             .parent()
@@ -2188,7 +2194,7 @@ async fn main() -> Result<(), UStatus> {
                 &mut endpoints,
                 &iceoryx2_config.endpoints,
                 &route_wire_formats,
-                Iceoryx2PubSub::with_config(core_config),
+                core_config,
             )?;
         }
         #[cfg(not(any(

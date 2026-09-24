@@ -20,6 +20,7 @@ keywords.workspace = true
 license.workspace = true
 
 [features]
+flow-evidence = ["up-streamer/flow-evidence"]
 default = []
 experimental-copy-minimized-routing = ["up-streamer/experimental-copy-minimized-routing"]
 zenoh-zero-copy = ["dep:up-wire-xcdrv2", "up-transport-zenoh/zero-copy", "configurable-streamer-wire-support/zenoh-zero-copy"]

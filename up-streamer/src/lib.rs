@@ -179,6 +179,7 @@ mod control_plane;
 mod copy_minimized;
 mod data_plane;
 mod endpoint;
+mod flow_observation;
 #[cfg(feature = "experimental-copy-minimized-routing")]
 pub use copy_minimized::CopyMinimizedRouteOptions;
 pub use endpoint::Endpoint;

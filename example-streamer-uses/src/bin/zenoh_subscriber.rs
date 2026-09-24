@@ -383,6 +383,7 @@ struct OwnedListener(mpsc::UnboundedSender<UOwnedFrame>);
 #[async_trait]
 impl UOwnedListener for OwnedListener {
     async fn on_receive_owned(&self, frame: UOwnedFrame) {
+        common::proof::received_frame(&frame);
         let _ = self.0.send(frame);
     }
 }
@@ -395,6 +396,7 @@ where
     Rx: UZeroCopyRxLease + Send + 'static,
 {
     async fn on_receive_zero_copy(&self, frame: Rx) {
+        common::proof::received_frame(&frame);
         let _ = self.0.send(frame);
     }
 }

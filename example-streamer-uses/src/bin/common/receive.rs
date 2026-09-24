@@ -16,6 +16,7 @@ struct OwnedChannel(mpsc::UnboundedSender<UOwnedFrame>);
 #[async_trait]
 impl UOwnedListener for OwnedChannel {
     async fn on_receive_owned(&self, frame: UOwnedFrame) {
+        super::proof::received_frame(&frame);
         let _ = self.0.send(frame);
     }
 }
@@ -25,6 +26,7 @@ struct LoanChannel<Rx>(mpsc::UnboundedSender<Rx>);
 #[async_trait]
 impl<Rx: UZeroCopyRxLease + Send + 'static> UZeroCopyListener<Rx> for LoanChannel<Rx> {
     async fn on_receive_zero_copy(&self, frame: Rx) {
+        super::proof::received_frame(&frame);
         let _ = self.0.send(frame);
     }
 }

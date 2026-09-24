@@ -20,6 +20,8 @@ use up_transport_dds::{DdsConfig, Reliability, UPTransportDds};
 
 #[path = "payloads.rs"]
 mod payloads;
+#[path = "proof.rs"]
+mod proof;
 
 use payloads::{
     arrow_payload_bytes, native_payload_bytes, omgidl_payload_bytes, xcdrv2_payload_bytes,
@@ -266,6 +268,7 @@ struct MessageListener(mpsc::UnboundedSender<UMessage>);
 #[async_trait]
 impl UListener for MessageListener {
     async fn on_receive(&self, message: UMessage) {
+        proof::received(&message);
         let _ = self.0.send(message);
     }
 }
@@ -278,7 +281,7 @@ async fn run_classic(role: Role, args: &Args) -> Result<(), UStatus> {
     if matches!(role, Role::Publisher | Role::Notifier) {
         transport.wait_ready(2, timeout(args))?;
         let message = outbound_message(role, args)?;
-        transport.send(message.clone()).await?;
+        proof::send(transport.as_ref(), message.clone()).await?;
         transport.wait_acknowledged(timeout(args))?;
         print_sent(role, message.payload().map_or(0, |payload| payload.len()));
         return Ok(());
@@ -292,7 +295,7 @@ async fn run_classic(role: Role, args: &Args) -> Result<(), UStatus> {
     println!("READY listener_registered");
     if matches!(role, Role::Client) {
         transport.wait_ready(2, timeout(args))?;
-        transport.send(outbound_message(role, args)?).await?;
+        proof::send(transport.as_ref(), outbound_message(role, args)?).await?;
     }
     let message = receive(&mut rx, timeout(args), "classic message").await?;
     if args.encoding == Encoding::Native {
@@ -300,7 +303,7 @@ async fn run_classic(role: Role, args: &Args) -> Result<(), UStatus> {
     }
     if matches!(role, Role::Server) {
         transport.wait_ready(2, timeout(args))?;
-        transport.send(response_message(&message, args)?).await?;
+        proof::send(transport.as_ref(), response_message(&message, args)?).await?;
     }
     transport.wait_acknowledged(timeout(args))?;
     print_observed(role, message.payload().map_or(0, |payload| payload.len()));
@@ -312,6 +315,7 @@ struct OwnedListener(mpsc::UnboundedSender<UOwnedFrame>);
 #[async_trait]
 impl UOwnedListener for OwnedListener {
     async fn on_receive_owned(&self, frame: UOwnedFrame) {
+        proof::received_frame(&frame);
         let _ = self.0.send(frame);
     }
 }
@@ -325,7 +329,7 @@ async fn run_owned(role: Role, args: &Args) -> Result<(), UStatus> {
         transport.wait_ready(2, timeout(args))?;
         let frame = frame_from_message(&outbound_message(role, args)?, args)?;
         let len = frame.payload_bytes().len();
-        transport.send_owned(frame).await?;
+        proof::send_owned(transport.as_ref(), frame).await?;
         transport.wait_acknowledged(timeout(args))?;
         print_sent(role, len);
         return Ok(());
@@ -339,9 +343,11 @@ async fn run_owned(role: Role, args: &Args) -> Result<(), UStatus> {
     println!("READY listener_registered");
     if matches!(role, Role::Client) {
         transport.wait_ready(2, timeout(args))?;
-        transport
-            .send_owned(frame_from_message(&outbound_message(role, args)?, args)?)
-            .await?;
+        proof::send_owned(
+            transport.as_ref(),
+            frame_from_message(&outbound_message(role, args)?, args)?,
+        )
+        .await?;
     }
     let frame = receive(&mut rx, timeout(args), "owned frame").await?;
     if args.encoding == Encoding::Native {
@@ -350,15 +356,15 @@ async fn run_owned(role: Role, args: &Args) -> Result<(), UStatus> {
     }
     if matches!(role, Role::Server) {
         transport.wait_ready(2, timeout(args))?;
-        transport
-            .send_owned(
-                UOwnedFrame::with_payload(
-                    response_metadata(frame.metadata(), args)?,
-                    frame.payload_bytes().to_vec(),
-                )
-                .map_err(|error| invalid(format!("build owned response: {error}")))?,
+        proof::send_owned(
+            transport.as_ref(),
+            UOwnedFrame::with_payload(
+                response_metadata(frame.metadata(), args)?,
+                frame.payload_bytes().to_vec(),
             )
-            .await?;
+            .map_err(|error| invalid(format!("build owned response: {error}")))?,
+        )
+        .await?;
     }
     transport.wait_acknowledged(timeout(args))?;
     print_observed(role, frame.payload_bytes().len());
@@ -387,6 +393,7 @@ where
     Rx: UZeroCopyRxLease + Send + 'static,
 {
     async fn on_receive_zero_copy(&self, frame: Rx) {
+        proof::received_frame(&frame);
         let _ = self.0.send(frame);
     }
 }
@@ -476,7 +483,7 @@ where
         )?)
         .await?;
     loan.payload_mut().copy_from_slice(frame.payload_bytes());
-    transport.send_validated_zero_copy(loan).await
+    proof::send_loan(transport.as_ref(), loan).await
 }
 
 async fn receive<T>(

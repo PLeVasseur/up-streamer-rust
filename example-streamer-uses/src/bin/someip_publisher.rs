@@ -167,7 +167,7 @@ async fn main() -> Result<(), UStatus> {
         };
         info!("Sending Publish message:\n{publish_msg:?}");
 
-        publisher.send(publish_msg).await?;
+        common::proof::send(publisher.as_ref(), publish_msg).await?;
         sent_count += 1;
     }
 

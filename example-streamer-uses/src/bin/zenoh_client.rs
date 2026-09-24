@@ -218,7 +218,7 @@ async fn main() -> Result<(), UStatus> {
         debug!("Invoking URI {} with response URI {}", &sink, &source);
         info!("Sending Request message:\n{:?}", &request_msg);
 
-        client.send(request_msg).await?;
+        common::proof::send(client.as_ref(), request_msg).await?;
         sent_count += 1;
     }
 
@@ -446,17 +446,13 @@ async fn run_owned_selected_client(
         ));
         tokio::time::sleep(Duration::from_millis(RESPONSE_LISTENER_SETTLE_MS)).await;
         for attempt in 0..attempt_count {
-            if let Err(error) = transport
-                .send_owned(
-                    UOwnedFrame::with_payload(metadata.clone(), payload.clone()).map_err(
-                        |error| {
-                            invalid_config(format!(
-                                "failed to build owned request frame: {error:?}"
-                            ))
-                        },
-                    )?,
-                )
-                .await
+            if let Err(error) = common::proof::send_owned(
+                transport.as_ref(),
+                UOwnedFrame::with_payload(metadata.clone(), payload.clone()).map_err(|error| {
+                    invalid_config(format!("failed to build owned request frame: {error:?}"))
+                })?,
+            )
+            .await
             {
                 receive_task.abort();
                 let _ = receive_task.await;
@@ -534,7 +530,7 @@ where
                 }
             };
             tx.payload_mut().copy_from_slice(&payload);
-            if let Err(error) = transport.send_validated_zero_copy(tx).await {
+            if let Err(error) = common::proof::send_loan(transport.as_ref(), tx).await {
                 receive_task.abort();
                 let _ = receive_task.await;
                 return Err(error);
@@ -642,6 +638,7 @@ async fn receive_owned_payload(
         .await
         {
             Ok(Ok(frame)) => {
+                common::proof::received_frame(&frame);
                 if let Some(native) = &native {
                     native.verify_owned(frame.metadata(), frame.payload_bytes())?;
                 }
@@ -684,6 +681,7 @@ where
         .await
         {
             Ok(Ok(frame)) => {
+                common::proof::received_frame(&frame);
                 if let Some(native) = &native {
                     verify_native.ok_or_else(|| {
                         invalid_config("native receive requires a typed loan verifier")

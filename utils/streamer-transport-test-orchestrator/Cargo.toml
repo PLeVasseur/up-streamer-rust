@@ -20,6 +20,7 @@ keywords.workspace = true
 license.workspace = true
 
 [dependencies]
+streamer-flow-evidence = { path = "../streamer-flow-evidence" }
 configurable-streamer-wire-support = { path = "../configurable-streamer-wire-support" }
 up-rust = { workspace = true }
 anyhow = { version = "1.0.98" }

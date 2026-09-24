@@ -18,6 +18,7 @@ members = [
     "example-streamer-implementations",
     "utils/criterion-guardrail",
     "utils/configurable-streamer-wire-support",
+    "utils/streamer-flow-evidence",
     "utils/streamer-transport-test-orchestrator",
     "utils/transport-smoke-suite",
     "configurable-streamer",
@@ -57,7 +58,7 @@ tokio = { version = "1.44", default-features = false, features = [
 protobuf = { version = "3.7.2", features = ["with-bytes"] }
 up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "1c139340a04ff427a7972588958649a2b496044d", default-features = false }
 up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "493f14e4abe8002cbb42793d6111afad77e83c9d" }
-up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "6b50a5da090a158d307343ab7b18b7ad6985b2a7" }
+up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "eaec5c8e0415e22c30cbba6a31a51065f21d4c53" }
 up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "75d88a87e4083354ae5b8c6265fd129384d4e633", default-features = false }
 up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "fda66f194bb89710fe6542bb9bb4637fc8c55980" }
 up-transport-dds = { git = "https://github.com/PLeVasseur/up-transport-dds-rust.git", rev = "52b7239bff78d78cdb40442bdbc6521d5697f480" }

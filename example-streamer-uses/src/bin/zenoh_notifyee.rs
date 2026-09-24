@@ -763,13 +763,12 @@ async fn send_owned_frame(
     metadata: UFrameMetadata,
     payload: &[u8],
 ) -> Result<(), UStatus> {
-    transport
-        .send_owned(
-            UOwnedFrame::with_payload(metadata, payload.to_vec()).map_err(|error| {
-                invalid_config(format!("failed to build owned frame: {error:?}"))
-            })?,
-        )
-        .await
+    common::proof::send_owned(
+        transport.as_ref(),
+        UOwnedFrame::with_payload(metadata, payload.to_vec())
+            .map_err(|error| invalid_config(format!("failed to build owned frame: {error:?}")))?,
+    )
+    .await
 }
 
 #[derive(Clone, Copy)]
@@ -878,6 +877,7 @@ async fn receive_owned_frame(
         .await
         {
             Ok(Ok(frame)) => {
+                common::proof::received_frame(&frame);
                 if cli.wire_format == FlowWireFormat::Native {
                     cli.native
                         .verify_owned(frame.metadata(), frame.payload_bytes())?;
@@ -919,7 +919,7 @@ where
         )?)
         .await?;
     tx.payload_mut().copy_from_slice(payload);
-    transport.send_validated_zero_copy(tx).await
+    common::proof::send_loan(transport.as_ref(), tx).await
 }
 
 #[cfg_attr(
@@ -1051,6 +1051,7 @@ struct OwnedListener(mpsc::UnboundedSender<UOwnedFrame>);
 #[async_trait]
 impl UOwnedListener for OwnedListener {
     async fn on_receive_owned(&self, frame: UOwnedFrame) {
+        common::proof::received_frame(&frame);
         let _ = self.0.send(frame);
     }
 }
@@ -1063,6 +1064,7 @@ where
     Rx: UZeroCopyRxLease + Send + 'static,
 {
     async fn on_receive_zero_copy(&self, frame: Rx) {
+        common::proof::received_frame(&frame);
         let _ = self.0.send(frame);
     }
 }
@@ -1125,6 +1127,7 @@ where
         .await
         {
             Ok(Ok(frame)) => {
+                common::proof::received_frame(&frame);
                 common::payloads::verify_received_frame(transport.as_ref(), &frame)?;
                 return Ok(frame);
             }

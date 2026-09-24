@@ -2,6 +2,7 @@ pub(crate) mod cli;
 pub(crate) mod native;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
 pub(crate) mod payloads;
+pub(crate) mod proof;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
 pub(crate) mod receive;
 
@@ -54,6 +55,7 @@ impl ServiceResponseListener {
 #[async_trait]
 impl UListener for ServiceResponseListener {
     async fn on_receive(&self, msg: UMessage) {
+        proof::received(&msg);
         info!("ServiceResponseListener: Received a message: {msg:?}");
 
         let Some(payload_bytes) = msg.payload() else {
@@ -89,6 +91,7 @@ impl ServiceRequestResponder {
 #[async_trait]
 impl UListener for ServiceRequestResponder {
     async fn on_receive(&self, msg: UMessage) {
+        proof::received(&msg);
         info!("ServiceResponseListener: Received a message: {msg:?}");
 
         let Some(payload_bytes) = msg.payload() else {
@@ -134,7 +137,9 @@ impl UListener for ServiceRequestResponder {
             .build_with_payload(response_payload, response_encoding)
             .unwrap();
         info!("Sending Response message:\n{:?}", &response_msg);
-        self.client.send(response_msg).await.unwrap();
+        proof::send(self.client.as_ref(), response_msg)
+            .await
+            .unwrap();
     }
 }
 
@@ -228,6 +233,7 @@ pub(crate) struct PublishReceiver;
 #[async_trait]
 impl UListener for PublishReceiver {
     async fn on_receive(&self, msg: UMessage) {
+        proof::received(&msg);
         info!("PublishReceiver: Received a message: {msg:?}");
 
         let Some(payload_bytes) = msg.payload() else {

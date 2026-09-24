@@ -136,7 +136,20 @@ impl EgressRouteWorker {
                         );
                     }
 
+                    crate::flow_observation::emit(crate::flow_observation::message(
+                        "ingress",
+                        &worker_context.worker_id,
+                        message,
+                    ));
+                    let observation = crate::flow_observation::message(
+                        "egress",
+                        &worker_context.worker_id,
+                        message,
+                    );
                     let send_res = out_transport.send(message.clone()).await;
+                    if send_res.is_ok() {
+                        crate::flow_observation::emit(observation);
+                    }
                     if let Err(err) = send_res {
                         if tracing::enabled!(Level::WARN) {
                             let fields = message_fields.get_or_insert_with(|| {

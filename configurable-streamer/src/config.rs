@@ -23,6 +23,39 @@ pub struct Config {
 }
 
 impl Config {
+    /// Rejects reflective physical topologies before creating native resources.
+    pub(crate) fn validate_physical_domains(&self) -> Result<(), up_rust::UStatus> {
+        let Some(transport) = &self.transports.iceoryx2 else {
+            return Ok(());
+        };
+        for endpoint in &transport.endpoints {
+            if let Some(namespace) = &endpoint.iceoryx2_namespace {
+                namespace.validate()?;
+            }
+        }
+        if transport.endpoints.len() > 1 {
+            for (index, endpoint) in transport.endpoints.iter().enumerate() {
+                let namespace = endpoint.iceoryx2_namespace.as_ref().ok_or_else(|| {
+                    up_rust::UStatus::fail_with_code(up_rust::UCode::InvalidArgument,
+                        format!("iceoryx2 endpoint {} requires an explicit physical namespace in a multi-endpoint bridge", endpoint.endpoint))
+                })?;
+                for other in transport.endpoints.iter().skip(index + 1) {
+                    let peer = other.iceoryx2_namespace.as_ref().ok_or_else(|| {
+                        up_rust::UStatus::fail_with_code(up_rust::UCode::InvalidArgument,
+                            format!("iceoryx2 endpoint {} requires an explicit physical namespace in a multi-endpoint bridge", other.endpoint))
+                    })?;
+                    if namespace.prefix.starts_with(&peer.prefix)
+                        || peer.prefix.starts_with(&namespace.prefix)
+                    {
+                        return Err(up_rust::UStatus::fail_with_code(up_rust::UCode::InvalidArgument,
+                            format!("iceoryx2 endpoints {} and {} have overlapping physical namespaces; logical authorities do not isolate a native bus", endpoint.endpoint, other.endpoint)));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Resolve immutable peer agreements before opening endpoints or routes.
     pub(crate) fn load_native_profiles(
         &mut self,
@@ -224,6 +257,30 @@ pub struct Iceoryx2PublisherReadiness {
     pub(crate) timeout_ms: u64,
 }
 
+#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Iceoryx2Namespace {
+    pub(crate) root_path: String,
+    pub(crate) prefix: String,
+}
+
+impl Iceoryx2Namespace {
+    fn validate(&self) -> Result<(), up_rust::UStatus> {
+        if !std::path::Path::new(&self.root_path).is_absolute()
+            || self.prefix.is_empty()
+            || self.prefix.len() > 32
+            || !self
+                .prefix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(up_rust::UStatus::fail_with_code(up_rust::UCode::InvalidArgument,
+                "iceoryx2 namespace needs an absolute root_path and a 1..32 byte alphanumeric/underscore prefix"));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct LolaTransport {
@@ -256,6 +313,8 @@ pub struct EndpointConfig {
     pub(crate) zenoh_config_file: Option<String>,
     #[serde(default)]
     pub(crate) zenoh_client_config_file: Option<String>,
+    #[serde(default)]
+    pub(crate) iceoryx2_namespace: Option<Iceoryx2Namespace>,
     #[serde(default)]
     pub(crate) lola_instance_specifier: Option<String>,
     #[serde(default)]
@@ -322,6 +381,60 @@ impl MqttTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn two_bus_config(namespace_a: &str, namespace_b: &str) -> Config {
+        json5::from_str(&format!(r#"{{
+            up_streamer_config: {{ message_queue_size: 32 }},
+            streamer_uuri: {{ authority: "bridge", ue_id: 1, ue_version_major: 1 }},
+            usubscription_config: {{ file_path: "subscriptions.json" }},
+            transports: {{ zenoh: {{config_file:"unused", endpoints:[]}}, mqtt: {{config_file:"unused", endpoints:[]}},
+                iceoryx2: {{ endpoints: [
+                    {{endpoint:"a",authority:"authority-a",routing_mode:"owned_frame", {namespace_a} forwarding:["b"]}},
+                    {{endpoint:"b",authority:"authority-b",routing_mode:"copy_minimized", {namespace_b} forwarding:["a"]}}
+                ] }} }} }}"#)).unwrap()
+    }
+
+    #[test]
+    fn reflective_legacy_iceoryx2_config_is_rejected_before_activation() {
+        let error = two_bus_config("", "")
+            .validate_physical_domains()
+            .unwrap_err();
+        assert_eq!(error.code(), up_rust::UCode::InvalidArgument);
+    }
+
+    #[test]
+    fn overlapping_native_prefixes_do_not_establish_physical_isolation() {
+        let config = two_bus_config(
+            "iceoryx2_namespace:{root_path:'/one',prefix:'bus_'},",
+            "iceoryx2_namespace:{root_path:'/two',prefix:'bus_other_'},",
+        );
+        assert!(config.validate_physical_domains().is_err());
+    }
+
+    #[test]
+    fn distinct_native_namespaces_allow_bidirectional_routes() {
+        let config = two_bus_config(
+            "iceoryx2_namespace:{root_path:'/same',prefix:'bus_a_'},",
+            "iceoryx2_namespace:{root_path:'/same',prefix:'bus_b_'},",
+        );
+        config.validate_physical_domains().unwrap();
+    }
+
+    #[test]
+    fn native_namespace_rejects_relative_root_or_invalid_prefix() {
+        assert!(Iceoryx2Namespace {
+            root_path: "relative".into(),
+            prefix: "valid_".into()
+        }
+        .validate()
+        .is_err());
+        assert!(Iceoryx2Namespace {
+            root_path: "/absolute".into(),
+            prefix: "bad/prefix".into()
+        }
+        .validate()
+        .is_err());
+    }
 
     #[test]
     fn iceoryx2_readiness_is_optional_and_explicitly_bounded() {
