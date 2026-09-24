@@ -175,12 +175,12 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
             println!("FLOW sent_payload_bytes={} role=pub_sender", payload.len());
         }
         FlowRole::PubReceiver => {
-            println!("READY listener_registered");
-            let payload = receive_owned_payload(
+            let payload = common::receive::owned_payload(
                 &transport,
                 &topic_uri(cli.peer_authority.as_str(), cli.topic_resource_id)?,
                 None,
-                cli,
+                cli.timeout_ms,
+                (cli.wire_format == FlowWireFormat::Native).then_some(&cli.native),
             )
             .await?;
             println!(
@@ -202,10 +202,16 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
             );
         }
         FlowRole::NotifyReceiver => {
-            println!("READY listener_registered");
             let source = topic_uri(cli.peer_authority.as_str(), cli.topic_resource_id)?;
             let sink = endpoint_uri(cli.local_authority.as_str())?;
-            let payload = receive_owned_payload(&transport, &source, Some(&sink), cli).await?;
+            let payload = common::receive::owned_payload(
+                &transport,
+                &source,
+                Some(&sink),
+                cli.timeout_ms,
+                (cli.wire_format == FlowWireFormat::Native).then_some(&cli.native),
+            )
+            .await?;
             println!(
                 "FLOW observed_payload_bytes={} role=notify_receiver",
                 payload.len()
@@ -248,10 +254,16 @@ async fn run_owned(cli: &Cli) -> Result<(), UStatus> {
             );
         }
         FlowRole::RpcServer => {
-            println!("READY listener_registered");
             let source = endpoint_wildcard(cli.peer_authority.as_str())?;
             let sink = method_uri(cli.local_authority.as_str(), cli.method_resource_id)?;
-            let request = receive_owned_frame(&transport, &source, Some(&sink), cli).await?;
+            let request = common::receive::owned(
+                &transport,
+                &source,
+                Some(&sink),
+                cli.timeout_ms,
+                (cli.wire_format == FlowWireFormat::Native).then_some(&cli.native),
+            )
+            .await?;
             let payload = request.payload_bytes().to_vec();
             let response_metadata = response_metadata(cli, request.metadata())?;
             tokio::time::sleep(Duration::from_millis(cli.rpc_response_delay_ms)).await;
@@ -433,8 +445,7 @@ where
             println!("FLOW sent_payload_bytes={} role=pub_sender", payload.len());
         }
         FlowRole::PubReceiver => {
-            println!("READY listener_registered");
-            let payload = receive_zero_copy_payload(
+            let payload = common::receive::zero_copy_payload(
                 &transport,
                 &topic_uri(cli.peer_authority.as_str(), cli.topic_resource_id)?,
                 None,
@@ -460,11 +471,15 @@ where
             );
         }
         FlowRole::NotifyReceiver => {
-            println!("READY listener_registered");
             let source = topic_uri(cli.peer_authority.as_str(), cli.topic_resource_id)?;
             let sink = endpoint_uri(cli.local_authority.as_str())?;
-            let payload =
-                receive_zero_copy_payload(&transport, &source, Some(&sink), cli.timeout_ms).await?;
+            let payload = common::receive::zero_copy_payload(
+                &transport,
+                &source,
+                Some(&sink),
+                cli.timeout_ms,
+            )
+            .await?;
             println!(
                 "FLOW observed_payload_bytes={} role=notify_receiver",
                 payload.len()
@@ -512,11 +527,11 @@ where
             );
         }
         FlowRole::RpcServer => {
-            println!("READY listener_registered");
             let source = endpoint_wildcard(cli.peer_authority.as_str())?;
             let sink = method_uri(cli.local_authority.as_str(), cli.method_resource_id)?;
             let request =
-                receive_zero_copy_frame(&transport, &source, Some(&sink), cli.timeout_ms).await?;
+                common::receive::zero_copy(&transport, &source, Some(&sink), cli.timeout_ms)
+                    .await?;
             let payload = request.try_contiguous_payload().unwrap_or(&[]).to_vec();
             let response_metadata = response_metadata(cli, request.metadata())?;
             tokio::time::sleep(Duration::from_millis(cli.rpc_response_delay_ms)).await;
