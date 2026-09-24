@@ -54,10 +54,15 @@ impl<Rx: UZeroCopyRxLease + Send + 'static> UZeroCopyListener<Rx> for PhysicalRe
 }
 
 #[cfg(feature = "owned-frame-transport")]
-#[test_case(true; "owned to copy minimized requires bridge and stops after source")]
-#[test_case(false; "copy minimized to owned requires bridge and stops after source")]
+#[test_case(true, false; "owned to copy minimized publish requires bridge and stops after source")]
+#[test_case(false, false; "copy minimized to owned publish requires bridge and stops after source")]
+#[test_case(true, true; "owned to copy minimized notification is not duplicated by publish subscription")]
+#[test_case(false, true; "copy minimized to owned notification is not duplicated by publish subscription")]
 #[tokio::test]
-async fn physical_islands_require_bridge_and_do_not_reflect(owned_ingress: bool) {
+async fn physical_islands_require_bridge_and_do_not_reflect(
+    owned_ingress: bool,
+    notification: bool,
+) {
     use up_streamer::OwnedFrameEndpoint;
     use up_transport_iceoryx2_rust::{BenchmarkOwnedIceoryx2Core, Iceoryx2PubSubConfig};
     let unique = std::time::SystemTime::now()
@@ -85,17 +90,23 @@ async fn physical_islands_require_bridge_and_do_not_reflect(owned_ingress: bool)
     let producer = Arc::new(core(&a).with_selected_wire(ProtobufWire));
     let recipient = Arc::new(core(&b).with_selected_wire(ProtobufWire));
     let source = UUri::try_from_parts("authority-a", 0x5BA0, 1, 0x8001).unwrap();
+    let sink = notification.then(|| UUri::try_from_parts("authority-b", 0x5678, 1, 0).unwrap());
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     let listener = Arc::new(PhysicalReceiver(sender));
     recipient
-        .register_validated_zero_copy_listener(&source, None, listener.clone())
+        .register_validated_zero_copy_listener(&source, sink.as_ref(), listener.clone())
         .await
         .unwrap();
     let send = |value: u8| {
         let producer = producer.clone();
         let source = source.clone();
+        let sink = sink.clone();
         async move {
-            let metadata = UFrameMetadata::publish(source)
+            let builder = match sink {
+                Some(sink) => UFrameMetadata::notification(source, sink),
+                None => UFrameMetadata::publish(source),
+            };
+            let metadata = builder
                 .with_payload_encoding(PayloadEncoding::PROTOBUF)
                 .build()
                 .unwrap();
@@ -186,7 +197,7 @@ async fn physical_islands_require_bridge_and_do_not_reflect(owned_ingress: bool)
             .unwrap();
     }
     recipient
-        .unregister_validated_zero_copy_listener(&source, None, listener)
+        .unregister_validated_zero_copy_listener(&source, sink.as_ref(), listener)
         .await
         .unwrap();
 }
