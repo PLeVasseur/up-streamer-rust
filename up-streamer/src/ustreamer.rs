@@ -300,6 +300,7 @@ where
 #[async_trait::async_trait]
 impl UOwnedListener for OwnedIngressForwarder {
     async fn on_receive_owned(&self, frame: UOwnedFrame) {
+        debug!(event = "owned_ingress_observed", source = %frame.metadata().source(), sink = ?frame.metadata().sink(), payload_bytes = frame.payload_bytes().len(), "owned frame entered route");
         if self.tx.send(frame).await.is_err() {
             warn!(
                 event = "owned_ingress_queue_closed",
@@ -984,6 +985,7 @@ impl UStreamer {
         mut rx: mpsc::Receiver<UOwnedFrame>,
     ) {
         while let Some(frame) = rx.recv().await {
+            debug!(event = "owned_egress_begin", route = %route_label, source = %frame.metadata().source(), sink = ?frame.metadata().sink(), payload_bytes = frame.payload_bytes().len(), "owned egress begins");
             if let Err(error) = egress.transport.send_owned(frame).await {
                 warn!(
                     event = "owned_route_egress_send_failed",
@@ -994,6 +996,8 @@ impl UStreamer {
                     err = %error,
                     "owned route egress send failed"
                 );
+            } else {
+                debug!(event = "owned_egress_complete", route = %route_label, "owned egress completed");
             }
         }
     }

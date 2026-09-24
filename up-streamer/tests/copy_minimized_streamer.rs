@@ -1321,10 +1321,10 @@ async fn selected_wire_copy_minimized_route_accepts_same_static_wire() {
     let registered_filters = ingress_core.registered_filters();
     assert!(
         registered_filters.contains(&(
-            authority_wildcard_filter("*"),
+            authority_wildcard_filter("authority-a"),
             Some(authority_wildcard_filter("authority-b")),
         )),
-        "selected-wire registration must preserve sink-bearing route filters"
+        "selected-wire registration must preserve both source and sink route scopes"
     );
     assert!(
         registered_filters.iter().any(|(_, sink)| sink.is_none()),
