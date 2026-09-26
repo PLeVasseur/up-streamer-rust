@@ -1,0 +1,42 @@
+{
+  up_streamer_config: { message_queue_size: 32 },
+  streamer_uuri: {
+    authority: "authority-streamer",
+    ue_id: 78,
+    ue_version_major: 1,
+  },
+  usubscription_config: {
+    mode: "static_file",
+    file_path: "subscription_data.json",
+  },
+  transports: {
+    zenoh: { config_file: "ZENOH_CONFIG.json5", endpoints: [] },
+    mqtt: { config_file: "MQTT_CONFIG.json5", endpoints: [] },
+    dds: {
+      domain_id: 80,
+      origin_id: "dds-arrow-streamer",
+      qos: { reliability: "reliable" },
+      history_depth: 32,
+      readiness: { required_matched_readers: 1, timeout_ms: 5000 },
+      endpoints: [
+        {
+          authority: "authority-a",
+          endpoint: "dds-owned-source",
+          routing_mode: "owned_frame",
+          forwarding_routes: [
+            { endpoint: "dds-copy-sink", wire_format: "arrow" },
+          ],
+        },
+        {
+          authority: "authority-b",
+          endpoint: "dds-copy-sink",
+          routing_mode: "copy_minimized",
+          copy_minimized_payload_alignment: 8,
+          forwarding_routes: [
+            { endpoint: "dds-owned-source", wire_format: "arrow" },
+          ],
+        },
+      ],
+    },
+  },
+}

@@ -12,16 +12,17 @@
  ********************************************************************************/
 
 use clap::Parser;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
+use std::{env as std_env, fs};
 use tokio::process::Command;
 use transport_smoke_suite::claims::{claims_override_kind, ClaimsPathKind};
 use transport_smoke_suite::env;
 use transport_smoke_suite::process::{run_shell_command, shell_escape};
 use transport_smoke_suite::report::{
-    self, FailedScenarioSummary, MatrixScenarioSummary, MatrixSummary, ScenarioReport,
+    self, FailedScenarioSummary, MatrixScenarioSummary, MatrixSummary, ScenarioClassification,
+    ScenarioReport,
 };
 use transport_smoke_suite::scenario;
 
@@ -58,6 +59,12 @@ struct Cli {
 
     #[arg(long)]
     no_bootstrap: bool,
+
+    #[arg(long, value_enum, default_value = "docker-compose")]
+    mqtt_broker_mode: scenario::MqttBrokerMode,
+
+    #[arg(long, default_value = "localhost:1883")]
+    mqtt_broker_uri: String,
 
     #[arg(long, default_value_t = env::DEFAULT_ENDPOINT_CLAIM_MIN_COUNT)]
     endpoint_claim_min_count: usize,
@@ -155,6 +162,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
             Err(error) => MatrixScenarioSummary {
                 scenario_id: scenario_id.to_string(),
                 pass: false,
+                classification: ScenarioClassification::ValidatedFail,
                 exit_code: 1,
                 artifact_dir: None,
                 failure_reason: Some(error.to_string()),
@@ -173,6 +181,14 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
 
     let pass_count = summaries.iter().filter(|summary| summary.pass).count();
     let fail_count = summaries.len() - pass_count;
+    let validated_fail_count = summaries
+        .iter()
+        .filter(|summary| summary.classification == ScenarioClassification::ValidatedFail)
+        .count();
+    let blocked_count = summaries
+        .iter()
+        .filter(|summary| summary.classification == ScenarioClassification::Blocked)
+        .count();
 
     let failed_scenarios = summaries
         .iter()
@@ -190,9 +206,11 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
         "all selected scenarios passed".to_string()
     } else {
         format!(
-            "{} of {} scenarios failed; matrix exits non-zero",
+            "{} of {} scenarios failed (validated_fail={}, blocked={}); matrix exits non-zero",
             fail_count,
-            summaries.len()
+            summaries.len(),
+            validated_fail_count,
+            blocked_count
         )
     };
 
@@ -201,6 +219,8 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
         schema_version: "1.0".to_string(),
         selected_scenarios,
         pass_count,
+        validated_fail_count,
+        blocked_count,
         fail_count,
         total_duration_ms: matrix_start_instant.elapsed().as_millis(),
         scenarios: summaries,
@@ -222,7 +242,7 @@ async fn run(cli: Cli) -> anyhow::Result<i32> {
 
 fn resolve_selected_scenarios(only: &[String]) -> anyhow::Result<Vec<String>> {
     if only.is_empty() {
-        return Ok(scenario::scenario_ids()
+        return Ok(scenario::matrix_scenario_ids()
             .iter()
             .map(|scenario_id| scenario_id.to_string())
             .collect());
@@ -230,11 +250,11 @@ fn resolve_selected_scenarios(only: &[String]) -> anyhow::Result<Vec<String>> {
 
     let mut selected = Vec::new();
     for scenario_id in only {
-        if scenario::scenario_template(scenario_id).is_none() {
+        if !scenario::is_known_scenario(scenario_id) {
             anyhow::bail!(
                 "unknown scenario id '{}'; valid ids: {}",
                 scenario_id,
-                scenario::scenario_ids().join(", ")
+                scenario::matrix_scenario_ids().join(", ")
             );
         }
         selected.push(scenario_id.to_string());
@@ -250,7 +270,7 @@ async fn run_single_scenario(
     cli: &Cli,
     expected_branch: Option<&str>,
 ) -> anyhow::Result<ScenarioReport> {
-    let binary_path = repo_root.join("target").join("debug").join(scenario_id);
+    let binary_path = scenario_binary_path(repo_root, scenario_id);
 
     if !binary_path.exists() {
         anyhow::bail!(
@@ -288,6 +308,11 @@ async fn run_single_scenario(
     if cli.no_bootstrap {
         command.arg("--no-bootstrap");
     }
+    command
+        .arg("--mqtt-broker-mode")
+        .arg(cli.mqtt_broker_mode.as_str())
+        .arg("--mqtt-broker-uri")
+        .arg(&cli.mqtt_broker_uri);
     if let Some(scenario_timeout_secs) = cli.scenario_timeout_secs {
         command
             .arg("--scenario-timeout-secs")
@@ -331,6 +356,21 @@ async fn run_single_scenario(
     Ok(report)
 }
 
+fn scenario_binary_path(repo_root: &Path, scenario_id: &str) -> PathBuf {
+    let target_dir = std_env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .map(|path| {
+            if path.is_absolute() {
+                path
+            } else {
+                repo_root.join(path)
+            }
+        })
+        .unwrap_or_else(|| repo_root.join("target"));
+
+    target_dir.join("debug").join(scenario_id)
+}
+
 fn parse_scenario_report_path(output: &str) -> Option<PathBuf> {
     output
         .lines()
@@ -369,6 +409,7 @@ fn build_summary_from_report(report: ScenarioReport, duration_ms: u128) -> Matri
     MatrixScenarioSummary {
         scenario_id: report.scenario_id,
         pass: report.pass,
+        classification: report.classification,
         exit_code: report.exit_code,
         artifact_dir: Some(report.artifact_dir),
         failure_reason: report.failure_reason,

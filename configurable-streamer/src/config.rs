@@ -22,6 +22,91 @@ pub struct Config {
     pub(crate) transports: Transports,
 }
 
+impl Config {
+    /// Rejects reflective physical topologies before creating native resources.
+    pub(crate) fn validate_physical_domains(&self) -> Result<(), up_rust::UStatus> {
+        let Some(transport) = &self.transports.iceoryx2 else {
+            return Ok(());
+        };
+        for endpoint in &transport.endpoints {
+            if let Some(namespace) = &endpoint.iceoryx2_namespace {
+                namespace.validate()?;
+            }
+        }
+        if transport.endpoints.len() > 1 {
+            for (index, endpoint) in transport.endpoints.iter().enumerate() {
+                let namespace = endpoint.iceoryx2_namespace.as_ref().ok_or_else(|| {
+                    up_rust::UStatus::fail_with_code(up_rust::UCode::InvalidArgument,
+                        format!("iceoryx2 endpoint {} requires an explicit physical namespace in a multi-endpoint bridge", endpoint.endpoint))
+                })?;
+                for other in transport.endpoints.iter().skip(index + 1) {
+                    let peer = other.iceoryx2_namespace.as_ref().ok_or_else(|| {
+                        up_rust::UStatus::fail_with_code(up_rust::UCode::InvalidArgument,
+                            format!("iceoryx2 endpoint {} requires an explicit physical namespace in a multi-endpoint bridge", other.endpoint))
+                    })?;
+                    if namespace.prefix.starts_with(&peer.prefix)
+                        || peer.prefix.starts_with(&namespace.prefix)
+                    {
+                        return Err(up_rust::UStatus::fail_with_code(up_rust::UCode::InvalidArgument,
+                            format!("iceoryx2 endpoints {} and {} have overlapping physical namespaces; logical authorities do not isolate a native bus", endpoint.endpoint, other.endpoint)));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve immutable peer agreements before opening endpoints or routes.
+    pub(crate) fn load_native_profiles(
+        &mut self,
+        base: &std::path::Path,
+    ) -> Result<(), up_rust::UStatus> {
+        use configurable_streamer_wire_support::native_profile::{
+            load_native_agreement, load_native_agreement_from_env,
+        };
+        let shared = load_native_agreement_from_env()?;
+        let mut groups = vec![
+            &mut self.transports.zenoh.endpoints,
+            &mut self.transports.mqtt.endpoints,
+        ];
+        if let Some(transport) = &mut self.transports.iceoryx2 {
+            groups.push(&mut transport.endpoints);
+        }
+        if let Some(transport) = &mut self.transports.lola {
+            groups.push(&mut transport.endpoints);
+        }
+        if let Some(transport) = &mut self.transports.vsomeip {
+            groups.push(&mut transport.endpoints);
+        }
+        if let Some(transport) = &mut self.transports.dds {
+            groups.push(&mut transport.endpoints);
+        }
+        for endpoints in groups {
+            for endpoint in endpoints {
+                endpoint.native_profile = match (
+                    &endpoint.native_profile_file,
+                    &endpoint.native_peer_profile_file,
+                ) {
+                    (None, None) => shared.clone(),
+                    (Some(local), Some(peer)) => {
+                        Some(load_native_agreement(&base.join(local), &base.join(peer))?)
+                    }
+                    _ => {
+                        return Err(up_rust::UStatus::fail_with_code(
+                            up_rust::UCode::InvalidArgument,
+                            format!(
+                                "endpoint {} requires both local and peer native profile paths",
+                                endpoint.endpoint
+                            ),
+                        ))
+                    }
+                };
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct UpStreamerConfig {
@@ -57,6 +142,87 @@ pub enum SubscriptionProviderMode {
 pub struct Transports {
     pub(crate) zenoh: ZenohTransport,
     pub(crate) mqtt: MqttTransport,
+    #[serde(default)]
+    pub(crate) iceoryx2: Option<Iceoryx2Transport>,
+    #[serde(default)]
+    pub(crate) lola: Option<LolaTransport>,
+    /// R3A: classic vSomeIP endpoints (Tier 1 of the vSomeIP plan).
+    #[serde(default)]
+    pub(crate) vsomeip: Option<VsomeipTransport>,
+    #[serde(default)]
+    pub(crate) dds: Option<DdsTransport>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DdsTransport {
+    pub(crate) domain_id: i32,
+    pub(crate) origin_id: String,
+    #[serde(default)]
+    pub(crate) qos: DdsQosConfig,
+    #[serde(default = "default_dds_history_depth")]
+    pub(crate) history_depth: u32,
+    #[serde(default)]
+    pub(crate) readiness: DdsReadinessConfig,
+    #[serde(default)]
+    pub(crate) endpoints: Vec<EndpointConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DdsQosConfig {
+    #[serde(default)]
+    pub(crate) reliability: DdsReliability,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum DdsReliability {
+    #[default]
+    Reliable,
+    BestEffort,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DdsReadinessConfig {
+    #[serde(default = "default_dds_required_matched_readers")]
+    pub(crate) required_matched_readers: usize,
+    #[serde(default = "default_dds_readiness_timeout_ms")]
+    pub(crate) timeout_ms: u64,
+}
+
+impl Default for DdsReadinessConfig {
+    fn default() -> Self {
+        Self {
+            required_matched_readers: default_dds_required_matched_readers(),
+            timeout_ms: default_dds_readiness_timeout_ms(),
+        }
+    }
+}
+
+const fn default_dds_history_depth() -> u32 {
+    32
+}
+
+const fn default_dds_required_matched_readers() -> usize {
+    1
+}
+
+const fn default_dds_readiness_timeout_ms() -> u64 {
+    5_000
+}
+
+/// R3A: classic vSomeIP transport section. `config_file` is the vsomeip JSON
+/// (applications/services/routing) the orchestrator generates per row;
+/// `remote_authority` names the peer authority per the SOME/IP binding.
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct VsomeipTransport {
+    pub(crate) config_file: String,
+    pub(crate) remote_authority: String,
+    #[serde(default)]
+    pub(crate) endpoints: Vec<EndpointConfig>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -77,10 +243,120 @@ pub struct MqttTransport {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
+pub struct Iceoryx2Transport {
+    pub(crate) endpoints: Vec<EndpointConfig>,
+    /// Optional actual subscriber discovery before a TX loan becomes sendable.
+    #[serde(default)]
+    pub(crate) publisher_readiness: Option<Iceoryx2PublisherReadiness>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct Iceoryx2PublisherReadiness {
+    pub(crate) minimum_subscribers: usize,
+    pub(crate) timeout_ms: u64,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Iceoryx2Namespace {
+    pub(crate) root_path: String,
+    pub(crate) prefix: String,
+}
+
+impl Iceoryx2Namespace {
+    fn validate(&self) -> Result<(), up_rust::UStatus> {
+        if !std::path::Path::new(&self.root_path).is_absolute()
+            || self.prefix.is_empty()
+            || self.prefix.len() > 32
+            || !self
+                .prefix
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(up_rust::UStatus::fail_with_code(up_rust::UCode::InvalidArgument,
+                "iceoryx2 namespace needs an absolute root_path and a 1..32 byte alphanumeric/underscore prefix"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct LolaTransport {
+    pub(crate) endpoints: Vec<EndpointConfig>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum RoutingMode {
+    #[default]
+    Owned,
+    OwnedFrame,
+    CopyMinimized,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct EndpointConfig {
     pub(crate) authority: String,
     pub(crate) endpoint: String,
+    #[serde(default)]
     pub(crate) forwarding: Vec<String>,
+    #[serde(default)]
+    pub(crate) forwarding_routes: Vec<ForwardingRouteConfig>,
+    #[serde(default)]
+    pub(crate) routing_mode: RoutingMode,
+    #[serde(default)]
+    pub(crate) copy_minimized_payload_alignment: Option<usize>,
+    #[serde(default)]
+    pub(crate) zenoh_config_file: Option<String>,
+    #[serde(default)]
+    pub(crate) zenoh_client_config_file: Option<String>,
+    #[serde(default)]
+    pub(crate) iceoryx2_namespace: Option<Iceoryx2Namespace>,
+    #[serde(default)]
+    pub(crate) lola_instance_specifier: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_service_type: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_event_name: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_response_instance_specifier: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_response_service_type: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_response_event_name: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_default_rx_channel: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_sample_size: Option<usize>,
+    #[serde(default)]
+    pub(crate) lola_sample_alignment: Option<usize>,
+    #[serde(default)]
+    pub(crate) lola_max_samples: Option<usize>,
+    #[serde(default)]
+    pub(crate) lola_mw_com_config_file: Option<String>,
+    #[serde(default)]
+    pub(crate) lola_response_mw_com_config_file: Option<String>,
+    /// Numeric payload-encoding convention for transports such as SOME/IP
+    /// whose wire carries no payload-encoding identity.
+    #[serde(default)]
+    pub(crate) payload_encoding_id: Option<u32>,
+    #[serde(default)]
+    pub(crate) native_profile_file: Option<String>,
+    #[serde(default)]
+    pub(crate) native_peer_profile_file: Option<String>,
+    #[serde(skip)]
+    pub(crate) native_profile: Option<up_rust::NativeProfileAgreement>,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct ForwardingRouteConfig {
+    pub(crate) endpoint: String,
+    #[serde(default)]
+    pub(crate) wire_format: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -99,5 +375,201 @@ impl MqttTransport {
         let config_contents = std::fs::read_to_string(&self.config_file)?;
         self.mqtt_details = Some(json5::from_str(&config_contents)?);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn two_bus_config(namespace_a: &str, namespace_b: &str) -> Config {
+        json5::from_str(&format!(r#"{{
+            up_streamer_config: {{ message_queue_size: 32 }},
+            streamer_uuri: {{ authority: "bridge", ue_id: 1, ue_version_major: 1 }},
+            usubscription_config: {{ file_path: "subscriptions.json" }},
+            transports: {{ zenoh: {{config_file:"unused", endpoints:[]}}, mqtt: {{config_file:"unused", endpoints:[]}},
+                iceoryx2: {{ endpoints: [
+                    {{endpoint:"a",authority:"authority-a",routing_mode:"owned_frame", {namespace_a} forwarding:["b"]}},
+                    {{endpoint:"b",authority:"authority-b",routing_mode:"copy_minimized", {namespace_b} forwarding:["a"]}}
+                ] }} }} }}"#)).unwrap()
+    }
+
+    #[test]
+    fn reflective_legacy_iceoryx2_config_is_rejected_before_activation() {
+        let error = two_bus_config("", "")
+            .validate_physical_domains()
+            .unwrap_err();
+        assert_eq!(error.code(), up_rust::UCode::InvalidArgument);
+    }
+
+    #[test]
+    fn overlapping_native_prefixes_do_not_establish_physical_isolation() {
+        let config = two_bus_config(
+            "iceoryx2_namespace:{root_path:'/one',prefix:'bus_'},",
+            "iceoryx2_namespace:{root_path:'/two',prefix:'bus_other_'},",
+        );
+        assert!(config.validate_physical_domains().is_err());
+    }
+
+    #[test]
+    fn distinct_native_namespaces_allow_bidirectional_routes() {
+        let config = two_bus_config(
+            "iceoryx2_namespace:{root_path:'/same',prefix:'bus_a_'},",
+            "iceoryx2_namespace:{root_path:'/same',prefix:'bus_b_'},",
+        );
+        config.validate_physical_domains().unwrap();
+    }
+
+    #[test]
+    fn native_namespace_rejects_relative_root_or_invalid_prefix() {
+        assert!(Iceoryx2Namespace {
+            root_path: "relative".into(),
+            prefix: "valid_".into()
+        }
+        .validate()
+        .is_err());
+        assert!(Iceoryx2Namespace {
+            root_path: "/absolute".into(),
+            prefix: "bad/prefix".into()
+        }
+        .validate()
+        .is_err());
+    }
+
+    #[test]
+    fn iceoryx2_readiness_is_optional_and_explicitly_bounded() {
+        let legacy: Iceoryx2Transport = json5::from_str("{ endpoints: [] }").unwrap();
+        assert!(legacy.publisher_readiness.is_none());
+        let finite: Iceoryx2Transport = json5::from_str(
+            "{ endpoints: [], publisher_readiness: { minimum_subscribers: 1, timeout_ms: 5000 } }",
+        )
+        .unwrap();
+        let readiness = finite.publisher_readiness.unwrap();
+        assert_eq!(readiness.minimum_subscribers, 1);
+        assert_eq!(readiness.timeout_ms, 5000);
+        assert!(json5::from_str::<Iceoryx2Transport>(
+            "{ endpoints: [], publisher_readiness: { minimum_subscribers: 1 } }"
+        )
+        .is_err());
+    }
+
+    fn base_config(route_fragment: &str) -> String {
+        format!(
+            r#"{{
+                up_streamer_config: {{ message_queue_size: 4 }},
+                streamer_uuri: {{ authority: "authority-streamer", ue_id: 1, ue_version_major: 1 }},
+                usubscription_config: {{ mode: "static_file", file_path: "subscriptions.json" }},
+                transports: {{
+                    zenoh: {{
+                        config_file: "ZENOH_CONFIG.json5",
+                        endpoints: [{{
+                            authority: "authority-a",
+                            endpoint: "zenoh-zc",
+                            routing_mode: "copy_minimized",
+                            {route_fragment}
+                        }}],
+                    }},
+                    mqtt: {{ config_file: "MQTT_CONFIG.json5", endpoints: [] }},
+                }},
+            }}"#
+        )
+    }
+
+    #[test]
+    fn forwarding_route_accepts_explicit_wire_format() {
+        let config: Config = json5::from_str(&base_config(
+            r#"forwarding_routes: [{ endpoint: "iceoryx2-zc", wire_format: "protobuf" }],"#,
+        ))
+        .expect("config parses");
+
+        let endpoint = &config.transports.zenoh.endpoints[0];
+        assert!(endpoint.forwarding.is_empty());
+        assert_eq!(endpoint.forwarding_routes[0].endpoint, "iceoryx2-zc");
+        assert_eq!(
+            endpoint.forwarding_routes[0].wire_format.as_deref(),
+            Some("protobuf")
+        );
+    }
+
+    #[test]
+    fn endpoint_accepts_owned_frame_routing_mode() {
+        let config: Config = json5::from_str(
+            r#"{
+                up_streamer_config: { message_queue_size: 4 },
+                streamer_uuri: { authority: "authority-streamer", ue_id: 1, ue_version_major: 1 },
+                usubscription_config: { mode: "static_file", file_path: "subscriptions.json" },
+                transports: {
+                    zenoh: {
+                        config_file: "ZENOH_CONFIG.json5",
+                        endpoints: [{
+                            authority: "authority-a",
+                            endpoint: "zenoh-owned",
+                            routing_mode: "owned_frame",
+                            forwarding_routes: [{ endpoint: "iceoryx2-owned", wire_format: "xcdrv2" }],
+                        }],
+                    },
+                    mqtt: { config_file: "MQTT_CONFIG.json5", endpoints: [] },
+                },
+            }"#,
+        )
+        .expect("config parses");
+
+        assert_eq!(
+            config.transports.zenoh.endpoints[0].routing_mode,
+            RoutingMode::OwnedFrame
+        );
+        assert_eq!(
+            config.transports.zenoh.endpoints[0].forwarding_routes[0]
+                .wire_format
+                .as_deref(),
+            Some("xcdrv2")
+        );
+    }
+
+    #[test]
+    fn unknown_forwarding_route_field_is_rejected() {
+        let result = json5::from_str::<Config>(&base_config(
+            r#"forwarding_routes: [{ endpoint: "iceoryx2-zc", unexpected: "value" }],"#,
+        ));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn dds_config_accepts_domain_origin_qos_history_readiness_and_endpoints() {
+        let config: Config = json5::from_str(
+            r#"{
+                up_streamer_config: { message_queue_size: 4 },
+                streamer_uuri: { authority: "authority-streamer", ue_id: 1, ue_version_major: 1 },
+                usubscription_config: { mode: "static_file", file_path: "subscriptions.json" },
+                transports: {
+                    zenoh: { config_file: "ZENOH_CONFIG.json5", endpoints: [] },
+                    mqtt: { config_file: "MQTT_CONFIG.json5", endpoints: [] },
+                    dds: {
+                        domain_id: 91,
+                        origin_id: "matrix-row-17-streamer",
+                        qos: { reliability: "best_effort" },
+                        history_depth: 12,
+                        readiness: { required_matched_readers: 1, timeout_ms: 2500 },
+                        endpoints: [{
+                            authority: "authority-a",
+                            endpoint: "dds-owned",
+                            routing_mode: "owned_frame",
+                            forwarding_routes: [{ endpoint: "dds-copy", wire_format: "arrow" }],
+                        }],
+                    },
+                },
+            }"#,
+        )
+        .expect("DDS config parses");
+
+        let dds = config.transports.dds.expect("DDS transport present");
+        assert_eq!(dds.domain_id, 91);
+        assert_eq!(dds.origin_id, "matrix-row-17-streamer");
+        assert_eq!(dds.qos.reliability, DdsReliability::BestEffort);
+        assert_eq!(dds.history_depth, 12);
+        assert_eq!(dds.readiness.required_matched_readers, 1);
+        assert_eq!(dds.readiness.timeout_ms, 2500);
+        assert_eq!(dds.endpoints.len(), 1);
     }
 }

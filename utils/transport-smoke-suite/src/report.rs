@@ -18,7 +18,34 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub const SCENARIO_REPORT_SCHEMA_VERSION: &str = "1.1";
+pub const SCENARIO_REPORT_SCHEMA_VERSION: &str = "1.2";
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScenarioClassification {
+    Pass,
+    #[default]
+    ValidatedFail,
+    Blocked,
+}
+
+impl ScenarioClassification {
+    pub fn from_pass(pass: bool) -> Self {
+        if pass {
+            Self::Pass
+        } else {
+            Self::ValidatedFail
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::ValidatedFail => "validated_fail",
+            Self::Blocked => "blocked",
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PhaseTiming {
@@ -45,6 +72,8 @@ pub struct ScenarioReport {
     pub scenario_id: String,
     pub transport_family: String,
     pub pass: bool,
+    #[serde(default)]
+    pub classification: ScenarioClassification,
     pub exit_code: i32,
     pub phase_timings: Vec<PhaseTiming>,
     pub processes: Vec<ProcessMetadata>,
@@ -55,6 +84,8 @@ pub struct ScenarioReport {
     pub artifact_dir: String,
     #[serde(default)]
     pub claims_source_path: Option<String>,
+    #[serde(default)]
+    pub supporting_artifacts: Vec<String>,
     pub start_ts: String,
     pub end_ts: String,
     pub duration_ms: u128,
@@ -64,6 +95,8 @@ pub struct ScenarioReport {
 pub struct MatrixScenarioSummary {
     pub scenario_id: String,
     pub pass: bool,
+    #[serde(default)]
+    pub classification: ScenarioClassification,
     pub exit_code: i32,
     pub artifact_dir: Option<String>,
     pub failure_reason: Option<String>,
@@ -81,6 +114,8 @@ pub struct MatrixSummary {
     pub schema_version: String,
     pub selected_scenarios: Vec<String>,
     pub pass_count: usize,
+    pub validated_fail_count: usize,
+    pub blocked_count: usize,
     pub fail_count: usize,
     pub total_duration_ms: u128,
     pub scenarios: Vec<MatrixScenarioSummary>,
@@ -162,6 +197,7 @@ fn render_scenario_summary_text(report: &ScenarioReport) -> String {
         format!("scenario_id: {}", report.scenario_id),
         format!("transport_family: {}", report.transport_family),
         format!("status: {}", if report.pass { "PASS" } else { "FAIL" }),
+        format!("classification: {}", report.classification.as_str()),
         format!("exit_code: {}", report.exit_code),
         format!("artifact_dir: {}", report.artifact_dir),
         format!(
@@ -177,6 +213,13 @@ fn render_scenario_summary_text(report: &ScenarioReport) -> String {
 
     if let Some(reason) = &report.failure_reason {
         lines.push(format!("failure_reason: {reason}"));
+    }
+
+    if !report.supporting_artifacts.is_empty() {
+        lines.push("supporting_artifacts:".to_string());
+        for artifact in &report.supporting_artifacts {
+            lines.push(format!("  - {artifact}"));
+        }
     }
 
     lines.push("phase_timings:".to_string());
@@ -213,6 +256,8 @@ fn render_matrix_summary_text(summary: &MatrixSummary) -> String {
             summary.selected_scenarios.join(", ")
         ),
         format!("pass_count: {}", summary.pass_count),
+        format!("validated_fail_count: {}", summary.validated_fail_count),
+        format!("blocked_count: {}", summary.blocked_count),
         format!("fail_count: {}", summary.fail_count),
         format!("total_duration_ms: {}", summary.total_duration_ms),
         format!(
@@ -224,9 +269,10 @@ fn render_matrix_summary_text(summary: &MatrixSummary) -> String {
     lines.push("scenarios:".to_string());
     for scenario in &summary.scenarios {
         lines.push(format!(
-            "  - {}: {} (exit_code={}, duration_ms={}, artifact_dir={})",
+            "  - {}: {} (classification={}, exit_code={}, duration_ms={}, artifact_dir={})",
             scenario.scenario_id,
             if scenario.pass { "PASS" } else { "FAIL" },
+            scenario.classification.as_str(),
             scenario.exit_code,
             scenario.duration_ms,
             scenario

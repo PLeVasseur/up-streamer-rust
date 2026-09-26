@@ -1,0 +1,98 @@
+{
+  "serviceTypes": [
+    {
+      "serviceTypeName": "/uprotocol/TransportR004D2NativeRpcSingleL2ZRequest",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7393,
+          "events": [
+            {
+              "eventName": "frameNativeSingleL2ZRequest",
+              "eventId": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "serviceTypeName": "/uprotocol/TransportR004D2NativeRpcSingleL2ZResponse",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7394,
+          "events": [
+            {
+              "eventName": "frameNativeSingleL2ZResponse",
+              "eventId": 1
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "serviceInstances": [
+    {
+      "instanceSpecifier": "uprotocol/transportNativeRpcSingleL2ZRequest",
+      "serviceTypeName": "/uprotocol/TransportR004D2NativeRpcSingleL2ZRequest",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 1,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "frameNativeSingleL2ZRequest",
+              "numberOfSampleSlots": 16,
+              "maxSubscribers": 8,
+              "numberOfIpcTracingSlots": 0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "instanceSpecifier": "uprotocol/transportNativeRpcSingleL2ZResponse",
+      "serviceTypeName": "/uprotocol/TransportR004D2NativeRpcSingleL2ZResponse",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 1,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "frameNativeSingleL2ZResponse",
+              "numberOfSampleSlots": 16,
+              "maxSubscribers": 8,
+              "numberOfIpcTracingSlots": 0
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "global": {
+    "asil-level": "QM",
+    "queue-size": {
+      "QM-receiver": 16,
+      "QM-sender": 16
+    },
+    "shm-size-calc-mode": "SIMULATION"
+  }
+}

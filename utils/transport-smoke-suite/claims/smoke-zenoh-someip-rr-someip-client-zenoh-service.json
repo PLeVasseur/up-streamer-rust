@@ -7,7 +7,7 @@
       "category": "endpoint_communication",
       "kind": "must_match",
       "file": "client.log",
-      "pattern": "UMESSAGE_TYPE_RESPONSE|commstatus: Some\\(OK\\)",
+      "pattern": "UMESSAGE_TYPE_RESPONSE|commstatus: Some\\((OK|Ok)\\)",
       "threshold": "endpoint_communication"
     },
     {

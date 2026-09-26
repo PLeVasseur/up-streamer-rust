@@ -175,12 +175,24 @@
 //! `tracing_subscriber` initialization at process boundaries.
 
 mod control_plane;
+#[cfg(feature = "experimental-copy-minimized-routing")]
+mod copy_minimized;
 mod data_plane;
 mod endpoint;
+mod flow_observation;
+#[cfg(feature = "experimental-copy-minimized-routing")]
+pub use copy_minimized::CopyMinimizedRouteOptions;
 pub use endpoint::Endpoint;
+#[cfg(feature = "experimental-copy-minimized-routing")]
+pub use endpoint::ZeroCopyFrameEndpoint;
+#[cfg(feature = "owned-frame-transport")]
+pub use endpoint::{OwnedFrameEndpoint, TransportMode};
 
 mod subscription_sync_health;
 pub use subscription_sync_health::SubscriptionSyncHealth;
+
+mod route_diagnostics;
+pub use route_diagnostics::{DataPlaneRoute, RouteCopySemantics, RouteDiagnostic, RouteKind};
 
 #[doc(hidden)]
 pub mod observability;

@@ -1,0 +1,18 @@
+{
+    "applications": [
+        {
+            "name": "0x5BA0",
+            "id": "0x5ba0"
+        },
+        {
+            "name": "0x5BB0",
+            "id": "0x5bb0"
+        }
+    ],
+    "services": [
+        {
+            "service": "0x5bb0",
+            "instance": "0x0001"
+        }
+    ]
+}

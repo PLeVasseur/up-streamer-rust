@@ -13,14 +13,14 @@
 
 mod common;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use common::cli;
-use common::PublishReceiver;
+use common::{xcdrv2_message_payload_parts, PublishReceiver};
 use std::sync::Arc;
 use std::thread;
 use tracing::{trace, warn};
-use up_rust::{UListener, UStatus, UTransport};
-use up_transport_vsomeip::UPTransportVsomeip;
+use up_rust::{PayloadEncoding, UListener, UStatus, UTransport};
+use up_transport_vsomeip::{TransportConfig, UPTransportVsomeip};
 
 const DEFAULT_UAUTHORITY: &str = "authority-b";
 const DEFAULT_UENTITY: &str = "0x5BB0";
@@ -37,9 +37,18 @@ const DEFAULT_VSOMEIP_CONFIG: &str = concat!(
 );
 const DEFAULT_UENTITY_NUM: u32 = 0x5BB0;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum Encoding {
+    Native,
+    Protobuf,
+    Xcdrv2,
+}
+
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: common::native::NativeContext,
     /// Authority for the local subscriber identity
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
@@ -70,13 +79,20 @@ struct Args {
     /// Path to the vsomeip JSON configuration file
     #[arg(long, default_value = DEFAULT_VSOMEIP_CONFIG)]
     vsomeip_config: String,
+    /// Payload encoding fixed by the SOME/IP topic convention.
+    #[arg(long, value_enum, default_value = "protobuf")]
+    encoding: Encoding,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = common::native::NativeContext::load()?;
+    if args.encoding == Encoding::Native {
+        args.native.identity()?;
+    }
 
     println!("mE_subscriber");
 
@@ -98,15 +114,17 @@ async fn main() -> Result<(), UStatus> {
     }
 
     let subscriber_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
+    let payload_encoding = payload_encoding(&args)?;
 
     // There will be a single vsomeip_transport, as there is a connection into device and a streamer
     // TODO: Add error handling if we fail to create a UPTransportVsomeip
     let subscriber: Arc<dyn UTransport> = Arc::new(
-        UPTransportVsomeip::new_with_config(
+        UPTransportVsomeip::new_with_config_and_transport_config(
             subscriber_uuri,
             &args.remote_authority,
             &vsomeip_config,
             None,
+            TransportConfig::new(payload_encoding),
         )
         .unwrap(),
     );
@@ -118,7 +136,8 @@ async fn main() -> Result<(), UStatus> {
         source_resource,
     )?;
 
-    let publish_receiver: Arc<dyn UListener> = Arc::new(PublishReceiver);
+    let publish_receiver: Arc<dyn UListener> =
+        common::native::listener(&args.native, Arc::new(PublishReceiver));
     // TODO: Need to revisit how the vsomeip config file is used in non point-to-point cases
     subscriber
         .register_listener(&source_filter, None, publish_receiver.clone())
@@ -126,6 +145,16 @@ async fn main() -> Result<(), UStatus> {
 
     println!("READY listener_registered");
 
-    thread::park();
-    Ok(())
+    loop {
+        thread::park();
+    }
+}
+
+fn payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
+    match args.encoding {
+        Encoding::Native => args.native.encoding(),
+        Encoding::Protobuf => Ok(PayloadEncoding::PROTOBUF),
+        Encoding::Xcdrv2 => xcdrv2_message_payload_parts(0, args.uauthority.clone(), "")
+            .map(|(_, encoding)| encoding),
+    }
 }

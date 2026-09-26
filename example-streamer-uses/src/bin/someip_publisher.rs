@@ -15,15 +15,16 @@ mod common;
 
 use chrono::Local;
 use chrono::Timelike;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use common::cli;
+use common::{native_message_payload_parts, protobuf_payload, xcdrv2_message_payload_parts};
 use hello_world_protos::hello_world_topics::Timer;
 use hello_world_protos::timeofday::TimeOfDay;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, trace, warn};
-use up_rust::{UMessageBuilder, UStatus, UTransport};
-use up_transport_vsomeip::UPTransportVsomeip;
+use up_rust::{PayloadEncoding, UCode, UMessageBuilder, UStatus, UTransport};
+use up_transport_vsomeip::{TransportConfig, UPTransportVsomeip};
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
 const DEFAULT_UENTITY: &str = "0x5BA0";
@@ -35,10 +36,20 @@ const DEFAULT_VSOMEIP_CONFIG: &str = concat!(
     "/vsomeip-configs/someip_publisher.json"
 );
 const DEFAULT_UENTITY_NUM: u32 = 0x5BA0;
+const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"SPUB");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum Encoding {
+    Native,
+    Protobuf,
+    Xcdrv2,
+}
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: common::native::NativeContext,
     /// Authority for the local publisher identity and publish source URI
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
@@ -63,13 +74,23 @@ struct Args {
     /// Milliseconds to wait between publish sends
     #[arg(long, default_value_t = 1000)]
     send_interval_ms: u64,
+    /// Payload encoding fixed by the SOME/IP topic convention.
+    #[arg(long, value_enum, default_value = "protobuf")]
+    encoding: Encoding,
+    /// Text payload used by native/XCDRv2 matrix rows.
+    #[arg(long, default_value = "someip-publisher")]
+    payload: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = common::native::NativeContext::load()?;
+    if args.encoding == Encoding::Native {
+        args.native.identity()?;
+    }
 
     info!("Started someip_publisher");
 
@@ -88,19 +109,25 @@ async fn main() -> Result<(), UStatus> {
     }
 
     let publisher_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
+    let payload_encoding = payload_encoding(&args)?;
 
     // There will be a single vsomeip_transport, as there is a connection into device and a streamer
     let publisher: Arc<dyn UTransport> = Arc::new(
-        UPTransportVsomeip::new_with_config(
+        UPTransportVsomeip::new_with_config_and_transport_config(
             publisher_uuri,
             &args.remote_authority,
             &vsomeip_config,
             None,
+            TransportConfig::new(payload_encoding),
         )
         .unwrap(),
     );
 
     let source = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
+
+    if args.send_count > 0 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
 
     let mut sent_count: u64 = 0;
     loop {
@@ -121,19 +148,63 @@ async fn main() -> Result<(), UStatus> {
             ..Default::default()
         };
 
-        let timer_message = Timer {
-            time: Some(time_of_day).into(),
-            ..Default::default()
+        let mut builder = UMessageBuilder::publish(source.clone());
+        let publish_msg = if args.encoding == Encoding::Protobuf {
+            let timer_message = Timer {
+                time: Some(time_of_day).into(),
+                ..Default::default()
+            };
+            builder
+                .build_with_payload(protobuf_payload(&timer_message), PayloadEncoding::PROTOBUF)
+                .unwrap()
+        } else {
+            let (payload, encoding) = selected_payload_parts(&args, sent_count as u32 + 1)?;
+            builder
+                .build_with_payload(payload, encoding)
+                .map_err(|error| {
+                    invalid_config(format!("failed to build publish message: {error:?}"))
+                })?
         };
-
-        let publish_msg = UMessageBuilder::publish(source.clone())
-            .build_with_protobuf_payload(&timer_message)
-            .unwrap();
         info!("Sending Publish message:\n{publish_msg:?}");
 
-        publisher.send(publish_msg).await?;
+        common::proof::send(publisher.as_ref(), publish_msg).await?;
         sent_count += 1;
     }
 
+    if args.send_count > 0 {
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
     Ok(())
+}
+
+fn payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
+    match args.encoding {
+        Encoding::Native => args.native.encoding(),
+        Encoding::Protobuf => Ok(PayloadEncoding::PROTOBUF),
+        Encoding::Xcdrv2 => xcdrv2_message_payload_parts(0, args.uauthority.clone(), "")
+            .map(|(_, encoding)| encoding),
+    }
+}
+
+fn selected_payload_parts(
+    args: &Args,
+    sequence: u32,
+) -> Result<(Vec<u8>, PayloadEncoding), UStatus> {
+    match args.encoding {
+        Encoding::Native => native_message_payload_parts(
+            NATIVE_PAYLOAD_MAGIC,
+            sequence,
+            &args.payload,
+            &args.native,
+        ),
+        Encoding::Protobuf => unreachable!("protobuf is handled by the classic protobuf path"),
+        Encoding::Xcdrv2 => {
+            xcdrv2_message_payload_parts(sequence, args.uauthority.clone(), &args.payload)
+        }
+    }
+}
+
+fn invalid_config(message: impl Into<String>) -> UStatus {
+    UStatus::fail_with_code(UCode::InvalidArgument, message.into())
 }

@@ -110,6 +110,22 @@ Matrix custom claims directory example:
 cargo run -p transport-smoke-suite --bin transport-smoke-matrix -- --all --claims-path utils/transport-smoke-suite/claims
 ```
 
+LoLa zero-copy matrix rows need Bazel or Bazelisk to build the bundled native bridge. The smoke runner resolves it in this order:
+
+- `BAZEL` if explicitly set
+- the repo-local cache at `.cache/tools/bazelisk-v1.29.0-linux-amd64`
+- `scripts/ensure-lola-bazelisk.sh`, unless `--no-bootstrap` is passed
+
+To bootstrap the pinned Bazelisk manually:
+
+```bash
+scripts/ensure-lola-bazelisk.sh --print
+```
+
+The helper verifies the checksum in `tools/bazelisk-linux-amd64.sha256` and does not use `/tmp/opencode`.
+
+MQTT smoke rows use `--mqtt-broker-mode docker-compose` by default. Use `--mqtt-broker-mode external` when a broker is already reachable at `--mqtt-broker-uri localhost:1883`, or `--mqtt-broker-mode native` to start a local `mosquitto` process from `PATH`. Zero-copy rows whose selected configurable-streamer config has `mqtt.endpoints: []` do not start Docker Compose or require an MQTT broker.
+
 Scenario binaries:
 
 - `smoke-zenoh-mqtt-rr-zenoh-client-mqtt-service`

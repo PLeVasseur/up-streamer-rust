@@ -46,7 +46,7 @@ async fn usubscription_bad_data() {
     assert_eq!(
         add_route_res,
         Err(UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
+            UCode::InvalidArgument,
             "Failed to register notification request/response listener"
         ))
     );

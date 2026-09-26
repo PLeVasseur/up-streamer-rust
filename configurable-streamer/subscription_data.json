@@ -1,4 +1,5 @@
 {
     "//authority-b/3039/1/8001": ["//authority-a/5678/1/1234"],
-    "//authority-a/5BA0/1/8001": ["//authority-b/5678/1/1234"]
+    "//authority-a/5BA0/1/8001": ["//authority-b/5678/1/1234"],
+    "//authority-b/5BA0/1/8001": ["//authority-a/5678/1/1234"]
 }

@@ -24,6 +24,15 @@ fn scenario_registry_contains_exactly_eight_ids() {
 }
 
 #[test]
+fn matrix_registry_contains_zero_copy_selected_wire_rows() {
+    let scenario_ids = scenario::matrix_scenario_ids();
+    assert_eq!(scenario_ids.len(), 15);
+    assert!(scenario_ids.contains(&"smoke-zc-zenoh-shm-to-iceoryx2"));
+    assert!(scenario_ids.contains(&"smoke-zc-lola-bundled-to-zenoh-shm"));
+    assert!(scenario_ids.contains(&"smoke-zc-all-transports-bundled"));
+}
+
+#[test]
 fn each_scenario_has_claims_file_with_required_category_coverage() {
     let repo_root = env::repo_root().expect("resolve workspace root");
 

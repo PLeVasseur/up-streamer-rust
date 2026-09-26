@@ -14,6 +14,7 @@ To launch any of the entities choose the correct bin and give it the appropriate
 | mqtt_*     | mqtt-transport    |
 | zenoh_*    | zenoh-transport   |
 | someip*    | vsomeip-transport |
+| dds_*      | dds-transport     |
 
 Combined:
 
@@ -106,6 +107,52 @@ Deterministic sender controls (active client/publisher binaries only):
 
 Running with no extra flags keeps prior behavior (defaults are aligned with previous constants).
 
+## Native payload configuration
+
+Native workers require a loaded local/peer agreement. Set both
+`UPROTOCOL_NATIVE_PROFILE` and `UPROTOCOL_NATIVE_PEER_PROFILE` to the complete
+deployment documents before starting a native sender or receiver. These inputs
+are read once at startup; an absent/mismatched native agreement is an error, not
+an inferred encoding or automatic ID0 fallback. The selected-wire build features
+provide the shared native fixture catalog.
+
+See [native deployment profiles](../configurable-streamer/README.md#native-deployment-profiles)
+for generation, private allocations and endpoint configuration. The matrix
+orchestrator supplies these paths for native rows and requires real sink identity
+verification evidence. Byte-copy receive paths check the full identity and field
+representation; typed loan paths additionally use the SDK's alignment, lifetime
+and provenance gate.
+
+## DDS roles
+
+`dds_publisher`, `dds_subscriber`, `dds_notifier`, `dds_notifyee`, `dds_client`,
+and `dds_server` are Streamer example-surface binaries. Each accepts
+`--domain-id`, `--origin-id`, `--reliability`, `--history-depth`,
+`--route-family classic|owned-frame|copy-minimized`, and
+`--encoding native|protobuf|xcdrv2|arrow|omgidl`. Passive roles print
+`READY listener_registered`; successful sends and receives print `FLOW`
+evidence. Active DDS roles wait for publication matching rather than relying on
+retry sends.
+
+Terminal DDS sends also wait for matched reliable-reader acknowledgements before
+dropping their writer. A local write is not a remote-delivery barrier; discovery
+and acknowledgement waits use the existing `--timeout-ms` bound. No retry send or
+fixed shutdown sleep substitutes for this completion condition.
+
+For a direct Arrow copy-minimized pub/sub smoke, start the subscriber first:
+
+```bash
+cargo run -p example-streamer-uses --features dds-transport --bin dds_subscriber -- \
+  --domain-id 80 --origin-id subscriber --route-family copy-minimized \
+  --encoding arrow --local-authority authority-b --peer-authority authority-a
+cargo run -p example-streamer-uses --features dds-transport --bin dds_publisher -- \
+  --domain-id 80 --origin-id publisher --route-family copy-minimized \
+  --encoding arrow --local-authority authority-a --peer-authority authority-b
+```
+
+The DDS copy-minimized family is behavioral zero-copy at the uProtocol API
+boundary. Dust DDS 0.15 still copies during DDS serialization and RTPS I/O.
+
 ### Numeric formats
 
 Numeric URI flags accept decimal and `0x`/`0X` prefixed hex.
@@ -127,3 +174,5 @@ Invalid formats (for example underscores in numeric values) are rejected with de
 ### SOME/IP caveat
 
 SOME/IP binaries accept URI overrides, but runtime compatibility can still depend on application/service IDs configured in the selected `--vsomeip-config` file. If `--uentity` is overridden, the binaries emit a startup warning when that override may conflict with vsomeip config expectations.
+
+The current vSomeIP transport does not implement uProtocol `Notification` (`UMESSAGE_TYPE_NOTIFICATION`). SOME/IP `MT_NOTIFICATION` traffic is mapped to uProtocol `Publish`; uProtocol `Notification` would require a separate `REQUEST_NO_RETURN` mapping that is not implemented. `someip_notifier` and `someip_notifyee` binaries are intentionally absent until that transport mapping is designed and implemented.

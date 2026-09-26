@@ -19,24 +19,38 @@ edition.workspace = true
 keywords.workspace = true
 license.workspace = true
 
+[features]
+default = []
+flow-evidence = ["dep:streamer-flow-evidence"]
+experimental-copy-minimized-routing = [
+    "up-rust/up-l2-zero-copy",
+]
+owned-frame-transport = ["up-rust/owned-frame-transport", "up-rust/wire-implementer-api", "dep:serde_json"]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 tokio = { workspace = true }
 async-trait = { workspace = true }
+bytes = { workspace = true }
 tracing = { workspace = true }
+serde_json = { workspace = true, optional = true }
 up-rust = { workspace = true, features = ["usubscription"] }
 protobuf = { version = "3.3", features = ["with-bytes"] }
 arc-swap = "1.7"
+streamer-flow-evidence = { path = "../utils/streamer-flow-evidence", optional = true }
 
 [dev-dependencies]
+test-case = "3.3"
 async-broadcast = { version = "0.7.0" }
 chrono = { version = "0.4.31", features = [] }
 criterion = { version = "0.5.1", features = ["csv_output"] }
 futures = { workspace = true }
 integration-test-utils = { path = "../utils/integration-test-utils" }
 tokio-condvar = { version = "0.3.0" }
-up-rust = { workspace = true, features = ["test-util"] }
+up-rust = { workspace = true, features = ["test-util", "transport-implementer-api", "wire-implementer-api", "up-l2-zero-copy"] }
+up-transport-iceoryx2-rust = { workspace = true, features = ["benchmark-owned"] }
+up-transport-zenoh = { workspace = true, features = ["zero-copy"] }
 usubscription-static-file = { path = "../utils/usubscription-static-file" }
 
 [[bench]]

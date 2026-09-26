@@ -13,14 +13,14 @@
 
 mod common;
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use common::cli;
-use common::ServiceRequestResponder;
+use common::{xcdrv2_message_payload_parts, ServiceRequestResponder};
 use std::sync::Arc;
 use std::thread;
 use tracing::{info, trace, warn};
-use up_rust::{UListener, UStatus, UTransport, UUri};
-use up_transport_vsomeip::UPTransportVsomeip;
+use up_rust::{PayloadEncoding, UListener, UStatus, UTransport, UUri};
+use up_transport_vsomeip::{TransportConfig, UPTransportVsomeip};
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
 const DEFAULT_UENTITY: &str = "0x4321";
@@ -29,13 +29,22 @@ const DEFAULT_RESOURCE: &str = "0x0421";
 const DEFAULT_REMOTE_AUTHORITY: &str = "authority-b";
 const DEFAULT_VSOMEIP_CONFIG: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/vsomeip-configs/someip_service.json"
+    "/vsomeip-configs/someip_server.json"
 );
 const DEFAULT_UENTITY_NUM: u32 = 0x4321;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum Encoding {
+    Native,
+    Protobuf,
+    Xcdrv2,
+}
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
 struct Args {
+    #[arg(skip)]
+    native: common::native::NativeContext,
     /// Authority for the local service identity
     #[arg(long, default_value = DEFAULT_UAUTHORITY)]
     uauthority: String,
@@ -54,15 +63,22 @@ struct Args {
     /// Path to the vsomeip JSON configuration file
     #[arg(long, default_value = DEFAULT_VSOMEIP_CONFIG)]
     vsomeip_config: String,
+    /// Payload encoding fixed by the SOME/IP topic convention.
+    #[arg(long, value_enum, default_value = "protobuf")]
+    encoding: Encoding,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
     let _ = tracing_subscriber::fmt::try_init();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
+    args.native = common::native::NativeContext::load()?;
+    if args.encoding == Encoding::Native {
+        args.native.identity()?;
+    }
 
-    info!("Started someip_service");
+    info!("Started someip_server");
 
     let uentity = cli::parse_u32_status("--uentity", &args.uentity)?;
     let uversion = cli::parse_u8_status("--uversion", &args.uversion)?;
@@ -79,15 +95,17 @@ async fn main() -> Result<(), UStatus> {
     }
 
     let service_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
+    let payload_encoding = payload_encoding(&args)?;
 
     // There will be a single vsomeip_transport, as there is a connection into device and a streamer
     // TODO: Add error handling if we fail to create a UPTransportVsomeip
     let service: Arc<dyn UTransport> = Arc::new(
-        UPTransportVsomeip::new_with_config(
+        UPTransportVsomeip::new_with_config_and_transport_config(
             service_uuri,
             &args.remote_authority,
             &vsomeip_config,
             None,
+            TransportConfig::new(payload_encoding),
         )
         .unwrap(),
     );
@@ -100,12 +118,22 @@ async fn main() -> Result<(), UStatus> {
         .register_listener(
             &source_filter,
             Some(&sink_filter),
-            service_request_responder.clone(),
+            common::native::listener(&args.native, service_request_responder.clone()),
         )
         .await?;
 
     println!("READY listener_registered");
 
-    thread::park();
-    Ok(())
+    loop {
+        thread::park();
+    }
+}
+
+fn payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
+    match args.encoding {
+        Encoding::Native => args.native.encoding(),
+        Encoding::Protobuf => Ok(PayloadEncoding::PROTOBUF),
+        Encoding::Xcdrv2 => xcdrv2_message_payload_parts(0, args.uauthority.clone(), "")
+            .map(|(_, encoding)| encoding),
+    }
 }

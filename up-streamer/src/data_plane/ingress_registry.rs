@@ -460,7 +460,8 @@ mod tests {
     use std::collections::HashMap;
     use std::str::FromStr;
     use std::sync::{Arc, Mutex as StdMutex};
-    use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo, Subscription};
+    use up_rust::communication::SubscriptionStatus;
+    use up_rust::core::usubscription::SubscriptionInfo;
     use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
 
     #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -517,7 +518,7 @@ mod tests {
             _sink_filter: Option<&UUri>,
         ) -> Result<UMessage, UStatus> {
             Err(UStatus::fail_with_code(
-                UCode::UNIMPLEMENTED,
+                UCode::Unimplemented,
                 "not used in tests",
             ))
         }
@@ -556,44 +557,22 @@ mod tests {
     }
 
     fn make_subscription_cache(entries: &[(&str, &str)]) -> SubscriptionCache {
-        let subscriptions = entries
-            .iter()
-            .map(|(topic, subscriber)| Subscription {
-                topic: Some(UUri::from_str(topic).expect("valid topic UUri")).into(),
-                subscriber: Some(SubscriberInfo {
-                    uri: Some(UUri::from_str(subscriber).expect("valid subscriber UUri")).into(),
-                    ..Default::default()
-                })
-                .into(),
-                ..Default::default()
-            })
-            .collect();
-
-        SubscriptionCache::new(FetchSubscriptionsResponse {
-            subscriptions,
-            ..Default::default()
-        })
-        .expect("valid subscription cache")
+        SubscriptionCache::new(subscription_snapshot(entries)).expect("valid subscription cache")
     }
 
-    fn subscription_snapshot(entries: &[(&str, &str)]) -> FetchSubscriptionsResponse {
-        let subscriptions = entries
+    fn subscription_snapshot(entries: &[(&str, &str)]) -> Vec<SubscriptionInfo> {
+        entries
             .iter()
-            .map(|(topic, subscriber)| Subscription {
-                topic: Some(UUri::from_str(topic).expect("valid topic UUri")).into(),
-                subscriber: Some(SubscriberInfo {
-                    uri: Some(UUri::from_str(subscriber).expect("valid subscriber UUri")).into(),
-                    ..Default::default()
-                })
-                .into(),
-                ..Default::default()
+            .map(|(topic, subscriber)| {
+                SubscriptionInfo::new(
+                    UUri::from_str(topic).expect("valid topic UUri"),
+                    UUri::from_str(subscriber).expect("valid subscriber UUri"),
+                    SubscriptionStatus::Subscribed,
+                    None,
+                    None,
+                )
             })
-            .collect();
-
-        FetchSubscriptionsResponse {
-            subscriptions,
-            ..Default::default()
-        }
+            .collect()
     }
 
     #[tokio::test]

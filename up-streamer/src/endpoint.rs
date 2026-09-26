@@ -12,7 +12,11 @@
  ********************************************************************************/
 
 use std::sync::Arc;
+#[cfg(feature = "owned-frame-transport")]
+use up_rust::UOwnedTransport;
 use up_rust::UTransport;
+#[cfg(feature = "experimental-copy-minimized-routing")]
+use up_rust::UZeroCopyTransport;
 
 ///
 /// [`Endpoint`] is defined as a combination of `authority_name` and
@@ -87,6 +91,53 @@ pub struct Endpoint {
     pub(crate) name: String,
     pub(crate) authority: String,
     pub(crate) transport: Arc<dyn UTransport>,
+    pub(crate) native_profile: Option<Arc<up_rust::NativeProfile>>,
+}
+
+/// How a feature-gated owned-frame endpoint reaches its transport.
+#[cfg(feature = "owned-frame-transport")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransportMode {
+    /// Native owned-frame transport path. This is owned/copying compatibility,
+    /// not zero-copy-preserving forwarding.
+    Owned,
+}
+
+/// Named endpoint backed by an experimental owned-frame transport.
+#[cfg(feature = "owned-frame-transport")]
+#[derive(Clone)]
+pub struct OwnedFrameEndpoint {
+    pub(crate) name: String,
+    pub(crate) authority: String,
+    pub(crate) transport: Arc<dyn UOwnedTransport>,
+    pub(crate) native_profile: Option<Arc<up_rust::NativeProfile>>,
+}
+
+/// Named endpoint backed by a zero-copy transport for copy-minimized routes.
+#[cfg(feature = "experimental-copy-minimized-routing")]
+pub struct ZeroCopyFrameEndpoint<T>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+{
+    pub(crate) name: String,
+    pub(crate) authority: String,
+    pub(crate) transport: Arc<T>,
+    pub(crate) native_profile: Option<Arc<up_rust::NativeProfile>>,
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+impl<T> Clone for ZeroCopyFrameEndpoint<T>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+{
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            authority: self.authority.clone(),
+            transport: self.transport.clone(),
+            native_profile: self.native_profile.clone(),
+        }
+    }
 }
 
 impl Endpoint {
@@ -95,6 +146,101 @@ impl Endpoint {
             name: name.to_string(),
             authority: authority.to_string(),
             transport,
+            native_profile: None,
         }
+    }
+
+    /// Attaches this endpoint's immutable deployment profile. Route activation
+    /// checks its domain, version and complete content against the peer's profile.
+    #[must_use]
+    pub fn with_native_profile(mut self, profile: Arc<up_rust::NativeProfile>) -> Self {
+        self.native_profile = Some(profile);
+        self
+    }
+}
+
+#[cfg(feature = "experimental-copy-minimized-routing")]
+impl<T> ZeroCopyFrameEndpoint<T>
+where
+    T: UZeroCopyTransport + Send + Sync + 'static,
+{
+    /// Creates an endpoint for feature-gated copy-minimized routes.
+    pub fn new(name: &str, authority: &str, transport: Arc<T>) -> Self {
+        Self {
+            name: name.to_string(),
+            authority: authority.to_string(),
+            transport,
+            native_profile: None,
+        }
+    }
+
+    /// Attaches the immutable deployment profile used to configure this endpoint.
+    #[must_use]
+    pub fn with_native_profile(mut self, profile: Arc<up_rust::NativeProfile>) -> Self {
+        self.native_profile = Some(profile);
+        self
+    }
+
+    /// Human-readable endpoint name used in diagnostics and route keys.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// uProtocol authority represented by this endpoint.
+    pub fn authority(&self) -> &str {
+        &self.authority
+    }
+}
+
+#[cfg(feature = "owned-frame-transport")]
+impl OwnedFrameEndpoint {
+    /// Creates an endpoint backed by a native owned-frame transport.
+    pub fn from_owned(name: &str, authority: &str, transport: Arc<dyn UOwnedTransport>) -> Self {
+        Self {
+            name: name.to_string(),
+            authority: authority.to_string(),
+            transport,
+            native_profile: None,
+        }
+    }
+
+    /// Attaches the immutable deployment profile used to configure this endpoint.
+    #[must_use]
+    pub fn with_native_profile(mut self, profile: Arc<up_rust::NativeProfile>) -> Self {
+        self.native_profile = Some(profile);
+        self
+    }
+
+    /// Human-readable endpoint name used in diagnostics and route keys.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// uProtocol authority represented by this endpoint.
+    pub fn authority(&self) -> &str {
+        &self.authority
+    }
+
+    /// Returns the owned/copying compatibility mode for this endpoint.
+    pub fn mode(&self) -> TransportMode {
+        TransportMode::Owned
+    }
+}
+
+pub(crate) fn native_route_agreement(
+    ingress: Option<&Arc<up_rust::NativeProfile>>,
+    egress: Option<&Arc<up_rust::NativeProfile>>,
+) -> Result<Option<up_rust::NativeProfileAgreement>, up_rust::UStatus> {
+    match (ingress, egress) {
+        (None, None) => Ok(None),
+        (Some(local), Some(peer)) => up_rust::NativeProfileAgreement::new(local.clone(), peer)
+            .map(Some)
+            .map_err(|error| {
+                up_rust::UStatus::fail_with_code(up_rust::UCode::InvalidArgument, error.to_string())
+            }),
+        _ => Err(up_rust::UStatus::fail_with_code(
+            up_rust::UCode::InvalidArgument,
+            "native route requires explicit matching profile configuration at both endpoints",
+        )),
     }
 }

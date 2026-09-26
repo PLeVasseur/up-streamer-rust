@@ -37,7 +37,6 @@ use usubscription_static_file::USubscriptionStaticFile;
 const DURATION_TO_RUN_CLIENTS: u128 = 1_0;
 const SENT_MESSAGE_VEC_CAPACITY: usize = 10_000;
 
-#[ignore]
 #[tokio::test(flavor = "multi_thread")]
 async fn single_local_two_remote_authorities_same_remote_transport() {
     run_single_local_two_remote_authorities_same_remote_transport().await;
@@ -375,6 +374,17 @@ async fn run_single_local_two_remote_authorities_same_remote_transport() {
     check_messages_in_order(remote_a_client_listener.retrieve_message_store()).await;
     println!("check remote_b message ordering:");
     check_messages_in_order(remote_b_client_listener.retrieve_message_store()).await;
+
+    for peer in [remote_endpoint_a, remote_endpoint_b] {
+        ustreamer
+            .delete_route(local_endpoint.clone(), peer.clone())
+            .await
+            .unwrap();
+        ustreamer
+            .delete_route(peer, local_endpoint.clone())
+            .await
+            .unwrap();
+    }
 
     debug!("All clients finished.");
 }
