@@ -431,6 +431,10 @@ Do not use `--skip-build`, selected rows, reduced criteria, or increased
 timeouts as complete matrix acceptance evidence.
 # Connectivity capacity overrides
 
+For explicit Table/SingleType generation and the real-process admission-control
+suite, see [native agreement modes](docs/native-modes.md). The suite uses the same
+configuration, exporter, role binaries and supervision as ordinary connectivity.
+
 Each successfully spawned role/backend process records its executable, actual
 arguments, explicit environment, namespace-wrapper arguments and owned process
 group in `<actor>.launch.json` beside its raw log. Receipt failure tears down the

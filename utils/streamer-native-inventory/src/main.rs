@@ -18,10 +18,10 @@ struct Args {
     /// Require this compiler target; never relabel a host layout.
     #[arg(long)]
     expect_target: Option<String>,
-    /// Also generate a table artifact using the explicit deployment inputs.
+    /// Also generate an agreement using the explicit deployment inputs.
     #[arg(long, requires_all = ["domain", "seeds", "identities"])]
     agreement_output: Option<PathBuf>,
-    /// Deployment domain for table generation.
+    /// Deployment domain for agreement generation.
     #[arg(long, requires = "agreement_output")]
     domain: Option<String>,
     /// Explicit genesis seed reservations.
@@ -30,6 +30,9 @@ struct Args {
     /// Separate private payload and wire/family/layout declarations.
     #[arg(long, requires = "agreement_output")]
     identities: Option<PathBuf>,
+    /// Generate SingleType for this exact linked type name and revision zero.
+    #[arg(long, requires = "agreement_output")]
+    single_type: Option<String>,
 }
 
 fn main() -> Result<(), ProfileToolError> {
@@ -76,16 +79,27 @@ fn main() -> Result<(), ProfileToolError> {
                 .identities
                 .ok_or(ProfileToolError::Invalid("missing identity declarations"))?,
         )?;
-        let agreement = AgreementArtifact::generate_table(
-            &inventory,
-            args.domain
-                .ok_or(ProfileToolError::Invalid("missing deployment domain"))?,
-            1,
-            AllocationBand::default(),
-            None,
-            &seeds,
-            identities,
-        )?;
+        let domain = args
+            .domain
+            .ok_or(ProfileToolError::Invalid("missing deployment domain"))?;
+        let agreement = if let Some(name) = args.single_type {
+            AgreementArtifact::generate_single_type(
+                &inventory,
+                domain,
+                &TypeKey { name, revision: 0 },
+                identities,
+            )?
+        } else {
+            AgreementArtifact::generate_table(
+                &inventory,
+                domain,
+                1,
+                AllocationBand::default(),
+                None,
+                &seeds,
+                identities,
+            )?
+        };
         write_artifact(&output, &agreement)?;
         println!("{}", agreement.content_sha256);
     }

@@ -22,6 +22,12 @@ hashes are retained in the immutable run bundle. Export-only use needs none of
 the generation arguments.
 # Large-fixture export
 
+`--single-type <exact-type-name>` generates a SingleType deployment agreement for
+one linked revision-zero representation instead of the default Table. Domain and
+identity declarations remain explicit. See the
+[native-mode guide](../streamer-transport-test-orchestrator/docs/native-modes.md) for
+route admission, the real-process control suite and the distinction from codec IDs.
+
 Build with `payload-contract-large-fixtures` to require both actual SDK sensor
 types in the linked inventory alongside the ordinary example types. This adds
 their target-qualified descriptors; a host export is never relabelled as another

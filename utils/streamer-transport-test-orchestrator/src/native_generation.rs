@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Immutable evidence for the actual application-linked native table generator.
+//! Immutable evidence for application-linked native agreement generation.
 
 use super::*;
 use up_native_profile::{
@@ -19,6 +19,8 @@ const FILES: [&str; 6] = [
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct NativeGeneration {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    single_type: Option<up_native_profile::TypeKey>,
     inventory: InventoryArtifact,
     seeds: Vec<SeedAllocation>,
     identities: IdentityDeclarations,
@@ -48,10 +50,26 @@ fn command(target: &str) -> Vec<String> {
     .to_vec()
 }
 
+fn command_for_type(target: &str, single_type: Option<&up_native_profile::TypeKey>) -> Vec<String> {
+    let mut args = command(target);
+    if let Some(key) = single_type {
+        args.extend(["--single-type".into(), key.name.clone()]);
+    }
+    args
+}
+
 impl NativeGeneration {
     pub(super) fn generate(
         root: &Path,
         exporter_sha256: &str,
+    ) -> Result<(NativeProfileDocument, Self)> {
+        Self::generate_for_type(root, exporter_sha256, None)
+    }
+
+    pub(super) fn generate_for_type(
+        root: &Path,
+        exporter_sha256: &str,
+        type_name: Option<&str>,
     ) -> Result<(NativeProfileDocument, Self)> {
         let directory = root.join("native");
         fs::create_dir(&directory)?;
@@ -59,7 +77,14 @@ impl NativeGeneration {
         let identities = matrix_identity_declarations();
         up_native_profile::write_artifact(&directory.join("seeds.json"), &seeds)?;
         up_native_profile::write_artifact(&directory.join("identities.json"), &identities)?;
-        let command = command(up_rust::NativeTarget::current().triple());
+        let single_type = type_name.map(|name| up_native_profile::TypeKey {
+            name: name.into(),
+            revision: 0,
+        });
+        let command = command_for_type(
+            up_rust::NativeTarget::current().triple(),
+            single_type.as_ref(),
+        );
         let output = Command::new(root.join(&command[0]))
             .args(&command[1..])
             .current_dir(root)
@@ -82,6 +107,7 @@ impl NativeGeneration {
         }
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o555))?;
         let generation = Self {
+            single_type,
             inventory,
             seeds,
             identities,
@@ -99,7 +125,8 @@ impl NativeGeneration {
         self.inventory.validate()?;
         profile.0.validate()?;
         if self.previous_agreement_sha256.is_some()
-            || self.command != command(&self.inventory.target.triple)
+            || self.command
+                != command_for_type(&self.inventory.target.triple, self.single_type.as_ref())
             || self.seeds != matrix_seed_allocations()
             || self.identities != matrix_identity_declarations()
             || self
@@ -117,15 +144,25 @@ impl NativeGeneration {
         for hash in self.file_sha256.values() {
             validate_sha256("native generation file", hash)?;
         }
-        let regenerated = AgreementArtifact::generate_table(
-            &self.inventory,
-            "uprotocol.examples.native".into(),
-            1,
-            AllocationBand::default(),
-            None,
-            &self.seeds,
-            self.identities.clone(),
-        )?;
+        let regenerated = if let Some(key) = &self.single_type {
+            anyhow::ensure!(key.revision == 0, "exporter requires revision zero");
+            AgreementArtifact::generate_single_type(
+                &self.inventory,
+                "uprotocol.examples.native".into(),
+                key,
+                self.identities.clone(),
+            )?
+        } else {
+            AgreementArtifact::generate_table(
+                &self.inventory,
+                "uprotocol.examples.native".into(),
+                1,
+                AllocationBand::default(),
+                None,
+                &self.seeds,
+                self.identities.clone(),
+            )?
+        };
         if regenerated != profile.0 {
             return Err(anyhow!("bundled agreement differs from the recorded target inventory and generation inputs"));
         }
@@ -215,6 +252,7 @@ impl NativeGeneration {
         let inventory =
             configurable_streamer_wire_support::native_profile::matrix_native_inventory().unwrap();
         Self {
+            single_type: None,
             command: command(&inventory.target.triple),
             inventory,
             seeds: matrix_seed_allocations(),

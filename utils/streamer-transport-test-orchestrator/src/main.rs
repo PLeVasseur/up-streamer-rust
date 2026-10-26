@@ -80,6 +80,7 @@ const DDS_MIN_UNPRIVILEGED_PORT: i32 = 1_024;
 const DDS_PORT_MODULUS: i32 = 65_536;
 const SUMMARY_SCHEMA_VERSION: &str = "6.0";
 const CHECKPOINT_SCHEMA_VERSION: &str = "1.0";
+mod native_controls;
 mod native_generation;
 mod prepared;
 mod soak;
@@ -111,6 +112,18 @@ static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     about = "Endpoint-profile matrix orchestrator for configurable-streamer plus role binaries"
 )]
 struct Cli {
+    /// Execute SingleType admission controls through real role processes.
+    #[arg(long)]
+    single_type_controls: bool,
+    /// Exact linked type name for SingleType; omission selects Table.
+    #[arg(long)]
+    native_single_type: Option<String>,
+    /// Acknowledge SingleType identity loss on this route's classic hops.
+    #[arg(long)]
+    allow_single_type_over_classic_hops: bool,
+    /// Provision a classic remote Zenoh source behind an owned local boundary.
+    #[arg(long, hide = true)]
+    native_remote_source_classic: bool,
     /// Optional bounded JSON capacity overrides applied to every generated iceoryx2 participant.
     #[arg(long, value_name = "JSON", value_parser = parse_iceoryx2_capacity)]
     iceoryx2_capacity: Option<configurable_streamer_wire_support::capacity::Iceoryx2Capacity>,
@@ -1394,6 +1407,9 @@ impl ResourcePeaks {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.single_type_controls {
+        return native_controls::run(&cli);
+    }
     if let Some(root) = &cli.replay_soak {
         println!("{}", serde_json::to_string_pretty(&soak::audit(root)?)?);
         return Ok(());
@@ -1595,11 +1611,12 @@ fn run(cli: Cli) -> Result<bool> {
         validate_current_orchestrator(&bundle)?;
         bundle
     } else {
-        stage_run_bundle(
+        stage_run_bundle_with_type(
             &repo_root,
             &target_directory,
             &artifacts_root,
             &selected_rows,
+            cli.native_single_type.as_deref(),
         )?
     };
     validate_run_bundle(&bundle)?;
@@ -2629,6 +2646,28 @@ fn install_signal_handlers(cancellation: &Cancellation) -> Result<()> {
 }
 
 fn validate_cli(cli: &Cli) -> Result<()> {
+    if let Some(name) = &cli.native_single_type {
+        if name.is_empty()
+            || name.len() > 256
+            || cli.soak.is_some()
+            || cli.prepare_shards
+            || cli.shard_count.is_some()
+            || cli.shard_manifest.is_some()
+            || cli.run_bundle.is_some()
+            || !cli.merge_shard_roots.is_empty()
+        {
+            return Err(anyhow!(
+                "SingleType requires a bounded exact type and ordinary connectivity execution"
+            ));
+        }
+    }
+    if (cli.allow_single_type_over_classic_hops || cli.native_remote_source_classic)
+        && cli.native_single_type.is_none()
+    {
+        return Err(anyhow!(
+            "SingleType policy flags require an explicit SingleType deployment"
+        ));
+    }
     if cli.iceoryx2_capacity.is_some() && cli.soak.is_some() {
         return Err(anyhow!("sustained capacity comes from its workload deployment card, not connectivity overrides"));
     }
@@ -4570,6 +4609,7 @@ fn run_row_attempt(
         &lola_run_namespace,
     )?;
     apply_iceoryx2_capacity_config(&config_path, cli.iceoryx2_capacity.as_ref())?;
+    apply_single_type_policy_config(&config_path, cli)?;
     timings.config_us = duration_us(config_started.elapsed());
 
     bridge_control::verify(
@@ -5843,7 +5883,55 @@ fn role_command(
             }
         }
     }
+    if active && cli.native_remote_source_classic {
+        anyhow::ensure!(
+            profile.physical == PhysicalTransport::Zenoh
+                && profile.kind == EndpointKind::OwnedFrame,
+            "remote classic control requires an owned-frame Zenoh boundary"
+        );
+        let position = args
+            .iter()
+            .position(|arg| arg == "--route-family")
+            .context("remote source route-family missing")?;
+        args[position + 1] = "classic".into();
+    }
     Ok(RoleCommand { binary, args })
+}
+
+fn apply_single_type_policy_config(path: &Path, cli: &Cli) -> Result<()> {
+    if cli.native_single_type.is_none() {
+        return Ok(());
+    }
+    let mut config: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
+    for transport in config["transports"]
+        .as_object_mut()
+        .context("transport object missing")?
+        .values_mut()
+    {
+        for endpoint in transport["endpoints"]
+            .as_array_mut()
+            .context("endpoint list missing")?
+        {
+            for route in endpoint["forwarding_routes"]
+                .as_array_mut()
+                .context("route list missing")?
+            {
+                route["allow_single_type_over_classic_hops"] =
+                    json!(cli.allow_single_type_over_classic_hops);
+                if cli.native_remote_source_classic {
+                    for hop in route["native_hops"]
+                        .as_array_mut()
+                        .context("native hops missing")?
+                    {
+                        if hop["endpoint"] == "source" {
+                            hop["api"] = json!("classic");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    atomic_write_json(path, &config)
 }
 
 fn parse_iceoryx2_capacity(
@@ -6767,23 +6855,19 @@ fn expected_native_identity(document: &NativeProfileDocument) -> Result<NativeVe
     let profile = document
         .resolve()
         .map_err(|error| anyhow!("invalid native expectation profile: {error}"))?;
-    let up_rust::NativeProfileMode::Table(table) = profile.mode() else {
-        return Err(anyhow!(
-            "the matrix deployment explicitly selects table mode"
-        ));
-    };
     let representation = SelectedWireNativePayload::native_representation();
-    let (encoding, _) = table
-        .entries()
-        .find(|(_, value)| *value == &representation)
-        .context("matrix worker representation is absent from the frozen table")?;
+    let agreement = up_rust::NativeProfileAgreement::new(Arc::new(profile.clone()), &profile)
+        .map_err(|error| anyhow!("native agreement: {error:?}"))?;
+    let identity = agreement
+        .identity_for(&representation)
+        .map_err(|error| anyhow!("native worker identity: {error:?}"))?;
     Ok(NativeVerification {
         domain: profile.domain().to_owned(),
         version: profile.version(),
         profile_digest: profile.content_digest(),
         type_name: SelectedWireNativePayload::TYPE_NAME.to_owned(),
-        encoding_id: encoding.id(),
-        native_type_token: representation.token().as_u32(),
+        encoding_id: identity.encoding().id(),
+        native_type_token: identity.token().as_u32(),
         identity_source: String::new(),
     })
 }
@@ -7823,6 +7907,16 @@ fn stage_run_bundle(
     artifacts_root: &Path,
     rows: &[MatrixRow],
 ) -> Result<RunBundle> {
+    stage_run_bundle_with_type(repo_root, target_directory, artifacts_root, rows, None)
+}
+
+fn stage_run_bundle_with_type(
+    repo_root: &Path,
+    target_directory: &Path,
+    artifacts_root: &Path,
+    rows: &[MatrixRow],
+    single_type: Option<&str>,
+) -> Result<RunBundle> {
     let root = artifacts_root.join("run-bundle");
     let mut inputs = Vec::new();
     for name in required_matrix_executables(rows) {
@@ -7927,7 +8021,11 @@ fn stage_run_bundle(
         .context("missing staged native exporter")?
         .sha256
         .clone();
-    let (native_profile, native_generation) = NativeGeneration::generate(&root, &exporter_sha256)?;
+    let (native_profile, native_generation) = if single_type.is_some() {
+        NativeGeneration::generate_for_type(&root, &exporter_sha256, single_type)?
+    } else {
+        NativeGeneration::generate(&root, &exporter_sha256)?
+    };
     let manifest = BundleManifest {
         schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
         created_at: Utc::now().to_rfc3339(),
@@ -10987,6 +11085,47 @@ mod tests {
         assert_eq!(ns["publisher_allocation_strategy"], "static");
         assert!(parse_iceoryx2_capacity(r#"{"max_subscribers":0}"#).is_err());
         assert!(parse_iceoryx2_capacity(r#"{"misspelled_limit":1}"#).is_err());
+    }
+
+    #[test]
+    fn single_type_uses_implicit_identity_and_rejects_equal_size_different_type() {
+        use configurable_streamer_wire_support::native_profile::NativeFlowPayload;
+        use up_native_profile::{AgreementArtifact, TypeKey};
+        let inventory =
+            configurable_streamer_wire_support::native_profile::matrix_native_inventory().unwrap();
+        assert_eq!(
+            std::mem::size_of::<SelectedWireNativePayload>(),
+            std::mem::size_of::<NativeFlowPayload>()
+        );
+        let create = |name: &str| {
+            NativeProfileDocument(
+                AgreementArtifact::generate_single_type(
+                    &inventory,
+                    "uprotocol.examples.native".into(),
+                    &TypeKey {
+                        name: name.into(),
+                        revision: 0,
+                    },
+                    matrix_identity_declarations(),
+                )
+                .unwrap(),
+            )
+        };
+        let expected =
+            expected_native_identity(&create(SelectedWireNativePayload::TYPE_NAME)).unwrap();
+        assert_eq!(expected.encoding_id, 0);
+        assert_eq!(
+            expected.native_type_token,
+            SelectedWireNativePayload::native_representation()
+                .token()
+                .as_u32()
+        );
+        assert!(
+            expected_native_identity(&create(NativeFlowPayload::TYPE_NAME))
+                .unwrap_err()
+                .to_string()
+                .contains("UnknownRepresentation")
+        );
     }
 
     #[test]
