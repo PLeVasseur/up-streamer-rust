@@ -444,3 +444,39 @@ effective arithmetic and service compatibility are checked by the physical bindi
 Omission preserves ordinary connectivity setup. Sustained workloads use their own
 deployment cards and reject this connectivity-only override. See the
 [capacity guide](../../configurable-streamer/docs/native-capacity.md).
+
+## Representative sensor workload
+
+Representative worker/backend builds retain the isolated `matrix` output/profile
+and explicit current compiler, but use opt-level3 for full-sized initialization,
+semantic checks and evidence hashing. The ordinary connectivity/fast build policy
+is unchanged. Build receipts record that override and bind actual executable hashes;
+`--skip-build` requires externally frozen matching build evidence. This is a
+compiler-role choice, not an alteration of the rate or acceptance thresholds.
+
+Build the maintained orchestrator with `payload-contract-large-fixtures`, then
+select `--soak-lane representative` together with `--soak diagnostic`, `calibration`
+or `acceptance`. Acceptance requires matching concurrent calibration. Ordinary
+`--soak-lane fast` keeps the existing30-stream workload. The representative cohort
+uses four full LiDAR and four full camera streams, each iceoryx2→Streamer→Zenoh,
+with independent providers and exact typed deployment identities. Diagnostic uses
+one of each and shorter10/20/20/10-second phases; it cannot qualify the full lane.
+
+Full representative timing is120s warm-up,180s normal,180s delayed,30s drain within
+600s. The offer rate is2/s and delayed processing1000ms, queue4, admittedRX≤5,
+transientRX≤1 and TX≤1. Generated `sensor-geometry.json` records actual encoded
+metadata plus alignment slack and full fixture payload for the static iceoryx2
+slice; the two actual directed/sinkless native registrations require
+service2subscribers/buffer2/borrowed2/history0/TX1, giving nine slots. Source readiness
+requires both native subscribers; no extra monitoring subscriber is attached. Zenoh
+providers are48MiB per LiDAR and96MiB per camera stream. Each registration receives
+its own iceoryx2 Sample; native fan-out retains shared chunks without a local
+sample-sharing box. A retained receive lease also keeps its native port alive after
+logical unregister. The previous one-port topology is superseded, not a passing run.
+
+Resource samples include PID/start-time/group identity. The final90s of normal and
+delayed phases use per source/sink/bridge process-group PSS least-squares slopes,
+bounded at1/2MiB per minute respectively. Controller and launcher PSS are reported
+separately, with complete inclusive sums retained. Missing samples or threshold
+breaches fail; the diagnostic's short windows report slopes without qualifying
+those90s limits. Fixed aggregate memory/FD/thread safety bounds remain in force.

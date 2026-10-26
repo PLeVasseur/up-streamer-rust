@@ -159,3 +159,9 @@ cargo run -p criterion-guardrail -- \
   --alloc-proxy-threshold-pct 5 \
   --report "$OPENCODE_CONFIG_DIR/reports/ergonomics-perf/bench-data/criterion-guardrail.json"
 ```
+# Copy and ownership boundaries
+
+Native receive and typed borrowing retain binding-owned storage. Copy-minimized
+cross-backend routes currently copy once into an egress loan; they are not claimed
+end-to-end zero-copy. Opt-in flow evidence records actual copied bytes separately
+from payload identity and loan provenance. See [native routes](docs/native_routes.md).

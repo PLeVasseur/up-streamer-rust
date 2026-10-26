@@ -1084,6 +1084,12 @@ impl UStreamer {
             let send_result = match egress_transport.loan_validated_tx(spec).await {
                 Ok(mut tx) => match copy_frame_payload_to_tx(&frame, &mut tx) {
                     Ok(copy_diagnostics) => {
+                        crate::flow_observation::copied(
+                            &route_label,
+                            frame.metadata(),
+                            copy_diagnostics.0,
+                            copy_diagnostics.1,
+                        );
                         let observation = crate::flow_observation::loan(&route_label, &tx);
                         egress_transport
                             .send_validated_zero_copy(tx)

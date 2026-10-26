@@ -6242,7 +6242,7 @@ dependencies = [
 [[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=0f3dcee772e12e318ad4034a80880abe267dcc81#0f3dcee772e12e318ad4034a80880abe267dcc81"
+source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=0529a2c4d84b227fa9a11aa13db429a29df819a6#0529a2c4d84b227fa9a11aa13db429a29df819a6"
 dependencies = [
  "async-trait",
  "bytes",

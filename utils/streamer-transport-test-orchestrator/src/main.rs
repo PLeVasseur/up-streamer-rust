@@ -117,6 +117,9 @@ struct Cli {
     /// Run a sustained workload using the existing matrix deployment and workers.
     #[arg(long, value_enum)]
     soak: Option<soak::Mode>,
+    /// Fixed sustained workload lane; representative requires large-fixture build support.
+    #[arg(long, value_enum, default_value = "fast")]
+    soak_lane: soak::Lane,
     /// Qualification/source manifest bound into the sustained workload plan.
     #[arg(long, requires = "soak")]
     soak_source_manifest: Option<PathBuf>,
@@ -4867,6 +4870,24 @@ fn build_required_binaries(
     use_local_sibling_patches: bool,
     sustained: bool,
 ) -> Result<(BuildSummary, PathBuf)> {
+    build_required_binaries_with_optimization(
+        repo_root,
+        target_root,
+        rows,
+        use_local_sibling_patches,
+        sustained,
+        false,
+    )
+}
+
+fn build_required_binaries_with_optimization(
+    repo_root: &Path,
+    target_root: &Path,
+    rows: &[MatrixRow],
+    use_local_sibling_patches: bool,
+    sustained: bool,
+    representative_optimized: bool,
+) -> Result<(BuildSummary, PathBuf)> {
     let started = Instant::now();
     let started_at = Utc::now().to_rfc3339();
     let common_args = if use_local_sibling_patches {
@@ -4899,6 +4920,7 @@ fn build_required_binaries(
                 "--no-default-features",
             ],
             &common_args,
+            representative_optimized,
         )?,
         run_cargo(
             "example_streamer_uses",
@@ -4913,18 +4935,21 @@ fn build_required_binaries(
                 "--no-default-features",
             ],
             &common_args,
+            representative_optimized,
         )?,
         run_cargo(
             "streamer_native_inventory",
             repo_root,
             ["build", "-p", "streamer-native-inventory"],
             &common_args,
+            representative_optimized,
         )?,
         run_cargo(
             "streamer_transport_test_orchestrator",
             repo_root,
             ["build", "-p", "streamer-transport-test-orchestrator"],
             &common_args,
+            representative_optimized,
         )?,
     ];
     let mut executables = Vec::new();
@@ -4942,7 +4967,15 @@ fn build_required_binaries(
         completed_at: Some(Utc::now().to_rfc3339()),
         duration_us: duration_us(started.elapsed()),
         target_directory: target_directory.display().to_string(),
-        cargo_profile: matrix_cargo_profile(),
+        cargo_profile: {
+            let mut profile = matrix_cargo_profile();
+            if representative_optimized {
+                profile
+                    .environment
+                    .insert("CARGO_PROFILE_MATRIX_OPT_LEVEL".into(), "3".into());
+            }
+            profile
+        },
         configurable_streamer_features: configurable_streamer_features(rows)
             .into_iter()
             .map(str::to_string)
@@ -5022,6 +5055,7 @@ fn run_cargo<const N: usize>(
     repo_root: &Path,
     args: [&str; N],
     patch_args: &[String],
+    representative_optimized: bool,
 ) -> Result<(BuildPhaseSummary, Vec<PathBuf>)> {
     let started = Instant::now();
     let started_at = Utc::now().to_rfc3339();
@@ -5039,6 +5073,9 @@ fn run_cargo<const N: usize>(
         .arg("--message-format=json-render-diagnostics")
         .args(patch_args);
     configure_matrix_cargo_environment(&mut command);
+    if representative_optimized {
+        command.env("CARGO_PROFILE_MATRIX_OPT_LEVEL", "3");
+    }
     command.env("CARGO_NET_GIT_FETCH_WITH_CLI", "true");
     if std::env::var_os("BAZEL").is_none() {
         let bazel = repo_root.join(".cache/tools/bazelisk-v1.29.0-linux-amd64");

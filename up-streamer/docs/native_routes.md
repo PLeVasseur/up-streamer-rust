@@ -56,3 +56,18 @@ for declared classic members. A SingleType profile then requires the
 explicit `--allow-single-type-over-classic-hops` flag. The output distinguishes
 policy checking from actual Streamer route activation; it does not claim traffic
 was forwarded. These example types are separate from the matrix's role inventory.
+# Payload movement and native ownership
+
+Native ingress leases borrow their binding's receive storage. Native subscriber
+fan-out and checked typed borrowing do not imply cross-backend storage adoption.
+Current copy-minimized forwarding loans an egress buffer and copies the full payload
+once into that owner's pool. It does not provide end-to-end zero-copy across
+iceoryx2 and Zenoh. Source sensor workers also initialize a heap fixture before
+copying into their TX loan; ownership bookkeeping and setup allocation are distinct.
+
+With `flow-evidence` and an explicit run/actor environment, each actual bridge
+payload copy emits `FLOW_PAYLOAD_COPY` containing message/route identity, copied
+byte count and slice count. It is emitted after the copy, even if the subsequent
+egress send fails. No record is emitted for a failed pre-copy loan; those failures
+remain visible in route diagnostics. The observation never hashes or copies payload
+data itself and is not a wire format or an allocation-free logging claim.

@@ -6,6 +6,16 @@ use streamer_soak::control::{Phase, PhaseCommand};
 use streamer_soak::{JournalWriter, Reconciler, ReplayOptions};
 use streamer_transport_test_orchestrator::platform::{process_tree_samples, ProcessSample};
 
+mod representative;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Lane {
+    #[default]
+    Fast,
+    Representative,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Mode {
@@ -17,6 +27,8 @@ pub(super) enum Mode {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Plan {
+    #[serde(default)]
+    lane: Lane,
     schema: String,
     mode: Mode,
     source_identity: String,
@@ -48,6 +60,9 @@ struct Plan {
 
 impl Plan {
     fn validate(&self) -> Result<()> {
+        if self.lane == Lane::Representative {
+            return representative::validate_plan(self);
+        }
         let durations = (
             self.warmup_seconds,
             self.normal_seconds,
@@ -128,6 +143,10 @@ fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
 }
 
 fn selected(cli: &Cli, mode: Mode) -> Result<Vec<MatrixRow>> {
+    if cli.soak_lane == Lane::Representative {
+        anyhow::ensure!(cli.only.is_empty(), "representative cohort is fixed");
+        return representative::rows(mode);
+    }
     let rows = matrix_rows();
     if mode == Mode::Diagnostic {
         let rows = select_rows(rows, &cli.only)?;
@@ -368,6 +387,9 @@ fn prepare(
         "offered_per_second": plan.offered_per_second, "consumer_delay_ms": plan.consumer_delay_ms,
         "maximum_payload_bytes": plan.maximum_payload_bytes, "deadline_seconds": plan.maximum_seconds + 30}),
     )?;
+    if plan.lane == Lane::Representative {
+        representative::configure_worker(&worker, row)?;
+    }
     set_context(&mut process_env, &options, "bridge");
     set_context(&mut active_env, &options, "source");
     set_context(&mut passive_env, &options, "sink");
@@ -403,7 +425,17 @@ fn prepare(
             .map(|paths| paths.streamer.as_path()),
         &lola_run_namespace,
     )?;
-    prepared::configure_workload_endpoints(&config)?;
+    let capacity = if plan.lane == Lane::Representative {
+        Some(representative::configure_endpoints(
+            &config,
+            row,
+            &bundle.manifest.native_profile,
+            &row_dir,
+        )?)
+    } else {
+        prepared::configure_workload_endpoints(&config)?;
+        None
+    };
     atomic_write_json(
         &row_dir.join("deployment-inputs.json"),
         &json!({
@@ -469,9 +501,15 @@ fn prepare(
                 cli,
             )?
         };
-        command
-            .args
-            .extend(prepared::workload_role_configuration(profile));
+        if let Some(capacity) = &capacity {
+            command
+                .args
+                .extend(representative::role_configuration(profile, capacity));
+        } else {
+            command
+                .args
+                .extend(prepared::workload_role_configuration(profile));
+        }
         command
             .args
             .extend(["--workload-plan".into(), worker.display().to_string()]);
@@ -499,6 +537,14 @@ fn prepare(
         READY_LISTENER,
         Duration::from_secs(10),
         cancellation,
+    )?;
+    atomic_write_json(
+        &row_dir.join("owned-groups.json"),
+        &json!({
+            "source":source.process_group(), "sink":sink.process_group(),
+            "bridge":bridge.process_group(), "launcher":namespace.process_group(),
+            "controller":std::process::id(),
+        }),
     )?;
     let logs = [(&source, "source"), (&sink, "sink"), (&bridge, "bridge")]
         .into_iter()
@@ -593,9 +639,23 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
     let target = if cli.skip_build {
         discover_existing_matrix_target_directory(&target, rows)?
     } else {
-        build_required_binaries(repo, &target, rows, false, true)?.1
+        build_required_binaries_with_optimization(
+            repo,
+            &target,
+            rows,
+            false,
+            true,
+            cli.soak_lane == Lane::Representative,
+        )?
+        .1
     };
+    if cli.soak_lane == Lane::Representative && !cli.skip_build {
+        representative::build_workers(repo, &target, rows, root)?;
+    }
     let bundle = stage_run_bundle(repo, &target, root, rows)?;
+    if cli.soak_lane == Lane::Representative {
+        representative::require_inventory(&bundle.manifest.native_profile)?;
+    }
     probe_user_namespaces(&bundle)?;
     let manifest = cli
         .soak_source_manifest
@@ -620,6 +680,7 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
         let previous_plan: Plan = read(&previous.join("soak-plan.json"))?;
         anyhow::ensure!(
             previous_plan.mode == Mode::Calibration
+                && previous_plan.lane == cli.soak_lane
                 && previous_plan.source_identity == source_identity
                 && previous_plan.executable_identities == executable_identities
                 && previous_plan.driver_sha256 == driver_sha256,
@@ -630,7 +691,8 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
     } else {
         None
     };
-    let plan = Plan {
+    let mut plan = Plan {
+        lane: cli.soak_lane,
         schema: "uprotocol.sustained-workload.v1".into(),
         mode,
         source_identity,
@@ -659,6 +721,9 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
         fd_max: 32768,
         thread_max: 4096,
     };
+    if plan.lane == Lane::Representative {
+        representative::set_limits(&mut plan);
+    }
     plan.validate()?;
     atomic_write_json(&root.join("soak-plan.json"), &plan)?;
     let plan_hash = sha256_file(&root.join("soak-plan.json"))?;
@@ -854,10 +919,14 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
             "row context mismatch"
         );
         let report = streamer_soak::replay(&directory, &options)?;
-        let row = matrix_rows()
-            .into_iter()
-            .find(|row| &row.id == id)
-            .context("row absent")?;
+        let row = if plan.lane == Lane::Representative {
+            representative::rows(plan.mode)?
+        } else {
+            matrix_rows()
+        }
+        .into_iter()
+        .find(|row| &row.id == id)
+        .context("row absent")?;
         if row.source.kind == EndpointKind::CopyMinimized {
             anyhow::ensure!(
                 report["application_lease_peaks"]["source"][1]
@@ -884,7 +953,11 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
         }
         if row.encoding == WireEncoding::Native {
             let manifest: BundleManifest = read(&root.join("run-bundle/manifest.json"))?;
-            let expected = expected_native_identity(&manifest.native_profile)?;
+            let expected = if plan.lane == Lane::Representative {
+                representative::expected_identity(&row, &manifest.native_profile)?
+            } else {
+                expected_native_identity(&manifest.native_profile)?
+            };
             let passive_path = directory.join("passive.log");
             validate_native_worker_log(
                 &fs::read_to_string(&passive_path)?,
@@ -908,6 +981,9 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
             )?;
         }
         let live: serde_json::Value = read(&directory.join("live-report.json"))?;
+        if plan.lane == Lane::Representative {
+            representative::audit_worker_metrics(&directory, &report)?;
+        }
         anyhow::ensure!(report == live, "live/replayed accounting differs");
         let cleanup: serde_json::Value = read(&directory.join("cleanup.json"))?;
         anyhow::ensure!(
@@ -1027,13 +1103,19 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
         let duration = last - first;
         anyhow::ensure!(
             duration >= 15.0
-                && (*final_value as f64 - *initial as f64) * 60.0 / duration
-                    <= plan.growth_bytes_per_minute as f64,
+                && (plan.lane == Lane::Representative
+                    || (*final_value as f64 - *initial as f64) * 60.0 / duration
+                        <= plan.growth_bytes_per_minute as f64),
             "incomplete resource window or excess growth"
         );
     }
+    let representative_resources = if plan.lane == Lane::Representative {
+        Some(representative::audit_resources(root, &plan, phases)?)
+    } else {
+        None
+    };
     Ok(
-        json!({"success": true, "mode": plan.mode, "source_identity": plan.source_identity,
+        json!({"success": true, "mode": plan.mode, "lane":plan.lane, "representative_resources":representative_resources, "source_identity": plan.source_identity,
         "plan_sha256": hash, "rows": reports, "resource_samples": samples,
         "resources_sha256": sha256_file(&root.join("resources.jsonl"))?, "execution_sha256": sha256_file(&root.join("execution.json"))?}),
     )

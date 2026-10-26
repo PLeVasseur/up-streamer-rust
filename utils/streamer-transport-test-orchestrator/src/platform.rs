@@ -173,6 +173,12 @@ pub fn process_memory(pid: u32) -> io::Result<ProcessMemory> {
 pub struct ProcessSample {
     /// OS process identifier observed during this sample.
     pub pid: u32,
+    /// Actual process group used for endpoint/launcher ownership accounting.
+    #[serde(default)]
+    pub process_group: i32,
+    /// Linux start-time ticks distinguishing reused PID identities; zero in old records.
+    #[serde(default)]
+    pub start_time_ticks: u64,
     /// Current resident bytes.
     pub rss: u64,
     /// Proportional resident bytes.
@@ -226,6 +232,21 @@ pub fn process_tree_samples(root: u32) -> io::Result<Vec<ProcessSample>> {
         }
         pending.extend(children.get(&pid).into_iter().flatten().copied());
         let sample = (|| -> io::Result<ProcessSample> {
+            let before_stat = std::fs::read_to_string(format!("/proc/{pid}/stat"))?;
+            let identity = |stat: &str| -> io::Result<(i32, u64)> {
+                let fields: Vec<_> = stat
+                    .rsplit_once(')')
+                    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing proc comm"))?
+                    .1
+                    .split_whitespace()
+                    .collect();
+                let group = fields.get(2).and_then(|s| s.parse().ok());
+                let start = fields.get(19).and_then(|s| s.parse().ok());
+                group.zip(start).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "invalid process identity")
+                })
+            };
+            let (process_group, start_time_ticks) = identity(&before_stat)?;
             let smaps = std::fs::read_to_string(format!("/proc/{pid}/smaps_rollup"))?;
             let memory = parse_smaps(&smaps)?;
             let shared = smaps
@@ -251,8 +272,18 @@ pub fn process_tree_samples(root: u32) -> io::Result<Vec<ProcessSample>> {
             let fds = std::fs::read_dir(format!("/proc/{pid}/fd"))?
                 .collect::<io::Result<Vec<_>>>()?
                 .len() as u64;
+            if identity(&std::fs::read_to_string(format!("/proc/{pid}/stat"))?)?
+                != (process_group, start_time_ticks)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "process identity changed during sample",
+                ));
+            }
             Ok(ProcessSample {
                 pid,
+                process_group,
+                start_time_ticks,
                 rss: memory.resident.require_bytes()?,
                 pss: memory.proportional.require_bytes()?,
                 shared_pss: shared,

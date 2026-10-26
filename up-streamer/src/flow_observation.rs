@@ -70,6 +70,27 @@ pub(crate) fn emit(record: Record) {
     let _ = record;
 }
 
+/// Record actual payload movement separately from loan provenance and hashes.
+#[cfg(feature = "experimental-copy-minimized-routing")]
+pub(crate) fn copied(route: &str, metadata: &up_rust::UFrameMetadata, bytes: usize, slices: usize) {
+    #[cfg(feature = "flow-evidence")]
+    if let (Ok(run), Ok(actor)) = (
+        std::env::var("UPROTOCOL_FLOW_EVIDENCE_RUN"),
+        std::env::var("UPROTOCOL_FLOW_EVIDENCE_ACTOR"),
+    ) {
+        println!(
+            "FLOW_PAYLOAD_COPY {}",
+            serde_json::json!({
+                "schema":1, "run":run, "actor":actor, "route":route,
+                "id":metadata.id().to_hyphenated_string(), "copied_payload_bytes":bytes,
+                "payload_slice_copies":slices, "boundary":"ingress_to_egress_loan",
+            })
+        );
+    }
+    #[cfg(not(feature = "flow-evidence"))]
+    let _ = (route, metadata, bytes, slices);
+}
+
 #[cfg(feature = "flow-evidence")]
 fn checked(result: Result<Record, up_rust::UStatus>) -> Record {
     result.unwrap_or_else(|error| {

@@ -24,7 +24,7 @@ license.workspace = true
 
 [features]
 default = []
-flow-evidence = ["dep:streamer-flow-evidence"]
+flow-evidence = ["dep:streamer-flow-evidence", "dep:serde_json"]
 experimental-copy-minimized-routing = [
     "up-rust/up-l2-zero-copy",
 ]
