@@ -5,9 +5,12 @@ use std::mem::{self, MaybeUninit};
 use up_rust::{EncodePayload, StablePayloadInit, UCode, UStatus};
 use up_wire_xcdrv2::{XcdrV2Payload, XcdrV2Type};
 
+#[cfg(feature = "payload-contract-large-fixtures")]
+pub(crate) use super::sensor_context::NativeContext;
 pub(crate) use configurable_streamer_wire_support::native_profile::{
     SelectedWireNativePayload, PAYLOAD_CAPACITY as EXAMPLE_PAYLOAD_CAPACITY,
 };
+#[cfg(not(feature = "payload-contract-large-fixtures"))]
 pub(crate) type NativeContext =
     configurable_streamer_wire_support::native_profile::NativePayloadContext<
         SelectedWireNativePayload,

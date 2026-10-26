@@ -167,6 +167,7 @@ name = "mqtt_subscriber"
 required-features = ["mqtt-transport"]
 
 [features]
+payload-contract-large-fixtures = ["sustained-workload", "up-rust/payload-contract-large-fixtures", "configurable-streamer-wire-support/payload-contract-large-fixtures"]
 sustained-workload = ["flow-evidence", "selected-wire-common", "wire-formats", "up-rust/util", "dep:streamer-soak", "dep:serde_json", "dep:sha2"]
 flow-evidence = ["dep:streamer-flow-evidence"]
 selected-wire-common = ["up-rust/owned-frame-transport", "up-rust/selected-wire-user-api", "dep:configurable-streamer-wire-support"]

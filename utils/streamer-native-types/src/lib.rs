@@ -8,6 +8,9 @@
 /// Maximum application payload bytes in the two fixed native example layouts.
 pub const PAYLOAD_CAPACITY: usize = 256;
 
+#[cfg(feature = "payload-contract-large-fixtures")]
+pub mod large;
+
 /// Native representation used by the selected-wire role examples.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, up_rust::StablePayload, up_rust::StablePayloadInit)]

@@ -43,6 +43,16 @@ fn main() -> Result<(), ProfileToolError> {
             name: NativeFlowPayload::TYPE_NAME.into(),
             revision: NativeFlowPayload::REVISION,
         },
+        #[cfg(feature = "payload-contract-large-fixtures")]
+        TypeKey {
+            name: streamer_native_types::large::LidarPointCloudHesaiAt128V1::TYPE_NAME.into(),
+            revision: streamer_native_types::large::LidarPointCloudHesaiAt128V1::REVISION,
+        },
+        #[cfg(feature = "payload-contract-large-fixtures")]
+        TypeKey {
+            name: streamer_native_types::large::CameraBayerRggb12pFrame8mpV1::TYPE_NAME.into(),
+            revision: streamer_native_types::large::CameraBayerRggb12pFrame8mpV1::REVISION,
+        },
     ];
     let inventory = InventoryArtifact::from_linked(&required)?;
     if args

@@ -23,6 +23,7 @@ keywords.workspace = true
 license.workspace = true
 
 [features]
+payload-contract-large-fixtures = ["up-rust/payload-contract-large-fixtures", "streamer-native-types/payload-contract-large-fixtures"]
 default = []
 wire-formats = ["dep:up-wire-arrow", "dep:up-wire-omgidl", "dep:up-wire-xcdrv2"]
 zenoh-zero-copy = ["wire-formats", "dep:up-transport-zenoh", "up-transport-zenoh/zero-copy"]

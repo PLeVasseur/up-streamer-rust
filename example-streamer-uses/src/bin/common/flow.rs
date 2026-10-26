@@ -136,6 +136,13 @@ impl FlowConfig {
     }
 
     pub(crate) fn payload(&self, sequence: u32, workload: bool) -> Result<Vec<u8>, UStatus> {
+        #[cfg(feature = "payload-contract-large-fixtures")]
+        if let Some(fixture) = self.native.fixture() {
+            if !workload || self.wire_format != FlowWireFormat::Native {
+                return Err(invalid("sensor fixture requires a native workload"));
+            }
+            return fixture.bytes(sequence, self.native.agreement()?);
+        }
         match self.wire_format {
             FlowWireFormat::Native => {
                 native_payload_bytes(u32::from_le_bytes(*b"UPNF"), sequence, &self.payload)

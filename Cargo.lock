@@ -6176,6 +6176,8 @@ dependencies = [
  "protobuf-codegen",
  "protoc-bin-vendored",
  "rand 0.10.3",
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
  "thiserror 2.0.20",
  "tokio",

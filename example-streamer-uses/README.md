@@ -1,6 +1,10 @@
 
 # Running entities
 
+The optional `payload-contract-large-fixtures` feature enables full SDK sensor
+representations in explicitly configured native pub/sub worker plans. See
+[sustained workloads](docs/sustained-workloads.md) for type, size and workload limits.
+
 The six iceoryx2 role frontends accept optional publisher slice/allocation,
 subscriber-ceiling and TX-loan settings. See the
 [native capacity guide](../configurable-streamer/docs/native-capacity.md) for exact

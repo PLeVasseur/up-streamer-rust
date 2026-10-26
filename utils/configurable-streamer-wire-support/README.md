@@ -30,3 +30,9 @@ Omitted fields preserve defaults; invalid inputs return typed errors. See the
 [native capacity guide](../../configurable-streamer/docs/native-capacity.md) for
 configuration and ownership boundaries. Physical allocation and service checks
 remain binding-owned.
+# Sensor workload types
+
+With `payload-contract-large-fixtures`, `sensor::SensorFixture` selects the actual
+SDK LiDAR/camera representations and their checked initializer/semantic validator.
+It exposes compiled payload lengths; metadata/alignment overhead remains separate.
+See [sustained workloads](../../example-streamer-uses/docs/sustained-workloads.md).

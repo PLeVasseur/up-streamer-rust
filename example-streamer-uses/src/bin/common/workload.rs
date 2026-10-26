@@ -26,6 +26,10 @@ use up_rust::{UTxBuffer, UTxLoanSpec, UZeroCopyListener, UZeroCopyRxLease, UZero
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkerPlan {
+    /// Explicit sensor representation; available only in a large-fixture build.
+    #[cfg(feature = "payload-contract-large-fixtures")]
+    #[serde(default)]
+    pub native_fixture: Option<configurable_streamer_wire_support::sensor::SensorFixture>,
     pub replay: ReplayOptions,
     pub control_file: PathBuf,
     pub offered_per_second: u32,
@@ -55,9 +59,25 @@ impl WorkerPlan {
     pub fn load(path: &Path) -> Result<Self, UStatus> {
         let mut plan: Self = read_json(path)?;
         streamer_soak::Reconciler::new(&plan.replay).map_err(failure)?;
+        #[cfg(feature = "payload-contract-large-fixtures")]
+        let maximum = if let Some(fixture) = plan.native_fixture {
+            if plan.replay.role != Role::PublisherSubscriber
+                || plan.maximum_payload_bytes != fixture.payload_len()
+                || plan.offered_per_second != 2
+                || plan.consumer_delay_ms != 1000
+                || plan.replay.queue_capacity != 4
+            {
+                return Err(failure("sensor plan must select exact native pub/sub fixture and approved workload limits"));
+            }
+            fixture.payload_len()
+        } else {
+            65_536
+        };
+        #[cfg(not(feature = "payload-contract-large-fixtures"))]
+        let maximum = 65_536;
         if !(1..=1000).contains(&plan.offered_per_second)
             || !(1..=1000).contains(&plan.consumer_delay_ms)
-            || !(1..=65_536).contains(&plan.maximum_payload_bytes)
+            || !(1..=maximum).contains(&plan.maximum_payload_bytes)
             || !(1..=660).contains(&plan.deadline_seconds)
             || plan.replay.queue_capacity > 65_536
         {
@@ -92,12 +112,16 @@ impl Packet {
 }
 trait RetainedPayload: Send {
     fn bytes(&self) -> &[u8];
+    fn admit(&mut self);
 }
 struct Retained<R> {
     frame: R,
     _guard: LoanGuard,
 }
 impl<R: UZeroCopyRxLease + Send> RetainedPayload for Retained<R> {
+    fn admit(&mut self) {
+        self._guard.admit();
+    }
     fn bytes(&self) -> &[u8] {
         self.frame
             .try_contiguous_payload()
@@ -110,26 +134,43 @@ struct Loans {
     tx: AtomicU64,
     peak_rx: AtomicU64,
     peak_tx: AtomicU64,
+    transient_rx: AtomicU64,
+    peak_transient_rx: AtomicU64,
 }
 struct LoanGuard {
     loans: Arc<Loans>,
     tx: bool,
+    transient: bool,
 }
 impl LoanGuard {
     fn new(loans: Arc<Loans>, tx: bool) -> Self {
         let (live, peak) = if tx {
             (&loans.tx, &loans.peak_tx)
         } else {
-            (&loans.rx, &loans.peak_rx)
+            (&loans.transient_rx, &loans.peak_transient_rx)
         };
         peak.fetch_max(live.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
-        Self { loans, tx }
+        Self {
+            loans,
+            tx,
+            transient: !tx,
+        }
+    }
+    fn admit(&mut self) {
+        if self.transient {
+            self.loans.transient_rx.fetch_sub(1, Ordering::SeqCst);
+            let live = self.loans.rx.fetch_add(1, Ordering::SeqCst) + 1;
+            self.loans.peak_rx.fetch_max(live, Ordering::SeqCst);
+            self.transient = false;
+        }
     }
 }
 impl Drop for LoanGuard {
     fn drop(&mut self) {
         let live = if self.tx {
             &self.loans.tx
+        } else if self.transient {
+            &self.loans.transient_rx
         } else {
             &self.loans.rx
         };
@@ -222,6 +263,7 @@ impl Listener {
             "errors": self.errors.load(Ordering::SeqCst) + snapshot.closed_rejections + snapshot.abandoned,
             "live_application_rx_loans": self.loans.rx.load(Ordering::SeqCst), "max_application_rx_loans": self.loans.peak_rx.load(Ordering::SeqCst),
             "live_application_tx_loans": self.loans.tx.load(Ordering::SeqCst), "max_application_tx_loans": self.loans.peak_tx.load(Ordering::SeqCst),
+            "live_transient_rx_loans": self.loans.transient_rx.load(Ordering::SeqCst), "max_transient_rx_loans": self.loans.peak_transient_rx.load(Ordering::SeqCst),
             "live_application_values": snapshot.live_held, "max_application_values": snapshot.peak_held})
         );
         Ok(())
@@ -258,7 +300,11 @@ impl Listener {
 
     fn enqueue(&self, packet: Packet) -> Result<(), UStatus> {
         self.emit_bytes("receive", &packet.metadata, packet.bytes(), None)?;
-        match self.sender.try_send(packet) {
+        match self.sender.try_send_with_admission(packet, |packet| {
+            if let Payload::Loan(loan) = &mut packet.payload {
+                loan.admit();
+            }
+        }) {
             Ok(()) => Ok(()),
             Err(tokio::sync::mpsc::error::TrySendError::Full(item)) => {
                 let packet = item.value();
@@ -516,6 +562,12 @@ where
     F: FnMut(u32) -> Result<UMessage, UStatus>,
     G: FnOnce() -> Result<(), UStatus>,
 {
+    #[cfg(feature = "payload-contract-large-fixtures")]
+    if native.fixture() != plan.native_fixture {
+        return Err(failure(
+            "workload native context differs from explicit sensor plan",
+        ));
+    }
     let actor = if source { "source" } else { "sink" };
     if std::env::var("UPROTOCOL_FLOW_EVIDENCE_RUN").as_deref() != Ok(plan.replay.run.as_str())
         || std::env::var("UPROTOCOL_FLOW_EVIDENCE_ACTOR").as_deref() != Ok(actor)

@@ -27,3 +27,11 @@ The replay command needs retained journals and expected inputs, not live middlew
 Linux namespaces or `/proc`. See [workload evidence contracts](docs/workload.md) and
 the [replay input schema](schemas/replay-options.schema.json). Public handwritten
 APIs use the workspace's `missing_docs = "deny"` and strict documentation policy.
+# Admission and receive leases
+
+`inbox::Sender::try_send_with_admission` reserves queue capacity before invoking
+an ownership-accounting callback and publishing the value. Native workers use it
+to separate transient callback-held RX loans from admitted queued/processing RX
+loans. Full/closed rejections keep the original value for exact journaling, and
+never count as admitted. TX loans remain a third independent resource. See the
+[worker guide](../../example-streamer-uses/docs/sustained-workloads.md).

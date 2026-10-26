@@ -132,15 +132,41 @@ impl<T> Sender<T> {
         &self,
         value: T,
     ) -> std::result::Result<(), mpsc::error::TrySendError<Delivery<T>>> {
+        self.try_send_with_admission(value, |_| {})
+    }
+
+    /// Attempts admission, invoking `admitted` only after a queue slot is reserved
+    /// and before the value becomes visible to the consumer. This lets owners
+    /// distinguish transient receive storage from admitted queued/processing leases.
+    /// Rejections retain the original value and use the same explicit loss accounting.
+    pub fn try_send_with_admission(
+        &self,
+        mut value: T,
+        admitted: impl FnOnce(&mut T),
+    ) -> std::result::Result<(), mpsc::error::TrySendError<Delivery<T>>> {
         self.counters.received.fetch_add(1, Ordering::SeqCst);
         let live = self.counters.live.fetch_add(1, Ordering::SeqCst) + 1;
         self.counters.peak.fetch_max(live, Ordering::SeqCst);
+        let permit = self.inner.try_reserve();
+        if permit.is_ok() {
+            admitted(&mut value);
+        }
         let item = Delivery {
             value: Some(value),
             counters: self.counters.clone(),
             accounted: false,
         };
-        self.inner.try_send(item).map_err(|mut error| {
+        let result = match permit {
+            Ok(permit) => {
+                permit.send(item);
+                Ok(())
+            }
+            Err(mpsc::error::TrySendError::Full(())) => Err(mpsc::error::TrySendError::Full(item)),
+            Err(mpsc::error::TrySendError::Closed(())) => {
+                Err(mpsc::error::TrySendError::Closed(item))
+            }
+        };
+        result.map_err(|mut error| {
             match &mut error {
                 mpsc::error::TrySendError::Full(item) => {
                     item.accounted = true;
@@ -195,6 +221,31 @@ impl<T> Receiver<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn admission_transition_precedes_visibility_and_never_runs_for_rejection() {
+        let (sender, mut receiver) = bounded(1).unwrap();
+        sender
+            .try_send_with_admission(false, |admitted| {
+                assert_eq!(sender.snapshot().queued, 1); // Reservation owns the slot.
+                *admitted = true;
+            })
+            .unwrap();
+        let rejected = sender
+            .try_send_with_admission(false, |_| panic!("full queue cannot admit"))
+            .unwrap_err();
+        match rejected {
+            mpsc::error::TrySendError::Full(delivery) => assert!(!delivery.value()),
+            _ => panic!("expected full queue"),
+        }
+        let delivery = receiver.try_recv().unwrap();
+        assert!(*delivery.value());
+        delivery.complete().unwrap();
+        receiver.close();
+        assert!(sender
+            .try_send_with_admission(false, |_| panic!("closed queue cannot admit"))
+            .is_err());
+        assert_eq!(sender.snapshot().live_held, 0);
+    }
     #[derive(Debug)]
     struct Lease(Arc<AtomicU64>);
     impl Drop for Lease {

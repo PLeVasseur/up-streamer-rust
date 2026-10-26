@@ -55,3 +55,27 @@ Queue/value counts are application measurements; classic
 messages do not become native loans merely because their payload representation is
 native. OS memory/process supervision belongs to the shared orchestrator. Native
 backend setup and platform support remain documented by each transport binding.
+# Large native sensor fixtures
+
+Worker metrics report admitted RX loans, transient callback-held RX loans and TX
+loans independently. Admission transitions occur after reserving queue capacity
+and before exposing the lease to the consumer. Rejected full-queue samples remain
+transient until their drop record is emitted; they cannot inflate admitted counts.
+
+Build with `payload-contract-large-fixtures` to enable the existing SDK's full
+LiDAR (`lidar_hesai_at128`,4,915,328bytes) and camera
+(`camera_bayer_rggb12p8mp`,12,441,784bytes) representations. An explicit
+`native_fixture` in the worker plan selects a typed immutable context before
+deployment admission; omitted means the existing small workload. The generic
+`iceoryx2_publisher` entrypoint supports the configured native iceoryx2/Zenoh
+pub/sub roles and keeps backend construction visible.
+
+Sensor plans require native pub/sub, the exact fixture size,2offers/s,1000ms slow
+consumer delay and queue4. Their actual descriptors must be linked by the exporter
+and admitted in the deployment artifact. Disabled features, wrong representation,
+truncated or invalid fields fail closed. The source initializes all bytes through
+the SDK fixture implementation; hashes cover full transmitted bytes. Receive
+validation checks identity/field bits and fixture semantics before consumption,
+with retained leases rather than copied receive payloads. Publisher fixture
+preparation currently uses heap-owned initialization before copying into its TX
+loan; it is not claimed to be allocation-free source construction.

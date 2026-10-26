@@ -14,6 +14,9 @@ streamer-native-types = { path = "../streamer-native-types", version = "=0.1.0" 
 up-native-profile = { workspace = true }
 up-rust = { workspace = true, features = ["native-inventory"] }
 
+[features]
+payload-contract-large-fixtures = ["streamer-native-types/payload-contract-large-fixtures", "up-rust/payload-contract-large-fixtures"]
+
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

@@ -11,6 +11,9 @@ readme = "README.md"
 [dependencies]
 up-rust = { workspace = true, features = ["native-inventory"] }
 
+[features]
+payload-contract-large-fixtures = ["up-rust/payload-contract-large-fixtures"]
+
 [lints.rust]
 missing_docs = "deny"
 unsafe_code = "forbid"

@@ -19,6 +19,8 @@ pub(crate) mod proof;
 pub(crate) mod receive;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
 pub(crate) mod rpc;
+#[cfg(feature = "payload-contract-large-fixtures")]
+pub(crate) mod sensor_context;
 #[cfg(feature = "sustained-workload")]
 pub(crate) mod workload;
 

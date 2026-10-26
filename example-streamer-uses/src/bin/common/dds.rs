@@ -21,6 +21,9 @@ use up_transport_dds::UPTransportDds;
 mod payloads;
 #[path = "proof.rs"]
 mod proof;
+#[cfg(feature = "payload-contract-large-fixtures")]
+#[path = "sensor_context.rs"]
+mod sensor_context;
 #[cfg(feature = "sustained-workload")]
 #[path = "workload.rs"]
 mod workload;

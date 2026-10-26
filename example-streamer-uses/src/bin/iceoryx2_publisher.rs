@@ -171,7 +171,31 @@ async fn main() -> Result<(), UStatus> {
             "sustained generic roles require native API pub/sub or RPC",
         ));
     }
-    cli.native = NativeContext::from_env()?;
+    #[cfg(feature = "payload-contract-large-fixtures")]
+    let sensor_fixture = cli
+        .workload_plan
+        .as_ref()
+        .map(|path| common::workload::WorkerPlan::load(path))
+        .transpose()?
+        .and_then(|plan| plan.native_fixture);
+    #[cfg(feature = "payload-contract-large-fixtures")]
+    if sensor_fixture.is_some()
+        && (cli.wire_format != FlowWireFormat::Native
+            || !matches!(cli.role, FlowRole::PubSender | FlowRole::PubReceiver))
+    {
+        return Err(flow::invalid("sensor workload requires native pub/sub"));
+    }
+    #[cfg(feature = "payload-contract-large-fixtures")]
+    {
+        cli.native = match sensor_fixture {
+            Some(fixture) => NativeContext::from_env_for_fixture(fixture)?,
+            None => NativeContext::from_env()?,
+        };
+    }
+    #[cfg(not(feature = "payload-contract-large-fixtures"))]
+    {
+        cli.native = NativeContext::from_env()?;
+    }
     if cli.wire_format == FlowWireFormat::Native {
         cli.native.identity()?;
     }

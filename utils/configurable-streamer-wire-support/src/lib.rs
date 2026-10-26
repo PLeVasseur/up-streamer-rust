@@ -15,6 +15,8 @@
 pub mod capacity;
 pub mod native_profile;
 pub mod payload_bytes;
+#[cfg(feature = "payload-contract-large-fixtures")]
+pub mod sensor;
 
 use std::{fmt, str::FromStr};
 

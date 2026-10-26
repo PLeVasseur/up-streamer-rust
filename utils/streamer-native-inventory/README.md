@@ -20,3 +20,10 @@ The orchestrator also supplies `--agreement-output`, `--domain`, `--seeds` and
 actual exported inventory. Those explicit generation inputs and both output
 hashes are retained in the immutable run bundle. Export-only use needs none of
 the generation arguments.
+# Large-fixture export
+
+Build with `payload-contract-large-fixtures` to require both actual SDK sensor
+types in the linked inventory alongside the ordinary example types. This adds
+their target-qualified descriptors; a host export is never relabelled as another
+target. Worker configurations explicitly select the intended fixture and agreement.
+See the [worker guide](../../example-streamer-uses/docs/sustained-workloads.md).
