@@ -23,8 +23,8 @@ ordinary roles retain the binding's publish-without-waiting default.
 For the generic iceoryx2 role, `--iceoryx2-receive-capacity` delegates buffer/borrow
 limits using its existing configured namespace, and `--iceoryx2-min-subscribers`
 independently requests actual peer discovery before publishing. The sustained
-fixture supplies capacity32 and one peer to accommodate a bounded response-drain
-burst. The application inbox remains4; none of these settings lengthens quiescence.
+fixture supplies capacity 32 and one peer to accommodate a bounded response-drain
+burst. The application inbox remains 4; none of these settings lengthens quiescence.
 Ordinary finite-message behavior remains the default. The high-level concurrent
 workload entry point is still being integrated into the matrix orchestrator.
 
@@ -32,7 +32,7 @@ The controller supplies `replay` identity/bounds, a plan-bound `control_file`,
 `offered_per_second`, `consumer_delay_ms`, `maximum_payload_bytes` and
 `deadline_seconds`. The control locator may be relative to the worker plan.
 `UPROTOCOL_FLOW_EVIDENCE_RUN` and the source/sink actor must match that plan.
-Input files are bounded to64KiB and unknown fields fail.
+Input files are bounded to 64 KiB and unknown fields fail.
 
 Waiting/warm-up/normal/slow/drain/stop commands use the shared phase tracker. New
 messages are offered only in traffic phases. The slow consumer retains its original
@@ -63,19 +63,19 @@ so backend readiness, transport rejection and native storage diagnostics appear
 alongside the worker's structured accounting. Logging does not constitute readiness
 or alter message admission/count criteria.
 
-Finite conservation worker plans set `finite_messages: 5`, offer at20/s (50ms)
+Finite conservation worker plans set `finite_messages: 5`, offer at 20/s (50 ms)
 only during the normal window and use zero processing delay. Every offer constructs
 a fresh message identity; source generation stops at five. Receivers remain admitted
-until the controller's complete window and1000ms drain end, including all RPC
+until the controller's complete window and 1000 ms drain end, including all RPC
 responses. This is distinct from first-delivery roles that repeat a prepared message
 or exit after the first receipt. Wrong finite count/rate/delay combinations reject.
-The finite source waits50ms after each completed send rather than catching up an
+The finite source waits 50 ms after each completed send rather than catching up an
 interval delayed by discovery. Its generated Zenoh deployment explicitly selects
 reliable publications with blocking congestion control through Zenoh configuration.
 The sustained workload controller uses the same explicit publication policy and
 binds all generated Zenoh configuration bytes into its deployment evidence.
 The finite deadline remains bounded and a blocked or lost message fails the run.
-The finite inbox has capacity5 so a complete five-message backend burst can be
+The finite inbox has capacity 5 so a complete five-message backend burst can be
 admitted even before the application consumer is scheduled. Sustained workers use
 their separately declared queue limits; no finite application drop is permitted.
 
@@ -87,15 +87,15 @@ transient until their drop record is emitted; they cannot inflate admitted count
 ## Large native sensor fixtures
 
 Build with `payload-contract-large-fixtures` to enable the existing SDK's full
-LiDAR (`lidar_hesai_at128`,4,915,328bytes) and camera
-(`camera_bayer_rggb12p8mp`,12,441,784bytes) representations. An explicit
+LiDAR (`lidar_hesai_at128`, 4,915,328 bytes) and camera
+(`camera_bayer_rggb12p8mp`, 12,441,784 bytes) representations. An explicit
 `native_fixture` in the worker plan selects a typed immutable context before
 deployment admission; omitted means the existing small workload. The generic
 `iceoryx2_publisher` entrypoint supports the configured native iceoryx2/Zenoh
 pub/sub roles and keeps backend construction visible.
 
-Sensor plans require native pub/sub, the exact fixture size,2offers/s,1000ms slow
-consumer delay and queue4. Their actual descriptors must be linked by the exporter
+Sensor plans require native pub/sub, the exact fixture size, 2 offers/s, 1000 ms slow
+consumer delay and queue 4. Their actual descriptors must be linked by the exporter
 and admitted in the deployment artifact. Disabled features, wrong representation,
 truncated or invalid fields fail closed. The source initializes all bytes through
 the SDK fixture implementation; hashes cover full transmitted bytes. Receive

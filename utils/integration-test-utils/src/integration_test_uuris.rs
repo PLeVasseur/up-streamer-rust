@@ -28,12 +28,12 @@ pub fn remote_authority_b() -> String {
     "remote_authority_b".to_string()
 }
 
-/// Builds a local fixture URI with the given entity ID, major version1 and resource2.
+/// Builds a local fixture URI with the given entity ID, major version 1 and resource 2.
 pub fn local_client_uuri(id: u32) -> UUri {
     UUri::try_from_parts(&local_authority(), id, 1, 2).expect("local client URI should build")
 }
 
-/// Builds a remote fixture URI with the supplied authority/entity, major version1 and resource2.
+/// Builds a remote fixture URI with the supplied authority/entity, major version 1 and resource 2.
 pub fn remote_client_uuri(authority: String, id: u32) -> UUri {
     UUri::try_from_parts(&authority, id, 1, 2).expect("remote client URI should build")
 }

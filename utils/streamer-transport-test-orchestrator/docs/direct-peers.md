@@ -1,9 +1,9 @@
 # Direct peer connectivity
 
 `--direct-pairs --artifacts-root <directory>` executes same-profile peers without
-starting a configurable Streamer. Its180 candidates (twelve profiles, three roles,
+starting a configurable Streamer. Its 180 candidates (twelve profiles, three roles,
 five encodings) use separate `direct-*` identities and a `direct-summary.json`.
-The ordinary2160-row bridged universe and its identical-profile exclusions remain
+The ordinary 2160-row bridged universe and its identical-profile exclusions remain
 unchanged. `--only <direct-id>` restricts the direct cohort.
 
 Direct execution reuses native bundle/exporter generation, role entrypoints,

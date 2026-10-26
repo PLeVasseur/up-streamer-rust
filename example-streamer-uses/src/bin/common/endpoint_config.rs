@@ -3,8 +3,153 @@
 //! Reusable validation of physical configuration; role files construct the bindings.
 #![allow(dead_code)]
 
+#[cfg(any(
+    feature = "iceoryx2-zero-copy",
+    feature = "iceoryx2-owned-frame",
+    feature = "lola-transport",
+    feature = "lola-owned-frame"
+))]
 use super::flow::invalid;
 use up_rust::UStatus;
+
+#[cfg(feature = "iceoryx2-zero-copy")]
+pub(crate) fn prepared_iceoryx2(
+    physical: up_transport_iceoryx2_rust::Iceoryx2PubSubConfig,
+    config: &super::flow::FlowConfig,
+    capacities: &configurable_streamer_wire_support::capacity::Iceoryx2Capacity,
+) -> Result<std::sync::Arc<up_transport_iceoryx2_rust::Iceoryx2PreparedCore>, UStatus> {
+    let catalog = prepared_catalog(config)?;
+    configurable_streamer_wire_support::prepared::iceoryx2_core(
+        physical, &catalog, 32, 4, capacities,
+    )
+}
+
+#[cfg(feature = "zenoh-transport")]
+pub(crate) async fn prepared_zenoh(
+    physical: up_transport_zenoh::zenoh_config::Config,
+    config: &super::flow::FlowConfig,
+    segment_size: Option<usize>,
+) -> Result<std::sync::Arc<up_transport_zenoh::ZenohPreparedCore>, UStatus> {
+    configurable_streamer_wire_support::prepared::zenoh_core(
+        physical,
+        &config.local_endpoint()?.to_uri(false),
+        &prepared_catalog(config)?,
+        up_transport_zenoh::ZenohPreparedConfig {
+            shm_segment_size: segment_size.unwrap_or(64 * 1024 * 1024),
+            route_capacity: 32,
+            registration_capacity: 4,
+            allocation_observer: None,
+        },
+    )
+    .await
+}
+
+#[cfg(feature = "lola-transport")]
+pub(crate) fn prepared_lola(
+    primary: &up_transport_lola_rust::LolaTransportConfig,
+    response: Option<&up_transport_lola_rust::LolaTransportConfig>,
+    config: &super::flow::FlowConfig,
+) -> Result<std::sync::Arc<up_transport_lola_rust::LolaPreparedCore>, UStatus> {
+    configurable_streamer_wire_support::prepared::lola_core(
+        primary,
+        response,
+        &prepared_catalog(config)?,
+        32,
+        4,
+        primary.max_samples,
+    )
+}
+
+/// Exact role addresses and maximum logical extents chosen before native setup.
+pub(crate) fn prepared_address(
+    source: &up_rust::UUri,
+    sink: Option<&up_rust::UUri>,
+    maximum: usize,
+    alignment: usize,
+    transmit: bool,
+) -> configurable_streamer_wire_support::prepared::PreparedAddress {
+    configurable_streamer_wire_support::prepared::PreparedAddress {
+        source: source.to_uri(false),
+        sink: sink.map(|sink| sink.to_uri(false)),
+        max_metadata_len: 3072,
+        max_payload_len: maximum,
+        payload_alignment: alignment,
+        max_token_len: 2048,
+        allow_traceparent: true,
+        transmit,
+    }
+}
+
+/// Exact role addresses and maximum logical extents chosen before native setup.
+pub(crate) fn prepared_catalog(
+    config: &super::flow::FlowConfig,
+) -> Result<Vec<configurable_streamer_wire_support::prepared::PreparedAddress>, UStatus> {
+    use super::flow::FlowRole;
+    #[cfg(feature = "sustained-workload")]
+    let maximum = match &config.workload_plan {
+        Some(path) => super::workload::WorkerPlan::load(path)?.maximum_payload_bytes,
+        None => config.payload(1, false)?.len(),
+    };
+    #[cfg(not(feature = "sustained-workload"))]
+    let maximum = config.payload(1, false)?.len();
+    let entry = |source: up_rust::UUri, sink: Option<up_rust::UUri>, transmit| {
+        prepared_address(
+            &source,
+            sink.as_ref(),
+            maximum,
+            config.alignment(),
+            transmit,
+        )
+    };
+    let local = &config.local_authority;
+    let peer = &config.peer_authority;
+    Ok(match config.role {
+        FlowRole::PubSender => vec![entry(
+            config.uri(local, config.topic_resource_id)?,
+            None,
+            true,
+        )],
+        FlowRole::PubReceiver => vec![entry(
+            config.uri(peer, config.topic_resource_id)?,
+            None,
+            false,
+        )],
+        FlowRole::NotifySender => vec![entry(
+            config.uri(local, config.topic_resource_id)?,
+            Some(config.uri(peer, 0)?),
+            true,
+        )],
+        FlowRole::NotifyReceiver => vec![entry(
+            config.uri(peer, config.topic_resource_id)?,
+            Some(config.uri(local, 0)?),
+            false,
+        )],
+        FlowRole::RpcClient => vec![
+            entry(
+                config.uri(local, 0)?,
+                Some(config.uri(peer, config.method_resource_id)?),
+                true,
+            ),
+            entry(
+                config.uri(peer, config.method_resource_id)?,
+                Some(config.uri(local, 0)?),
+                false,
+            ),
+        ],
+        FlowRole::RpcServer => vec![
+            entry(
+                config.uri(peer, 0)?,
+                Some(config.uri(local, config.method_resource_id)?),
+                false,
+            ),
+            entry(
+                config.uri(local, config.method_resource_id)?,
+                Some(config.uri(peer, 0)?),
+                true,
+            ),
+        ],
+    })
+}
 
 #[cfg(any(feature = "lola-transport", feature = "lola-owned-frame"))]
 pub(crate) struct LolaOptions {

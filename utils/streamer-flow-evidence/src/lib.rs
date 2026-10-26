@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Opt-in observational evidence for integration tests. Never part of a wire format.
 
@@ -12,7 +13,7 @@ pub const MARKER: &str = "FLOW_MESSAGE_EVIDENCE ";
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Observation {
-    /// Observation schema version; capture currently emits version1.
+    /// Observation schema version; capture currently emits version 1.
     pub schema: u8,
     /// Explicit run identity from `UPROTOCOL_FLOW_EVIDENCE_RUN`.
     pub run: String,

@@ -15,6 +15,7 @@
 pub mod capacity;
 pub mod native_profile;
 pub mod payload_bytes;
+pub mod prepared;
 #[cfg(feature = "payload-contract-large-fixtures")]
 pub mod sensor;
 
@@ -33,18 +34,6 @@ use std::{fmt, str::FromStr};
 ))]
 use std::sync::Arc;
 #[cfg(any(
-    feature = "zenoh-zero-copy",
-    feature = "iceoryx2-zero-copy",
-    feature = "lola-transport",
-    feature = "dds-encoded-owned",
-    feature = "zenoh-owned-frame",
-    feature = "iceoryx2-owned-frame",
-    feature = "lola-owned-frame"
-))]
-use up_rust::selected_wire_user_api::{
-    ProtobufWire, ProtobufWireTransport, UNativePrefixWireTransport, UWithNativePrefixWire as _,
-};
-#[cfg(any(
     feature = "owned-frame-transport",
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",
@@ -58,6 +47,18 @@ use up_rust::NativeProfileAgreement;
     feature = "lola-transport"
 ))]
 use up_rust::StableContainerWireTransport;
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "iceoryx2-zero-copy",
+    feature = "lola-transport",
+    feature = "dds-encoded-owned",
+    feature = "zenoh-owned-frame",
+    feature = "iceoryx2-owned-frame",
+    feature = "lola-owned-frame"
+))]
+use up_rust::{
+    ProtobufWire, ProtobufWireTransport, UNativePrefixWireTransport, UWithNativePrefixWire as _,
+};
 use up_rust::{UCode, UStatus};
 #[cfg(any(
     feature = "zenoh-zero-copy",
@@ -76,15 +77,15 @@ use up_transport_dds::owned::UPTransportDdsOwned;
 #[cfg(feature = "iceoryx2-owned-frame")]
 use up_transport_iceoryx2_rust::BenchmarkOwnedIceoryx2Core;
 #[cfg(feature = "iceoryx2-zero-copy")]
-use up_transport_iceoryx2_rust::Iceoryx2PubSub;
+use up_transport_iceoryx2_rust::Iceoryx2PreparedCore;
 #[cfg(feature = "lola-owned-frame")]
 use up_transport_lola_rust::LolaOwnedCore;
 #[cfg(feature = "lola-transport")]
-use up_transport_lola_rust::LolaZeroCopyCore;
+use up_transport_lola_rust::LolaPreparedCore;
 #[cfg(feature = "zenoh-owned-frame")]
 use up_transport_zenoh::ZenohOwnedCore;
 #[cfg(feature = "zenoh-zero-copy")]
-use up_transport_zenoh::ZenohZeroCopyCore;
+use up_transport_zenoh::ZenohPreparedCore;
 #[cfg(any(
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",
@@ -179,19 +180,19 @@ impl fmt::Display for RouteWireFormat {
 ))]
 macro_rules! selected_transport_type {
     (native, $core:ty) => {
-        StableContainerWireTransport<$core>
+        StableContainerWireTransport<Arc<$core>>
     };
     (protobuf, $core:ty) => {
-        ProtobufWireTransport<$core>
+        ProtobufWireTransport<Arc<$core>>
     };
     (xcdrv2, $core:ty) => {
-        UNativePrefixWireTransport<$core, XcdrV2Wire>
+        UNativePrefixWireTransport<Arc<$core>, XcdrV2Wire>
     };
     (arrow, $core:ty) => {
-        UNativePrefixWireTransport<$core, ArrowWire>
+        UNativePrefixWireTransport<Arc<$core>, ArrowWire>
     };
     (omgidl, $core:ty) => {
-        UNativePrefixWireTransport<$core, OmgIdlWire>
+        UNativePrefixWireTransport<Arc<$core>, OmgIdlWire>
     };
 }
 
@@ -202,16 +203,37 @@ macro_rules! define_route_wire_family {
         pub enum $name {
             /// A Zenoh shared-memory endpoint using this family's wire adapter.
             #[cfg(feature = "zenoh-zero-copy")]
-            Zenoh(ZeroCopyFrameEndpoint<selected_transport_type!($wire, ZenohZeroCopyCore)>),
+            Zenoh(ZeroCopyFrameEndpoint<selected_transport_type!($wire, ZenohPreparedCore)>),
             /// An iceoryx2 native-loan endpoint using this family's wire adapter.
             #[cfg(feature = "iceoryx2-zero-copy")]
-            Iceoryx2(ZeroCopyFrameEndpoint<selected_transport_type!($wire, Iceoryx2PubSub)>),
+            Iceoryx2(ZeroCopyFrameEndpoint<selected_transport_type!($wire, Iceoryx2PreparedCore)>),
             /// A LoLa native-loan endpoint using this family's wire adapter.
             #[cfg(feature = "lola-transport")]
-            Lola(ZeroCopyFrameEndpoint<selected_transport_type!($wire, LolaZeroCopyCore)>),
+            Lola(ZeroCopyFrameEndpoint<selected_transport_type!($wire, LolaPreparedCore)>),
         }
 
         impl $name {
+            async fn wait_ready(&self, catalog: &[prepared::PreparedAddress], zenoh_matching: bool) -> Result<(), UStatus> {
+                let _ = (catalog, zenoh_matching);
+                match self {
+                    #[cfg(feature = "zenoh-zero-copy")]
+                    Self::Zenoh(endpoint) => {
+                        if zenoh_matching {
+                            for address in catalog.iter().filter(|address| address.transmit) {
+                                let route = address.reservation()?;
+                                endpoint.transport().core().wait_for_matching(&route.source, route.sink.as_ref(), std::time::Duration::from_secs(5)).await?;
+                            }
+                        }
+                        Ok(())
+                    }
+                    #[cfg(feature = "iceoryx2-zero-copy")]
+                    Self::Iceoryx2(endpoint) => endpoint.transport().core().wait_ready().await,
+                    #[cfg(feature = "lola-transport")]
+                    Self::Lola(_) => Ok(()),
+                    #[allow(unreachable_patterns)]
+                    _ => Ok(()),
+                }
+            }
             async fn add_route(
                 &self,
                 streamer: &mut UStreamer,
@@ -353,6 +375,26 @@ pub enum RouteWireEndpoint {
 }
 
 impl RouteWireEndpoint {
+    /// Completes binding-owned setup readiness after receiver routes are attached.
+    ///
+    /// This does not send samples or warm RPC client admission. Zenoh's optional
+    /// matching wait observes presence; iceoryx2 checks its configured native count.
+    ///
+    /// # Errors
+    /// Reports native connection/matching failures or the binding's bounded timeout.
+    pub async fn wait_ready(
+        &self,
+        catalog: &[prepared::PreparedAddress],
+        zenoh_matching: bool,
+    ) -> Result<(), UStatus> {
+        match self {
+            Self::Native(endpoint) => endpoint.wait_ready(catalog, zenoh_matching).await,
+            Self::Protobuf(endpoint) => endpoint.wait_ready(catalog, zenoh_matching).await,
+            Self::XcdrV2(endpoint) => endpoint.wait_ready(catalog, zenoh_matching).await,
+            Self::Arrow(endpoint) => endpoint.wait_ready(catalog, zenoh_matching).await,
+            Self::OmgIdl(endpoint) => endpoint.wait_ready(catalog, zenoh_matching).await,
+        }
+    }
     /// Returns the explicitly selected wire retained by this endpoint.
     pub const fn route_wire_format(&self) -> RouteWireFormat {
         match self {
@@ -392,49 +434,62 @@ impl RouteOwnedEndpoint {
     feature = "lola-transport"
 ))]
 macro_rules! make_route_endpoint {
-    ($transport:ident, $name:expr, $authority:expr, $core:expr, $format:expr, $profile:expr) => {
+    ($transport:ident, $name:expr, $authority:expr, $core:expr, $format:expr, $profile:expr, $catalog:expr) => {
         Ok(match $format {
             RouteWireFormat::Native => {
                 let profile = $profile.ok_or_else(|| {
                     invalid_config("native endpoint requires an explicit loaded profile agreement")
                 })?;
-                RouteWireEndpoint::Native(NativeRouteEndpoint::$transport(
+                RouteWireEndpoint::Native(NativeRouteEndpoint::$transport(prepared::configure(
                     ZeroCopyFrameEndpoint::new(
                         $name,
                         $authority,
                         Arc::new($core.into_stable_container_transport(profile.clone())),
                     )
                     .with_native_profile(Arc::new(profile.profile().clone())),
-                ))
+                    $catalog,
+                )?))
             }
-            RouteWireFormat::Protobuf => RouteWireEndpoint::Protobuf(
-                ProtobufRouteEndpoint::$transport(ZeroCopyFrameEndpoint::new(
-                    $name,
-                    $authority,
-                    Arc::new($core.into_native_prefix_wire_transport(ProtobufWire)),
-                )),
-            ),
-            RouteWireFormat::XcdrV2 => RouteWireEndpoint::XcdrV2(XcdrV2RouteEndpoint::$transport(
-                ZeroCopyFrameEndpoint::new(
-                    $name,
-                    $authority,
-                    Arc::new($core.into_native_prefix_wire_transport(XcdrV2Wire)),
-                ),
-            )),
-            RouteWireFormat::Arrow => RouteWireEndpoint::Arrow(ArrowRouteEndpoint::$transport(
-                ZeroCopyFrameEndpoint::new(
-                    $name,
-                    $authority,
-                    Arc::new($core.into_native_prefix_wire_transport(ArrowWire)),
-                ),
-            )),
-            RouteWireFormat::OmgIdl => RouteWireEndpoint::OmgIdl(OmgIdlRouteEndpoint::$transport(
-                ZeroCopyFrameEndpoint::new(
-                    $name,
-                    $authority,
-                    Arc::new($core.into_native_prefix_wire_transport(OmgIdlWire)),
-                ),
-            )),
+            RouteWireFormat::Protobuf => {
+                RouteWireEndpoint::Protobuf(ProtobufRouteEndpoint::$transport(prepared::configure(
+                    ZeroCopyFrameEndpoint::new(
+                        $name,
+                        $authority,
+                        Arc::new($core.into_native_prefix_wire_transport(ProtobufWire)),
+                    ),
+                    $catalog,
+                )?))
+            }
+            RouteWireFormat::XcdrV2 => {
+                RouteWireEndpoint::XcdrV2(XcdrV2RouteEndpoint::$transport(prepared::configure(
+                    ZeroCopyFrameEndpoint::new(
+                        $name,
+                        $authority,
+                        Arc::new($core.into_native_prefix_wire_transport(XcdrV2Wire)),
+                    ),
+                    $catalog,
+                )?))
+            }
+            RouteWireFormat::Arrow => {
+                RouteWireEndpoint::Arrow(ArrowRouteEndpoint::$transport(prepared::configure(
+                    ZeroCopyFrameEndpoint::new(
+                        $name,
+                        $authority,
+                        Arc::new($core.into_native_prefix_wire_transport(ArrowWire)),
+                    ),
+                    $catalog,
+                )?))
+            }
+            RouteWireFormat::OmgIdl => {
+                RouteWireEndpoint::OmgIdl(OmgIdlRouteEndpoint::$transport(prepared::configure(
+                    ZeroCopyFrameEndpoint::new(
+                        $name,
+                        $authority,
+                        Arc::new($core.into_native_prefix_wire_transport(OmgIdlWire)),
+                    ),
+                    $catalog,
+                )?))
+            }
         })
     };
 }
@@ -444,11 +499,12 @@ macro_rules! make_route_endpoint {
 pub fn zenoh_endpoint(
     name: &str,
     authority: &str,
-    core: ZenohZeroCopyCore,
+    core: Arc<ZenohPreparedCore>,
     format: RouteWireFormat,
     profile: Option<&NativeProfileAgreement>,
+    catalog: &[prepared::PreparedAddress],
 ) -> Result<RouteWireEndpoint, UStatus> {
-    make_route_endpoint!(Zenoh, name, authority, core, format, profile)
+    make_route_endpoint!(Zenoh, name, authority, core, format, profile, catalog)
 }
 
 #[cfg(feature = "iceoryx2-zero-copy")]
@@ -456,11 +512,12 @@ pub fn zenoh_endpoint(
 pub fn iceoryx2_endpoint(
     name: &str,
     authority: &str,
-    core: Iceoryx2PubSub,
+    core: Arc<Iceoryx2PreparedCore>,
     format: RouteWireFormat,
     profile: Option<&NativeProfileAgreement>,
+    catalog: &[prepared::PreparedAddress],
 ) -> Result<RouteWireEndpoint, UStatus> {
-    make_route_endpoint!(Iceoryx2, name, authority, core, format, profile)
+    make_route_endpoint!(Iceoryx2, name, authority, core, format, profile, catalog)
 }
 
 #[cfg(feature = "lola-transport")]
@@ -468,11 +525,12 @@ pub fn iceoryx2_endpoint(
 pub fn lola_endpoint(
     name: &str,
     authority: &str,
-    core: LolaZeroCopyCore,
+    core: Arc<LolaPreparedCore>,
     format: RouteWireFormat,
     profile: Option<&NativeProfileAgreement>,
+    catalog: &[prepared::PreparedAddress],
 ) -> Result<RouteWireEndpoint, UStatus> {
-    make_route_endpoint!(Lola, name, authority, core, format, profile)
+    make_route_endpoint!(Lola, name, authority, core, format, profile, catalog)
 }
 
 #[cfg(any(

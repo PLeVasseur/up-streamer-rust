@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Sustained application behavior over an already configured SDK endpoint.
 //!
@@ -7,6 +8,9 @@
 #![allow(dead_code)]
 use super::payloads::NativeContext;
 use async_trait::async_trait;
+use configurable_streamer_wire_support::prepared::{
+    NativeSetupReady, PreparedEndpoint, PreparedSession,
+};
 use serde::Deserialize;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -17,11 +21,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use streamer_soak::control::{Phase, PhaseCommand, PhaseTracker};
 use streamer_soak::{inbox, ReplayOptions, Role};
+use up_rust::{PreparedTransportCore, UZeroCopyRxLease};
 use up_rust::{
-    ProtobufMappable, UCode, UFrameMetadata, UListener, UMessage, UMessageBuilder, UStatus,
-    UTransport, UUri,
+    ProtobufMappable, UCode, UFrameMetadata, UFrameView, UListener, UMessage, UMessageBuilder,
+    UStatus, UTransport, UUri,
 };
-use up_rust::{UTxBuffer, UTxLoanSpec, UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport};
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -242,7 +246,7 @@ impl Listener {
         }
         let attributes = if metadata.native_type_token().is_some() {
             metadata
-                .try_project_to_attributes_with_native_profile(self.native.agreement()?)
+                .try_project_to_attributes_with_native_agreement(self.native.agreement()?)
                 .map_err(failure)?
         } else {
             metadata.try_project_to_attributes().map_err(failure)?
@@ -338,38 +342,57 @@ impl Listener {
     }
 }
 
-struct NativeListener<R> {
+struct NativeListener<T: PreparedEndpoint> {
     listener: Arc<Listener>,
-    marker: std::marker::PhantomData<fn(R)>,
+    session: Arc<PreparedSession<T>>,
+    source: UUri,
+    sink: Option<UUri>,
 }
-#[async_trait]
-impl<R: UZeroCopyRxLease + Send + 'static> UZeroCopyListener<R> for NativeListener<R> {
-    async fn on_receive_zero_copy(&self, frame: R) {
-        self.listener
-            .admission
-            .dispatch(|| async {
-                let guard = LoanGuard::new(self.listener.loans.clone(), false);
-                let result = (|| {
-                    if frame.try_contiguous_payload().is_none() {
-                        return Err(failure("noncontiguous native receive"));
-                    }
-                    if self.listener.native.configured_agreement().is_some() {
-                        self.listener.native.verify_view(&frame)?;
-                    } else if frame.metadata().native_type_token().is_some() {
-                        return Err(failure("unexpected native identity"));
-                    }
-                    let metadata = frame.metadata().clone();
-                    self.listener.enqueue(Packet {
-                        metadata,
-                        payload: Payload::Loan(Box::new(Retained {
-                            frame,
-                            _guard: guard,
-                        })),
-                    })
-                })();
-                self.listener.report_error(result);
+impl<T: PreparedEndpoint> up_rust::FrameSink<<T::Core as PreparedTransportCore>::Rx>
+    for NativeListener<T>
+{
+    fn push(&self, raw: <T::Core as PreparedTransportCore>::Rx) {
+        let Some(_callback) = self.listener.admission.enter_native_callback() else {
+            return;
+        };
+        let guard = LoanGuard::new(self.listener.loans.clone(), false);
+        let admitted = match self.session.admit(raw) {
+            Ok(frame) => frame,
+            Err(_) => return,
+        };
+        let result = (|| {
+            let header = admitted.header().map_err(failure)?;
+            if !self.source.matches(&header.source)
+                || !match (self.sink.as_ref(), header.sink.as_ref()) {
+                    (None, None) => true,
+                    (Some(filter), Some(actual)) => filter.matches(actual),
+                    _ => false,
+                }
+            {
+                return Ok(());
+            }
+            let frame = self.session.decode_compatibility_frame(admitted)?;
+            if frame.try_contiguous_payload().is_none() {
+                return Err(failure("noncontiguous native receive"));
+            }
+            if self.listener.native.configured_agreement().is_some() {
+                self.listener.native.verify_view(&frame)?;
+            } else if frame.metadata().native_type_token().is_some() {
+                return Err(failure("unexpected native identity"));
+            }
+            let metadata = frame.metadata().clone();
+            self.listener.enqueue(Packet {
+                metadata,
+                payload: Payload::Loan(Box::new(Retained {
+                    frame,
+                    _guard: guard,
+                })),
             })
-            .await;
+        })();
+        self.listener.report_error(result);
+    }
+    fn close(&self) {
+        self.listener.admission.cancel();
     }
 }
 
@@ -379,6 +402,9 @@ trait Registration: Send {
 }
 #[async_trait]
 trait Endpoint: Send + Sync {
+    async fn ready(&self) -> Result<(), UStatus> {
+        Ok(())
+    }
     async fn send(&self, message: UMessage) -> Result<(), UStatus>;
     async fn register(
         &self,
@@ -425,40 +451,63 @@ impl Endpoint for ClassicEndpoint {
         }))
     }
 }
-struct NativeEndpoint<T> {
-    transport: Arc<T>,
+struct NativeEndpoint<T: PreparedEndpoint> {
+    transport: Arc<PreparedSession<T>>,
     native: NativeContext,
     loans: Arc<Loans>,
+    wait_matching: bool,
 }
-struct NativeRegistration<T: UZeroCopyTransport> {
-    transport: Arc<T>,
-    source: UUri,
-    sink: Option<UUri>,
-    listener: Arc<dyn UZeroCopyListener<T::Rx>>,
+struct NativeRegistration<T: PreparedEndpoint> {
+    transport: Arc<PreparedSession<T>>,
+    subscription: Mutex<Option<<T::Core as PreparedTransportCore>::Subscription>>,
+    listener: Arc<Listener>,
+}
+impl<T: PreparedEndpoint> Drop for NativeRegistration<T> {
+    fn drop(&mut self) {
+        self.listener.admission.cancel();
+        if let Some(handle) = self
+            .subscription
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_mut()
+        {
+            let _ = self.transport.core().detach(handle);
+        }
+    }
 }
 #[async_trait]
 impl<T> Registration for NativeRegistration<T>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease + Send + 'static,
+    T: PreparedEndpoint,
 {
     async fn close(&self) -> Result<(), UStatus> {
-        self.transport
-            .unregister_validated_zero_copy_listener(
-                &self.source,
-                self.sink.as_ref(),
-                self.listener.clone(),
-            )
-            .await
+        self.listener.admission.cancel();
+        {
+            let mut subscription = self.subscription.lock().map_err(failure)?;
+            if let Some(handle) = subscription.as_mut() {
+                self.transport.core().detach(handle).map_err(failure)?;
+            }
+            subscription.take();
+        }
+        if !self.listener.admission.is_current_callback() {
+            self.listener
+                .admission
+                .quiesce(tokio::time::Instant::now() + Duration::from_secs(5))
+                .await
+                .map_err(failure)?;
+        }
+        Ok(())
     }
 }
 #[async_trait]
 impl<T> Endpoint for NativeEndpoint<T>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease + Send + 'static,
-    T::Tx: UTxBuffer,
+    T: PreparedEndpoint,
+    T::Core: NativeSetupReady,
 {
+    async fn ready(&self) -> Result<(), UStatus> {
+        self.transport.wait_ready(self.wait_matching).await
+    }
     async fn send(&self, message: UMessage) -> Result<(), UStatus> {
         let metadata = if self.native.configured_agreement().is_some() {
             self.native.project_classic(&message)?
@@ -469,13 +518,11 @@ where
         let bytes = message
             .payload()
             .ok_or_else(|| failure("payload missing"))?;
-        let mut loan = self
-            .transport
-            .loan_validated_tx(UTxLoanSpec::payload(metadata, bytes.len(), 8).map_err(failure)?)
-            .await?;
         let guard = LoanGuard::new(self.loans.clone(), true);
-        loan.payload_mut().copy_from_slice(&bytes);
-        let result = self.transport.send_validated_zero_copy(loan).await;
+        let result = self
+            .transport
+            .send(up_rust::TxHeaderParts::from(&metadata), Some(&bytes))
+            .map_err(failure);
         drop(guard);
         result
     }
@@ -485,17 +532,21 @@ where
         source: UUri,
         sink: Option<UUri>,
     ) -> Result<Box<dyn Registration>, UStatus> {
-        let listener: Arc<dyn UZeroCopyListener<T::Rx>> = Arc::new(NativeListener {
-            listener,
-            marker: std::marker::PhantomData,
+        let native = Arc::new(NativeListener {
+            listener: Arc::clone(&listener),
+            session: Arc::clone(&self.transport),
+            source: source.clone(),
+            sink: sink.clone(),
         });
-        self.transport
-            .register_validated_zero_copy_listener(&source, sink.as_ref(), listener.clone())
-            .await?;
+        let subscription = self
+            .transport
+            .core()
+            .attach(&source, sink.as_ref(), native)
+            .await
+            .map_err(failure)?;
         Ok(Box::new(NativeRegistration {
             transport: self.transport.clone(),
-            source,
-            sink,
+            subscription: Mutex::new(Some(subscription)),
             listener,
         }))
     }
@@ -528,17 +579,17 @@ where
 }
 
 pub(crate) async fn native<T, F>(
-    transport: Arc<T>,
+    transport: Arc<PreparedSession<T>>,
     native: NativeContext,
     plan: WorkerPlan,
     source: bool,
     filters: Option<(UUri, Option<UUri>)>,
+    wait_matching: bool,
     message: F,
 ) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease + Send + 'static,
-    T::Tx: UTxBuffer,
+    T: PreparedEndpoint,
+    T::Core: NativeSetupReady,
     F: FnMut(u32) -> Result<UMessage, UStatus>,
 {
     let loans = Arc::new(Loans::default());
@@ -546,6 +597,7 @@ where
         transport,
         native: native.clone(),
         loans: loans.clone(),
+        wait_matching,
     };
     drive(
         Box::new(endpoint),
@@ -616,6 +668,7 @@ where
     } else {
         None
     };
+    transport.ready().await?;
     println!("READY listener_registered");
     let drive = async {
         let mut control = tokio::time::interval(Duration::from_millis(25));

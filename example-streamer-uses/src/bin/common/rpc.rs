@@ -4,11 +4,9 @@
 #![allow(dead_code)]
 
 use super::{flow, payloads::NativeContext};
+use configurable_streamer_wire_support::prepared::{PreparedEndpoint, PreparedSession};
 use std::{future::Future, sync::Arc, time::Duration};
-use up_rust::{
-    UCode, UFrameMetadata, UOwnedTransport, UStatus, UTxBuffer, UUri, UZeroCopyRxLease,
-    UZeroCopyTransport,
-};
+use up_rust::{UCode, UFrameMetadata, UFrameView, UOwnedTransport, UStatus, UUri};
 
 #[derive(Clone)]
 pub(crate) struct ClientOptions {
@@ -37,6 +35,7 @@ pub(crate) async fn owned(
     options: &ClientOptions,
     request: impl Fn(u32) -> Result<(UFrameMetadata, Vec<u8>), UStatus>,
 ) -> Result<(), UStatus> {
+    super::startup::wait_for_start().await?;
     let sends = options.sends()?;
     exchanges(options, request, |metadata, payload| async move {
         let receiver = transport.clone();
@@ -60,36 +59,77 @@ pub(crate) async fn owned(
 }
 
 pub(crate) async fn native<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedSession<T>>,
     options: &ClientOptions,
     request: impl Fn(u32) -> Result<(UFrameMetadata, Vec<u8>), UStatus>,
 ) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
-    T::Tx: UTxBuffer,
-    T::Rx: UZeroCopyRxLease + Send + 'static,
+    T: PreparedEndpoint,
 {
     let sends = options.sends()?;
-    exchanges(options, request, |metadata, payload| async move {
-        let receiver = transport.clone();
-        let receive_options = options.clone();
-        let task = tokio::spawn(async move {
-            let frame = flow::receive_native_pull(
-                &receiver,
-                &receive_options.response_source,
-                Some(&receive_options.response_sink),
-                receive_options.timeout_ms,
-            )
-            .await?;
-            super::payloads::copy_payload_bytes(&frame)
-        });
+    let mut receiver = super::receive::register_native(
+        transport,
+        &options.response_source,
+        Some(&options.response_sink),
+    )
+    .await?;
+    let result = async {
+        super::startup::wait_for_start().await?;
         tokio::time::sleep(options.receive_settle).await;
-        let sent =
+        let mut exchange = 0u64;
+        loop {
+            let sequence =
+                u32::try_from(exchange.saturating_add(1).min(u64::from(u32::MAX))).unwrap();
+            let (metadata, payload) = request(sequence)?;
+            let request_id = metadata.id().clone();
+            // Registration and the expected correlation ID exist before publication;
+            // immediate responses cannot race listener creation. One receiver is
+            // reused across exchanges, with no task allocated for each request.
             flow::send_native_repeated(transport, metadata, &payload, options.alignment, sends)
-                .await;
-        finish(task, sent).await
-    })
-    .await
+                .await?;
+            let deadline = tokio::time::Instant::now()
+                .checked_add(Duration::from_millis(options.timeout_ms))
+                .ok_or_else(|| flow::invalid("response deadline overflow"))?;
+            let response = loop {
+                let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(UStatus::fail_with_code(
+                        UCode::DeadlineExceeded,
+                        "correlated response timed out",
+                    ));
+                }
+                let frame = receiver
+                    .receive(
+                        u64::try_from(remaining.as_millis())
+                            .unwrap_or(u64::MAX)
+                            .max(1),
+                    )
+                    .await?;
+                if frame.metadata().reqid() == Some(&request_id) {
+                    break frame;
+                }
+            };
+            let bytes = super::payloads::copy_payload_bytes(&response)?;
+            if payload != bytes {
+                return Err(flow::invalid("correlated response payload mismatch"));
+            }
+            println!(
+                "FLOW observed_payload_bytes={} role=rpc_client",
+                bytes.len()
+            );
+            exchange = exchange.checked_add(1).ok_or_else(|| {
+                UStatus::fail_with_code(UCode::OutOfRange, "RPC exchange counter exhausted")
+            })?;
+            if options.send_count != 0 {
+                return Ok(());
+            }
+            tokio::time::sleep(options.interval).await;
+        }
+    }
+    .await;
+    let cleanup = receiver.stop().await;
+    result?;
+    cleanup
 }
 
 async fn exchanges<F: Future<Output = Result<Vec<u8>, UStatus>>>(

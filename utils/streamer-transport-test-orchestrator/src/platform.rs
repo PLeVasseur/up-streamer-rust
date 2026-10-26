@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Explicit OS capability and measurement boundaries; no transport-specific policy.
 use serde::{Deserialize, Serialize};

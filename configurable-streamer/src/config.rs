@@ -537,6 +537,15 @@ pub struct EndpointConfig {
     pub(crate) routing_mode: RoutingMode,
     #[serde(default)]
     pub(crate) copy_minimized_payload_alignment: Option<usize>,
+    /// Exact logical native addresses and bounds reserved before traffic.
+    #[serde(default)]
+    pub(crate) prepared_routes: Vec<configurable_streamer_wire_support::prepared::PreparedAddress>,
+    /// Fixed logical route table capacity; this does not change native RX queues.
+    #[serde(default = "default_prepared_routes")]
+    pub(crate) prepared_route_capacity: usize,
+    /// Fixed native registration table capacity.
+    #[serde(default = "default_prepared_registrations")]
+    pub(crate) prepared_registration_capacity: usize,
     /// Optional Zenoh native transmit-pool size, forwarded to the binding builder.
     /// Omission keeps the binding's default; zero is rejected by the binding.
     pub(crate) zenoh_shm_segment_size: Option<usize>,
@@ -592,6 +601,13 @@ pub struct EndpointConfig {
         Option<configurable_streamer_wire_support::native_profile::NativeDeploymentContext>,
 }
 
+const fn default_prepared_routes() -> usize {
+    128
+}
+const fn default_prepared_registrations() -> usize {
+    100
+}
+
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ForwardingRouteConfig {
@@ -638,6 +654,66 @@ impl MqttTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shipped_native_catalogs_cover_each_declared_handoff() {
+        for text in [
+            include_str!("../CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5"),
+            include_str!("../CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5"),
+            include_str!("../CONFIG_ZEROCOPY_EXAMPLE.json5"),
+            include_str!("../CONFIG_ZENOH_ICEORYX2_ZEROCOPY_NATIVE_EXAMPLE.json5"),
+            include_str!("../CONFIG_ZENOH_ICEORYX2_ZEROCOPY_XCDRV2_EXAMPLE.json5"),
+            include_str!("../CONFIG_LOLA_ZEROCOPY_NATIVE_EXAMPLE.json5"),
+            include_str!("../CONFIG_LOLA_ZEROCOPY_NATIVE_Z2L_EXAMPLE.json5"),
+            include_str!("../CONFIG_LOLA_ZEROCOPY_NATIVE_L2Z_EXAMPLE.json5"),
+            include_str!("../CONFIG_ICEORYX2_LOLA_ZEROCOPY_NATIVE_I2L_EXAMPLE.json5"),
+            include_str!("../CONFIG_ICEORYX2_LOLA_ZEROCOPY_NATIVE_L2I_EXAMPLE.json5"),
+            include_str!("../CONFIG_LOLA_ZEROCOPY_NATIVE_RPC_EXAMPLE.json5"),
+            include_str!("../CONFIG_LOLA_ZEROCOPY_NATIVE_RPC_L2Z_EXAMPLE.json5"),
+            include_str!("../CONFIG_ICEORYX2_LOLA_ZEROCOPY_RPC_NATIVE_I2L_EXAMPLE.json5"),
+            include_str!("../CONFIG_ICEORYX2_LOLA_ZEROCOPY_RPC_NATIVE_L2I_EXAMPLE.json5"),
+        ] {
+            let config: Config =
+                json5::from_str(text).expect("example follows the live frontend schema");
+            let mut endpoints: Vec<_> = config.transports.zenoh.endpoints.iter().collect();
+            if let Some(transport) = &config.transports.iceoryx2 {
+                endpoints.extend(&transport.endpoints);
+            }
+            if let Some(transport) = &config.transports.lola {
+                endpoints.extend(&transport.endpoints);
+            }
+            for ingress in &endpoints {
+                assert!(!ingress.prepared_routes.is_empty());
+                for entry in &ingress.prepared_routes {
+                    entry
+                        .reservation()
+                        .expect("SDK validates example bounds and exact URI");
+                }
+                for route in &ingress.forwarding_routes {
+                    let egress = endpoints
+                        .iter()
+                        .find(|endpoint| endpoint.endpoint == route.endpoint)
+                        .unwrap();
+                    for receive in ingress
+                        .prepared_routes
+                        .iter()
+                        .filter(|entry| !entry.transmit)
+                    {
+                        assert!(
+                            egress.prepared_routes.iter().any(|entry| entry.transmit
+                                && entry.source == receive.source
+                                && entry.sink == receive.sink
+                                && entry.max_payload_len >= receive.max_payload_len),
+                            "{} -> {} must reserve {} before traffic",
+                            ingress.endpoint,
+                            egress.endpoint,
+                            receive.source
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     fn two_bus_config(namespace_a: &str, namespace_b: &str) -> Config {
         json5::from_str(&format!(r#"{{

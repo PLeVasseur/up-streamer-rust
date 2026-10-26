@@ -24,7 +24,7 @@ pub struct LocalClientListener {
 }
 
 impl LocalClientListener {
-    /// Creates an empty message history with initial capacity10000, not a fixed bound.
+    /// Creates an empty message history with initial capacity 10000, not a fixed bound.
     pub fn new() -> Self {
         Self {
             message_store: Arc::new(Mutex::new(Vec::with_capacity(10000))),
@@ -58,7 +58,7 @@ pub struct RemoteClientListener {
 }
 
 impl RemoteClientListener {
-    /// Creates an empty message history with initial capacity10000, not a fixed bound.
+    /// Creates an empty message history with initial capacity 10000, not a fixed bound.
     pub fn new() -> Self {
         Self {
             message_store: Arc::new(Mutex::new(Vec::with_capacity(10000))),

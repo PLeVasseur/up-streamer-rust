@@ -5,7 +5,7 @@ run and the emitting process/role. Capture is opt-in: with no run identity, help
 return `None` without hashing payloads. An enabled capture requires an actor.
 `Observation::emit` writes `FLOW_MESSAGE_EVIDENCE ` followed by one JSON record.
 
-The record contains schema version1, run/actor/stage/optional route, message and
+The record contains schema version 1, run/actor/stage/optional route, message and
 request UUIDs, kind, source/sink, encoding and payload presence. Its length and
 SHA-256 cover the concatenation of all visible payload slices. Capture checks
 overflow and exact slice-length agreement. Absent and present-empty payloads stay

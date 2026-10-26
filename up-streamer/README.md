@@ -129,6 +129,12 @@ wire routes remain one-copy copy-minimized routing: frame metadata and payload
 presence are preserved, while payload bytes are copied once into the egress
 loan.
 
+Prepared native routes reserve their address/extent catalog at setup. Optional
+`PreparedForwardObserver` callbacks borrow actual egress-loan bytes and complete
+every admitted ingress observation, including an unreserved-address rejection.
+Failed publication still charges its completed payload copy. See
+[prepared routing](docs/prepared-routing.md) for admission, accounting and teardown.
+
 ## Benchmark regression checks
 
 `up-streamer` uses a pinned Criterion harness (`criterion = 0.5.1`) at:
@@ -165,3 +171,11 @@ Native receive and typed borrowing retain binding-owned storage. Copy-minimized
 cross-backend routes currently copy once into an egress loan; they are not claimed
 end-to-end zero-copy. Opt-in flow evidence records actual copied bytes separately
 from payload identity and loan provenance. See [native routes](docs/native_routes.md).
+
+## Package dependencies
+
+Source dependencies have exact Git revisions and matching archive version
+requirements. The optional flow-evidence helper remains workspace-internal;
+offline extracted checks use the matching helper, SDK and binding sources. See
+[package dependency boundaries](docs/packaging.md) for archive normalization and
+the distinction from registry availability.

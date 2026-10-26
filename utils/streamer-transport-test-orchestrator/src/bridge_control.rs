@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Live negative controls on the exact role binaries and isolated native domains.
 use super::*;

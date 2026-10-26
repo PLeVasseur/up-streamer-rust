@@ -58,14 +58,10 @@ use up_transport_dds::encoded_owned::DdsEncodedOwnedCore;
 use up_transport_dds::owned::UPTransportDdsOwned;
 #[cfg(feature = "dds-transport")]
 use up_transport_dds::{DdsConfig, Reliability as DdsTransportReliability, UPTransportDds};
-#[cfg(any(
-    all(
-        feature = "experimental-copy-minimized-routing",
-        feature = "iceoryx2-zero-copy"
-    ),
-    feature = "iceoryx2-owned-frame"
-))]
+#[cfg(feature = "iceoryx2-owned-frame")]
 use up_transport_iceoryx2_rust::Iceoryx2PubSub;
+#[cfg(feature = "lola-owned-frame")]
+use up_transport_lola_rust::UTransportLola;
 #[cfg(any(
     all(
         feature = "experimental-copy-minimized-routing",
@@ -73,7 +69,7 @@ use up_transport_iceoryx2_rust::Iceoryx2PubSub;
     ),
     feature = "lola-owned-frame"
 ))]
-use up_transport_lola_rust::{LolaDefaultRxChannel, LolaTransportConfig, UTransportLola};
+use up_transport_lola_rust::{LolaDefaultRxChannel, LolaTransportConfig};
 use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions, MqttClientOptions};
 #[cfg(any(feature = "zenoh-zero-copy", feature = "zenoh-owned-frame"))]
 use up_transport_zenoh::zenoh_config::EndPoint as ZenohEndPoint;
@@ -83,7 +79,7 @@ use up_transport_zenoh::ZenohOwnedCore;
     feature = "experimental-copy-minimized-routing",
     feature = "zenoh-zero-copy"
 ))]
-use up_transport_zenoh::ZenohZeroCopyCore;
+use up_transport_zenoh::ZenohPreparedConfig;
 use up_transport_zenoh::{zenoh_config::Config as ZenohConfig, UPTransportZenoh};
 use usubscription_static_file::USubscriptionStaticFile;
 
@@ -439,42 +435,49 @@ async fn zenoh_route_wire_endpoints(
 ) -> Result<HashMap<RouteWireFormat, RouteWireEndpoint>, UStatus> {
     let mut endpoints = HashMap::new();
     if let Some(route_wire_formats) = route_wire_formats {
+        if route_wire_formats.is_empty() {
+            return Ok(endpoints);
+        }
+        let zenoh_config =
+            zenoh_selected_wire_config(endpoint_config, config_file, opened_router_configs)?;
+        let core = configurable_streamer_wire_support::prepared::zenoh_core(
+            zenoh_config,
+            streamer_uri,
+            &endpoint_config.prepared_routes,
+            ZenohPreparedConfig {
+                shm_segment_size: endpoint_config
+                    .zenoh_shm_segment_size
+                    .unwrap_or(64 * 1024 * 1024),
+                route_capacity: endpoint_config.prepared_route_capacity,
+                registration_capacity: endpoint_config.prepared_registration_capacity,
+                allocation_observer: None,
+            },
+        )
+        .await?;
+        {
+            let bytes = core.prewarmed_shm_segment_size();
+            #[derive(serde::Serialize)]
+            struct ProviderSetup<'a> {
+                endpoint: &'a str,
+                configured_bytes: usize,
+            }
+            let receipt = json5::to_string(&ProviderSetup {
+                endpoint: &endpoint_config.endpoint,
+                configured_bytes: bytes,
+            })
+            .map_err(|error| invalid_config(format!("provider setup receipt: {error}")))?;
+            println!("NATIVE_SHM_PROVIDER_INITIALIZED {receipt}");
+        }
         for route_wire_format in route_wire_formats {
-            let zenoh_config =
-                zenoh_selected_wire_config(endpoint_config, config_file, opened_router_configs)?;
-            let mut builder =
-                ZenohZeroCopyCore::builder(streamer_uri.to_string()).with_config(zenoh_config);
-            if let Some(bytes) = endpoint_config.zenoh_shm_segment_size {
-                builder = builder.with_shm_segment_size(bytes)?;
-            }
-            if endpoint_config.zenoh_wait_for_subscriber {
-                builder = builder.with_publisher_readiness(std::time::Duration::from_secs(5))?;
-            }
-            let core = builder
-                .with_shm_prewarm(endpoint_config.zenoh_shm_prewarm)
-                .build()
-                .await?;
-            if let Some(bytes) = core.prewarmed_shm_segment_size() {
-                #[derive(serde::Serialize)]
-                struct ProviderSetup<'a> {
-                    endpoint: &'a str,
-                    configured_bytes: usize,
-                }
-                let receipt = json5::to_string(&ProviderSetup {
-                    endpoint: &endpoint_config.endpoint,
-                    configured_bytes: bytes,
-                })
-                .map_err(|error| invalid_config(format!("provider setup receipt: {error}")))?;
-                println!("NATIVE_SHM_PROVIDER_INITIALIZED {receipt}");
-            }
             endpoints.insert(
                 *route_wire_format,
                 configurable_streamer_wire_support::zenoh_endpoint(
                     &endpoint_config.endpoint,
                     &endpoint_config.authority,
-                    core,
+                    Arc::clone(&core),
                     *route_wire_format,
                     endpoint_config.native_profile.as_ref(),
+                    &endpoint_config.prepared_routes,
                 )?,
             );
         }
@@ -1017,9 +1020,16 @@ fn register_iceoryx2_endpoints(
                     .publish_subscribe
                     .subscriber_max_borrowed_samples = capacity;
             }
-            namespace.capacity().apply(&mut config)?;
+            if endpoint_config.routing_mode != RoutingMode::CopyMinimized {
+                namespace.capacity().apply(&mut config)?;
+            }
         }
-        let transport = Iceoryx2PubSub::try_with_config(config)?;
+        #[cfg(feature = "iceoryx2-owned-frame")]
+        let transport = if endpoint_config.routing_mode == RoutingMode::OwnedFrame {
+            Some(Iceoryx2PubSub::try_with_config(config.clone())?)
+        } else {
+            None
+        };
         if endpoint_config.routing_mode == RoutingMode::Owned {
             return Err(invalid_config(format!(
                 "iceoryx2 endpoint {} must use copy_minimized or owned_frame routing",
@@ -1034,15 +1044,27 @@ fn register_iceoryx2_endpoints(
         ))]
         if endpoint_config.routing_mode == RoutingMode::CopyMinimized {
             if let Some(route_wire_formats) = route_wire_formats.get(&endpoint_config.endpoint) {
+                let prepared = configurable_streamer_wire_support::prepared::iceoryx2_core(
+                    config.clone(),
+                    &endpoint_config.prepared_routes,
+                    endpoint_config.prepared_route_capacity,
+                    endpoint_config.prepared_registration_capacity,
+                    &endpoint_config
+                        .iceoryx2_namespace
+                        .as_ref()
+                        .map(|namespace| namespace.capacity())
+                        .unwrap_or_default(),
+                )?;
                 for route_wire_format in route_wire_formats {
                     route_wire_endpoints.insert(
                         *route_wire_format,
                         configurable_streamer_wire_support::iceoryx2_endpoint(
                             &endpoint_config.endpoint,
                             &endpoint_config.authority,
-                            transport.clone(),
+                            Arc::clone(&prepared),
                             *route_wire_format,
                             endpoint_config.native_profile.as_ref(),
+                            &endpoint_config.prepared_routes,
                         )?,
                     );
                 }
@@ -1060,7 +1082,10 @@ fn register_iceoryx2_endpoints(
                             &endpoint_config.endpoint,
                             &endpoint_config.authority,
                             up_transport_iceoryx2_rust::BenchmarkOwnedIceoryx2Core::new(
-                                transport.clone(),
+                                transport
+                                    .as_ref()
+                                    .expect("owned transport constructed")
+                                    .clone(),
                             ),
                             *route_wire_format,
                             endpoint_config.native_profile.as_ref(),
@@ -1110,7 +1135,12 @@ fn register_lola_endpoints(
                 endpoint_config.endpoint
             )));
         }
-        let transport = lola_transport(endpoint_config, config_dir)?;
+        #[cfg(feature = "lola-owned-frame")]
+        let transport = if endpoint_config.routing_mode == RoutingMode::OwnedFrame {
+            Some(lola_transport(endpoint_config, config_dir)?)
+        } else {
+            None
+        };
         #[cfg(feature = "experimental-copy-minimized-routing")]
         let mut route_wire_endpoints = HashMap::new();
         #[cfg(all(
@@ -1119,15 +1149,28 @@ fn register_lola_endpoints(
         ))]
         if endpoint_config.routing_mode == RoutingMode::CopyMinimized {
             if let Some(route_wire_formats) = route_wire_formats.get(&endpoint_config.endpoint) {
+                let primary = lola_transport_config(endpoint_config, config_dir)?;
+                lola_default_rx_channel(endpoint_config)?;
+                let response =
+                    lola_response_transport_config(endpoint_config, config_dir, &primary)?;
+                let prepared = configurable_streamer_wire_support::prepared::lola_core(
+                    &primary,
+                    response.as_ref(),
+                    &endpoint_config.prepared_routes,
+                    endpoint_config.prepared_route_capacity,
+                    endpoint_config.prepared_registration_capacity,
+                    primary.max_samples,
+                )?;
                 for route_wire_format in route_wire_formats {
                     route_wire_endpoints.insert(
                         *route_wire_format,
                         configurable_streamer_wire_support::lola_endpoint(
                             &endpoint_config.endpoint,
                             &endpoint_config.authority,
-                            transport.zero_copy_core(),
+                            Arc::clone(&prepared),
                             *route_wire_format,
                             endpoint_config.native_profile.as_ref(),
+                            &endpoint_config.prepared_routes,
                         )?,
                     );
                 }
@@ -1144,7 +1187,12 @@ fn register_lola_endpoints(
                         configurable_streamer_wire_support::lola_owned_endpoint(
                             &endpoint_config.endpoint,
                             &endpoint_config.authority,
-                            up_transport_lola_rust::LolaOwnedCore::new(transport.zero_copy_core()),
+                            up_transport_lola_rust::LolaOwnedCore::new(
+                                transport
+                                    .as_ref()
+                                    .expect("owned transport constructed")
+                                    .zero_copy_core(),
+                            ),
                             *route_wire_format,
                             endpoint_config.native_profile.as_ref(),
                         )?,
@@ -1234,13 +1282,7 @@ fn lola_transport_config(
     })
 }
 
-#[cfg(any(
-    all(
-        feature = "experimental-copy-minimized-routing",
-        feature = "lola-transport"
-    ),
-    feature = "lola-owned-frame"
-))]
+#[cfg(feature = "lola-owned-frame")]
 fn lola_transport(
     endpoint_config: &EndpointConfig,
     config_dir: &Path,
@@ -2186,6 +2228,10 @@ async fn main() -> Result<(), UStatus> {
         )
     })?;
 
+    // Peer processes may now reserve their own native resources concurrently.
+    // This is configuration readiness, not permission to send application traffic.
+    println!("READY streamer_configured");
+
     // Build regular Zenoh UTransport only for non-copy-minimized endpoints. Copy-minimized
     // Zenoh endpoints open their own wire core from the same config and cannot share a router
     // listen port with an unused regular transport session.
@@ -2444,6 +2490,27 @@ async fn main() -> Result<(), UStatus> {
         .await?;
     }
 
+    #[cfg(feature = "experimental-copy-minimized-routing")]
+    {
+        let mut native_groups = vec![config.transports.zenoh.endpoints.as_slice()];
+        if let Some(transport) = &config.transports.iceoryx2 {
+            native_groups.push(&transport.endpoints);
+        }
+        if let Some(transport) = &config.transports.lola {
+            native_groups.push(&transport.endpoints);
+        }
+        for declaration in native_groups.into_iter().flatten() {
+            if let Some(endpoint) = endpoints.get(&declaration.endpoint) {
+                for wire in endpoint.route_wire_endpoints.values() {
+                    wire.wait_ready(
+                        &declaration.prepared_routes,
+                        declaration.zenoh_wait_for_subscriber,
+                    )
+                    .await?;
+                }
+            }
+        }
+    }
     println!("READY streamer_initialized");
     info!("Streamer initialized; waiting for shutdown signal");
     wait_for_shutdown_signal().await?;

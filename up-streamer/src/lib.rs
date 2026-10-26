@@ -177,11 +177,22 @@
 mod control_plane;
 #[cfg(feature = "experimental-copy-minimized-routing")]
 mod copy_minimized;
+#[cfg(feature = "experimental-copy-minimized-routing")]
+mod prepared_endpoint;
+#[cfg(feature = "experimental-copy-minimized-routing")]
+pub use prepared_endpoint::{
+    PreparedEndpoint, PreparedForwardObserver, PreparedForwardStats, PreparedRouteReservation,
+};
 mod data_plane;
 mod endpoint;
 mod native_route;
 pub use native_route::{NativeRouteApi, NativeRouteHop, NativeRoutePolicy};
 mod flow_observation;
+#[cfg(any(
+    feature = "owned-frame-transport",
+    feature = "experimental-copy-minimized-routing"
+))]
+mod frame_routes;
 #[cfg(feature = "experimental-copy-minimized-routing")]
 pub use copy_minimized::CopyMinimizedRouteOptions;
 pub use endpoint::Endpoint;

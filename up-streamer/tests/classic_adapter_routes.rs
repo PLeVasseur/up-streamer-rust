@@ -56,7 +56,13 @@ impl USubscription for EmptySubscription {
         &self,
         _topic: &UUri,
     ) -> Result<Vec<SubscriptionInfo>, UStatus> {
-        Ok(Vec::new())
+        Ok(vec![SubscriptionInfo::new(
+            topic(),
+            UUri::try_from_parts("authority-b", 0x5678, 1, 0).unwrap(),
+            SubscriptionStatus::Subscribed,
+            None,
+            None,
+        )])
     }
 
     async fn fetch_subscriptions_by_subscriber(
@@ -86,11 +92,14 @@ impl USubscription for EmptySubscription {
     }
 }
 
-/// Classic `UTransport` double: records sends, lets tests inject receives.
+/// Exact callback identity with its decoded source/sink filters.
+type ListenerEntry<L> = (UUri, Option<UUri>, Arc<L>);
+
+/// Classic `UTransport` double with decoded source/sink filtering.
 #[derive(Default)]
 struct RecordingClassicTransport {
     sent: Mutex<Vec<UMessage>>,
-    listeners: Mutex<Vec<Arc<dyn UListener>>>,
+    listeners: Mutex<Vec<ListenerEntry<dyn UListener>>>,
 }
 
 impl RecordingClassicTransport {
@@ -100,8 +109,16 @@ impl RecordingClassicTransport {
 
     async fn inject(&self, message: UMessage) {
         let listeners = self.listeners.lock().expect("listener lock").clone();
-        for listener in listeners {
-            listener.on_receive(message.clone()).await;
+        for (source, sink, listener) in listeners {
+            if source.matches(message.source())
+                && match (sink.as_ref(), message.sink()) {
+                    (None, None) => true,
+                    (Some(filter), Some(actual)) => filter.matches(actual),
+                    _ => false,
+                }
+            {
+                listener.on_receive(message.clone()).await;
+            }
         }
     }
 }
@@ -115,11 +132,15 @@ impl UTransport for RecordingClassicTransport {
 
     async fn register_listener(
         &self,
-        _source_filter: &UUri,
-        _sink_filter: Option<&UUri>,
+        source_filter: &UUri,
+        sink_filter: Option<&UUri>,
         listener: Arc<dyn UListener>,
     ) -> Result<(), UStatus> {
-        self.listeners.lock().expect("listener lock").push(listener);
+        self.listeners.lock().expect("listener lock").push((
+            source_filter.clone(),
+            sink_filter.cloned(),
+            listener,
+        ));
         Ok(())
     }
 
@@ -132,7 +153,7 @@ impl UTransport for RecordingClassicTransport {
         self.listeners
             .lock()
             .expect("listener lock")
-            .retain(|registered| !Arc::ptr_eq(registered, &listener));
+            .retain(|(_, _, registered)| !Arc::ptr_eq(registered, &listener));
         Ok(())
     }
 }
@@ -141,7 +162,7 @@ impl UTransport for RecordingClassicTransport {
 #[derive(Default)]
 struct RecordingOwnedTransport {
     sent: Mutex<Vec<UOwnedFrame>>,
-    listeners: Mutex<Vec<Arc<dyn UOwnedListener>>>,
+    listeners: Mutex<Vec<ListenerEntry<dyn UOwnedListener>>>,
 }
 
 impl RecordingOwnedTransport {
@@ -151,8 +172,16 @@ impl RecordingOwnedTransport {
 
     async fn inject(&self, frame: UOwnedFrame) {
         let listeners = self.listeners.lock().expect("listener lock").clone();
-        for listener in listeners {
-            listener.on_receive_owned(frame.clone()).await;
+        for (source, sink, listener) in listeners {
+            if source.matches(frame.metadata().source())
+                && match (sink.as_ref(), frame.metadata().sink()) {
+                    (None, None) => true,
+                    (Some(filter), Some(actual)) => filter.matches(actual),
+                    _ => false,
+                }
+            {
+                listener.on_receive_owned(frame.clone()).await;
+            }
         }
     }
 }
@@ -174,11 +203,15 @@ impl UOwnedTransportImpl for RecordingOwnedTransport {
 
     async fn register_validated_owned_listener(
         &self,
-        _source_filter: &UUri,
-        _sink_filter: Option<&UUri>,
+        source_filter: &UUri,
+        sink_filter: Option<&UUri>,
         listener: Arc<dyn UOwnedListener>,
     ) -> Result<(), UStatus> {
-        self.listeners.lock().expect("listener lock").push(listener);
+        self.listeners.lock().expect("listener lock").push((
+            source_filter.clone(),
+            sink_filter.cloned(),
+            listener,
+        ));
         Ok(())
     }
 
@@ -191,7 +224,7 @@ impl UOwnedTransportImpl for RecordingOwnedTransport {
         self.listeners
             .lock()
             .expect("listener lock")
-            .retain(|registered| !Arc::ptr_eq(registered, &listener));
+            .retain(|(_, _, registered)| !Arc::ptr_eq(registered, &listener));
         Ok(())
     }
 }
@@ -286,88 +319,13 @@ async fn owned_to_classic_restores_identity() {
 }
 
 #[cfg(feature = "experimental-copy-minimized-routing")]
+#[path = "support/prepared.rs"]
+mod prepared;
+#[cfg(feature = "experimental-copy-minimized-routing")]
 mod classic_copy_minimized {
     use super::*;
-    use up_rust::{
-        UFrameView, UTxLoanSpec, UVecRxLease, UVecTxBuffer, UZeroCopyListener,
-        UZeroCopyTransportImpl,
-    };
+    use up_rust::{ProtobufWire, UWithNativePrefixWire};
     use up_streamer::{CopyMinimizedRouteOptions, ZeroCopyFrameEndpoint};
-
-    #[derive(Default)]
-    struct RecordingZeroCopyTransport {
-        sent: Mutex<Vec<UVecRxLease>>,
-        listeners: Mutex<Vec<Arc<dyn UZeroCopyListener<UVecRxLease>>>>,
-    }
-
-    impl RecordingZeroCopyTransport {
-        fn sent_frames(&self) -> Vec<UVecRxLease> {
-            self.sent.lock().expect("sent lock").clone()
-        }
-
-        async fn inject(&self, frame: UVecRxLease) {
-            let listeners = self.listeners.lock().expect("listener lock").clone();
-            for listener in listeners {
-                listener.on_receive_zero_copy(frame.clone()).await;
-            }
-        }
-    }
-
-    #[async_trait]
-    impl UZeroCopyTransportImpl for RecordingZeroCopyTransport {
-        type Tx = UVecTxBuffer;
-        type Rx = UVecRxLease;
-
-        async fn loan_validated_tx(&self, spec: UTxLoanSpec) -> Result<Self::Tx, UStatus> {
-            UVecTxBuffer::with_alignment(
-                spec.metadata().clone(),
-                spec.payload_len(),
-                spec.payload_alignment_proof().as_usize(),
-            )
-        }
-
-        async fn send_validated_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
-            let payload = buffer
-                .metadata()
-                .payload_encoding()
-                .is_some()
-                .then(|| buffer.payload().to_vec());
-            let frame = UVecRxLease::new(buffer.metadata().clone(), payload)?;
-            self.sent.lock().expect("sent lock").push(frame);
-            Ok(())
-        }
-
-        async fn receive_validated_zero_copy(
-            &self,
-            _source_filter: &UUri,
-            _sink_filter: Option<&UUri>,
-        ) -> Result<Self::Rx, UStatus> {
-            Err(UStatus::fail_with_code(UCode::NotFound, "unused"))
-        }
-
-        async fn register_validated_zero_copy_listener(
-            &self,
-            _source_filter: &UUri,
-            _sink_filter: Option<&UUri>,
-            listener: Arc<dyn UZeroCopyListener<Self::Rx>>,
-        ) -> Result<(), UStatus> {
-            self.listeners.lock().expect("listener lock").push(listener);
-            Ok(())
-        }
-
-        async fn unregister_validated_zero_copy_listener(
-            &self,
-            _source_filter: &UUri,
-            _sink_filter: Option<&UUri>,
-            listener: Arc<dyn UZeroCopyListener<Self::Rx>>,
-        ) -> Result<(), UStatus> {
-            self.listeners
-                .lock()
-                .expect("listener lock")
-                .retain(|registered| !Arc::ptr_eq(registered, &listener));
-            Ok(())
-        }
-    }
 
     /// The 96-row route kind: a classic message with a registered encoding crosses
     /// into the copy-minimized world through the composed
@@ -375,9 +333,15 @@ mod classic_copy_minimized {
     #[tokio::test]
     async fn classic_to_copy_minimized_forwards_encoding_message() {
         let ingress = Arc::new(RecordingClassicTransport::default());
-        let egress = Arc::new(RecordingZeroCopyTransport::default());
+        let egress = Arc::new(prepared::Core::default());
         let ingress_endpoint = Endpoint::new("classic", "authority-a", ingress.clone());
-        let egress_endpoint = ZeroCopyFrameEndpoint::new("cm", "authority-b", egress.clone());
+        let egress_endpoint = ZeroCopyFrameEndpoint::new(
+            "cm",
+            "authority-b",
+            Arc::new(Arc::clone(&egress).into_protobuf_transport()),
+        )
+        .with_routes(&[prepared::reservation(topic(), None)])
+        .unwrap();
         let mut streamer = UStreamer::new("classic-to-cm", 4, Arc::new(EmptySubscription))
             .await
             .expect("streamer");
@@ -412,9 +376,15 @@ mod classic_copy_minimized {
     /// identity populated.
     #[tokio::test]
     async fn copy_minimized_to_classic_restores_identity() {
-        let ingress = Arc::new(RecordingZeroCopyTransport::default());
+        let ingress = Arc::new(prepared::Core::default());
         let egress = Arc::new(RecordingClassicTransport::default());
-        let ingress_endpoint = ZeroCopyFrameEndpoint::new("cm", "authority-a", ingress.clone());
+        let ingress_endpoint = ZeroCopyFrameEndpoint::new(
+            "cm",
+            "authority-a",
+            Arc::new(Arc::clone(&ingress).into_protobuf_transport()),
+        )
+        .with_receive_routes(&[(topic(), None)])
+        .unwrap();
         let egress_endpoint = Endpoint::new("classic", "authority-b", egress.clone());
         let mut streamer = UStreamer::new("cm-to-classic", 4, Arc::new(EmptySubscription))
             .await
@@ -429,8 +399,8 @@ mod classic_copy_minimized {
             .expect("message");
         let expected_id = source.attributes().id().clone();
         let metadata = try_project_umessage_to_frame_metadata(&source).expect("metadata");
-        let lease = UVecRxLease::new(metadata, Some(b"cdr-bytes".to_vec())).expect("lease");
-        ingress.inject(lease).await;
+        let frame = UOwnedFrame::new(metadata, Some(Bytes::from_static(b"cdr-bytes"))).unwrap();
+        ingress.inject::<ProtobufWire>(frame);
 
         wait_for(|| !egress.sent_messages().is_empty()).await;
         let messages = egress.sent_messages();

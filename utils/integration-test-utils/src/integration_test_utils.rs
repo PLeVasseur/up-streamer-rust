@@ -44,7 +44,7 @@ pub enum ClientCommand {
 
 /// Asserts nonzero counts and an absolute discrepancy within `sent * percentage_slack`.
 ///
-/// Despite its name, `percentage_slack` is a fraction, for example0.1 for ten percent.
+/// Despite its name, `percentage_slack` is a fraction, for example 0.1 for ten percent.
 pub async fn check_send_receive_message_discrepancy(
     number_of_sent_messages: u64,
     number_of_messages_received: u64,

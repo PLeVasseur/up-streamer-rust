@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Full bounded journal chunks, generation binding and independent replay.
 use crate::artifact::{self, bounded_line, hash_file, read_json, write_json};

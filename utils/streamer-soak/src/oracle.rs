@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Bounded independent sequence, complete-attribute and actual-handoff reconciliation.
 use crate::config::Role;

@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Generation-bound workload phases shared by controller and role workers.
 use anyhow::{ensure, Result};

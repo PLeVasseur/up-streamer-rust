@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Actual-target export of the native types used by Streamer and its role processes.
 use clap::Parser;

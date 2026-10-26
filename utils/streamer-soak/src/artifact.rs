@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Bounded, hashed artifact I/O shared by execution and independent replay.
 use anyhow::{ensure, Result};

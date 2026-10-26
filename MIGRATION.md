@@ -6,8 +6,8 @@ operation binding. The old unused operation label is removed. Table remains the
 recommended default for multiple representations.
 
 Regenerate `contract_defined` artifacts with the SDK-owned `single-type` command;
-the mode is now `single_type` with canonical tag3. Unsupported old artifacts fail
-by name. Table canonical bytes and descriptor/token derivation version2 remain
+the mode is now `single_type` with canonical tag 3. Unsupported old artifacts fail
+by name. Table canonical bytes and descriptor/token derivation version 2 remain
 unchanged. No native table lookup falls back to SingleType.
 
 Rename route configuration `allow_contract_defined_over_classic_hops` to

@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! OS-independent bounded workload journals and complete message reconciliation.
 //!
@@ -71,7 +72,7 @@ pub struct JournalWriter(journal::Journal);
 impl JournalWriter {
     /// Creates a writer in an existing artifact directory without overwriting chunks.
     ///
-    /// The chunk bound must be between64KiB and4MiB. Every record is bounded to64KiB.
+    /// The chunk bound must be between 64 KiB and 4 MiB. Every record is bounded to 64 KiB.
     pub fn new(directory: &Path, options: &ReplayOptions, chunk_bytes: usize) -> Result<Self> {
         ensure!(
             (artifact::MAX_LINE..=4 * 1024 * 1024).contains(&chunk_bytes),

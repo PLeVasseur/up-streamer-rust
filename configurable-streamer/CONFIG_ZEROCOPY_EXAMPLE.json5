@@ -19,6 +19,12 @@
           authority: "authority-a",
           endpoint: "zenoh-zc",
           routing_mode: "copy_minimized",
+          prepared_routes: [
+            { source: "//authority-a/5BA0/1/8001", max_payload_len: 8192, transmit: false },
+            { source: "//authority-b/5BA0/1/8001", max_payload_len: 8192 },
+            { source: "//authority-b/3039/1/8001", max_payload_len: 8192 },
+            { source: "//authority-c/5BA0/1/8001", max_payload_len: 8192 },
+          ],
           copy_minimized_payload_alignment: 8,
           forwarding_routes: [
             { endpoint: "iceoryx2-zc", wire_format: "protobuf" },
@@ -37,6 +43,12 @@
           authority: "authority-b",
           endpoint: "iceoryx2-zc",
           routing_mode: "copy_minimized",
+          prepared_routes: [
+            { source: "//authority-a/5BA0/1/8001", max_payload_len: 8192 },
+            { source: "//authority-b/5BA0/1/8001", max_payload_len: 8192, transmit: false },
+            { source: "//authority-b/3039/1/8001", max_payload_len: 8192, transmit: false },
+            { source: "//authority-c/5BA0/1/8001", max_payload_len: 8192 },
+          ],
           copy_minimized_payload_alignment: 8,
           forwarding_routes: [
             { endpoint: "zenoh-zc", wire_format: "protobuf" },
@@ -51,6 +63,12 @@
           authority: "authority-c",
           endpoint: "lola-zc",
           routing_mode: "copy_minimized",
+          prepared_routes: [
+            { source: "//authority-a/5BA0/1/8001", max_payload_len: 8192 },
+            { source: "//authority-b/5BA0/1/8001", max_payload_len: 8192 },
+            { source: "//authority-b/3039/1/8001", max_payload_len: 8192 },
+            { source: "//authority-c/5BA0/1/8001", max_payload_len: 8192, transmit: false },
+          ],
           copy_minimized_payload_alignment: 8,
           lola_instance_specifier: "uprotocol/transport",
           lola_service_type: "/uprotocol/Transport",

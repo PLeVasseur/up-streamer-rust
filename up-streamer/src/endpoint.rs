@@ -11,12 +11,14 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+#[cfg(feature = "experimental-copy-minimized-routing")]
+use crate::prepared_endpoint::{
+    EgressCatalog, PreparedEndpoint, PreparedForwardStats, PreparedRouteReservation,
+};
 use std::sync::Arc;
 #[cfg(feature = "owned-frame-transport")]
 use up_rust::UOwnedTransport;
 use up_rust::UTransport;
-#[cfg(feature = "experimental-copy-minimized-routing")]
-use up_rust::UZeroCopyTransport;
 
 ///
 /// [`Endpoint`] is defined as a combination of `authority_name` and
@@ -113,22 +115,28 @@ pub struct OwnedFrameEndpoint {
     pub(crate) native_profile: Option<Arc<up_rust::NativeProfile>>,
 }
 
-/// Named endpoint backed by a zero-copy transport for copy-minimized routes.
+/// Shared exact-address catalog used while attaching native receive filters.
+#[cfg(feature = "experimental-copy-minimized-routing")]
+type ReceiveCatalog = Arc<[(up_rust::UUri, Option<up_rust::UUri>)]>;
+
+/// Named endpoint backed by a prepared native core and an exact selected wire.
 #[cfg(feature = "experimental-copy-minimized-routing")]
 pub struct ZeroCopyFrameEndpoint<T>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
+    T: PreparedEndpoint,
 {
     pub(crate) name: String,
     pub(crate) authority: String,
     pub(crate) transport: Arc<T>,
     pub(crate) native_profile: Option<Arc<up_rust::NativeProfile>>,
+    pub(crate) routes: Option<Arc<EgressCatalog<T::Core>>>,
+    pub(crate) receive_catalog: Option<ReceiveCatalog>,
 }
 
 #[cfg(feature = "experimental-copy-minimized-routing")]
 impl<T> Clone for ZeroCopyFrameEndpoint<T>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
+    T: PreparedEndpoint,
 {
     fn clone(&self) -> Self {
         Self {
@@ -136,6 +144,8 @@ where
             authority: self.authority.clone(),
             transport: self.transport.clone(),
             native_profile: self.native_profile.clone(),
+            routes: self.routes.clone(),
+            receive_catalog: self.receive_catalog.clone(),
         }
     }
 }
@@ -163,7 +173,7 @@ impl Endpoint {
 #[cfg(feature = "experimental-copy-minimized-routing")]
 impl<T> ZeroCopyFrameEndpoint<T>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
+    T: PreparedEndpoint,
 {
     /// Creates an endpoint for feature-gated copy-minimized routes.
     pub fn new(name: &str, authority: &str, transport: Arc<T>) -> Self {
@@ -172,7 +182,98 @@ where
             authority: authority.to_string(),
             transport,
             native_profile: None,
+            routes: None,
+            receive_catalog: None,
         }
+    }
+
+    /// Reserves every exact egress address and maximum frame during configuration.
+    ///
+    /// Ingress-only endpoints need no egress catalog. Route installation rejects a
+    /// missing catalog on an egress; traffic never creates or enlarges it.
+    ///
+    /// # Errors
+    /// Rejects duplicate/wildcard addresses, invalid bounds or native route exhaustion.
+    pub fn with_routes(
+        mut self,
+        routes: &[PreparedRouteReservation],
+    ) -> Result<Self, up_rust::SetupError> {
+        self.routes = Some(Arc::new(EgressCatalog::new::<T::Wire>(
+            Arc::clone(self.transport.prepared_core()),
+            routes,
+            None,
+        )?));
+        self.receive_catalog = Some(
+            routes
+                .iter()
+                .map(|route| (route.source.clone(), route.sink.clone()))
+                .collect(),
+        );
+        Ok(self)
+    }
+
+    /// Reserves exact egress routes and a synchronous actual-boundary observer.
+    ///
+    /// # Errors
+    /// Rejects the same invalid addresses/bounds/resource exhaustion as `with_routes`.
+    pub fn with_observed_routes(
+        mut self,
+        routes: &[PreparedRouteReservation],
+        observer: Arc<dyn crate::PreparedForwardObserver>,
+    ) -> Result<Self, up_rust::SetupError> {
+        self.routes = Some(Arc::new(EgressCatalog::new::<T::Wire>(
+            Arc::clone(self.transport.prepared_core()),
+            routes,
+            Some(observer),
+        )?));
+        self.receive_catalog = Some(
+            routes
+                .iter()
+                .map(|route| (route.source.clone(), route.sink.clone()))
+                .collect(),
+        );
+        Ok(self)
+    }
+
+    /// Declares exact receive addresses available in this native core's setup catalog.
+    ///
+    /// Ingress routing intersects semantic filters with these addresses before
+    /// attaching native subscribers; it does not ask a pubsub-only catalog to
+    /// materialize an unrelated RPC service. Runtime filters remain SDK-validated.
+    ///
+    /// # Errors
+    /// Rejects an empty catalog or a wildcard address.
+    pub fn with_receive_routes(
+        mut self,
+        routes: &[(up_rust::UUri, Option<up_rust::UUri>)],
+    ) -> Result<Self, up_rust::SetupError> {
+        if routes.is_empty() {
+            return Err(up_rust::SetupError::InvalidConfig(
+                "receive catalog must not be empty",
+            ));
+        }
+        for (source, sink) in routes {
+            source
+                .verify_no_wildcards()
+                .map_err(|_| up_rust::SetupError::InvalidConfig("exact receive source required"))?;
+            if let Some(sink) = sink {
+                sink.verify_no_wildcards().map_err(|_| {
+                    up_rust::SetupError::InvalidConfig("exact receive sink required")
+                })?;
+            }
+        }
+        self.receive_catalog = Some(routes.to_vec().into());
+        Ok(self)
+    }
+
+    /// Observes this endpoint's egress copy/success/failure accounting, when configured.
+    pub fn forwarding_stats(&self) -> Option<Arc<PreparedForwardStats>> {
+        self.routes.as_ref().map(|routes| routes.stats())
+    }
+
+    /// Borrows the concrete selected-wire adapter for binding-owned setup/readiness.
+    pub fn transport(&self) -> &Arc<T> {
+        &self.transport
     }
 
     /// Attaches the immutable deployment profile used to configure this endpoint.

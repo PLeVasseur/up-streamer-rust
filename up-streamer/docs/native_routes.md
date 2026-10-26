@@ -7,7 +7,7 @@ or native-loan. A native payload on a classic API remains a **classic hop**.
 An encoded-owned core remains an owned-frame API even when carrying native bytes.
 
 Use Table mode by default. It carries a deployment-assigned encoding as well as
-the native frame's structural token. SingleType explicitly binds ID0 to one
+the native frame's structural token. SingleType explicitly binds ID 0 to one
 deployment-scoped representation, without URI/operation binding. Any classic hop
 in the complete declaration makes SingleType fail unless `allow_single_type_over_classic_hops` is enabled
 for that route. This includes remote classic members outside the immediate local

@@ -16,7 +16,7 @@ opaque routing does not manufacture a local representation or peer agreement.
 
 `dds-encoded-owned` exposes an owned selected-wire adapter. The native-loan
 endpoint families remain capability-specific. Every route uses an explicit wire;
-no payload sniffing or automatic native ID0 fallback is provided.
+no payload sniffing or automatic native ID 0 fallback is provided.
 
 Policy-aware classic bridge helpers forward a complete `NativeRoutePolicy` to the
 core route API. The ordinary helpers retain the rejecting default for native
@@ -30,6 +30,19 @@ Omitted fields preserve defaults; invalid inputs return typed errors. See the
 [native capacity guide](../../configurable-streamer/docs/native-capacity.md) for
 configuration and ownership boundaries. Physical allocation and service checks
 remain binding-owned.
+
+`prepared::PreparedAddress` supplies a shared explicit source/sink and bounded
+frame catalog to bridge and role setup. Native constructors consume that catalog,
+and wire-specific endpoint helpers reserve exact egress routes before admission.
+They use the SDK's prepared core and generic receive workers. See the
+[prepared endpoint guide](docs/prepared.md) for logical capacities and configuration.
+`PreparedSession` supplies shared setup-owned sending/in-place admission for role
+frontends. The iceoryx2 constructor derives a fixed catalog-sized default sample
+extent and honors explicit capacity overrides after resolving the namespace. See
+[prepared setup](docs/prepared.md) for capacity and readiness boundaries.
+
+The session's explicitly allocating compatibility view retains native payload
+storage separately from the typed native allocation path.
 
 Disabled-default `publisher_prewarm` delegates exact/static publisher backing setup
 through the same capacity object; it requires explicit static allocation. It does

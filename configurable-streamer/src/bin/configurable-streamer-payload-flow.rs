@@ -16,7 +16,10 @@ use clap::{Parser, ValueEnum};
 use std::mem::{self, MaybeUninit};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use up_rust::selected_wire_user_api::ProtobufWire;
+use up_rust::ProtobufWire;
+#[path = "payload_flow/prepared.rs"]
+mod prepared;
+use prepared::{PreparedFlow, Received};
 #[cfg(any(
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",
@@ -28,9 +31,9 @@ use up_rust::selected_wire_user_api::ProtobufWire;
 use up_rust::UWithNativePrefixWire;
 use up_rust::{
     PayloadCodecIdentity, PayloadEncoding, StablePayloadInit, UCode, UFrameMetadata, UFrameView,
-    UMessage, UMessageBuilder, UOwnedFrame, UOwnedTransport, UStatus, UTxBuffer, UTxLoanSpec, UUri,
-    UZeroCopyRxLease, UZeroCopyTransport,
+    UMessage, UMessageBuilder, UOwnedFrame, UOwnedTransport, UStatus, UUri,
 };
+use up_streamer::PreparedEndpoint;
 #[cfg(feature = "iceoryx2-owned-frame")]
 use up_transport_iceoryx2_rust::BenchmarkOwnedIceoryx2Core;
 #[cfg(any(feature = "iceoryx2-zero-copy", feature = "iceoryx2-owned-frame"))]
@@ -44,7 +47,7 @@ use up_transport_zenoh::zenoh_config::Config as ZenohConfig;
 #[cfg(feature = "zenoh-owned-frame")]
 use up_transport_zenoh::ZenohOwnedCore;
 #[cfg(feature = "zenoh-zero-copy")]
-use up_transport_zenoh::ZenohZeroCopyCore;
+use up_transport_zenoh::{ZenohPreparedConfig, ZenohPreparedCore};
 #[cfg(any(
     feature = "zenoh-zero-copy",
     feature = "iceoryx2-zero-copy",
@@ -290,7 +293,7 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
                 Arc::new(
                     zenoh_zero_copy_core(cli)
                         .await?
-                        .with_selected_wire(ProtobufWire),
+                        .into_native_prefix_wire_transport(ProtobufWire),
                 ),
                 cli,
             )
@@ -302,7 +305,7 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
                 Arc::new(
                     zenoh_zero_copy_core(cli)
                         .await?
-                        .with_selected_wire(XcdrV2Wire),
+                        .into_native_prefix_wire_transport(XcdrV2Wire),
                 ),
                 cli,
             )
@@ -312,7 +315,7 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
         (FlowTransport::Iceoryx2, FlowWireFormat::Native) => {
             run_zero_copy_transport(
                 Arc::new(
-                    Iceoryx2PubSub::new()
+                    iceoryx2_prepared_core(cli)?
                         .into_stable_container_transport(cli.native.agreement()?.clone()),
                 ),
                 cli,
@@ -322,7 +325,9 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
         #[cfg(feature = "iceoryx2-zero-copy")]
         (FlowTransport::Iceoryx2, FlowWireFormat::Protobuf) => {
             run_zero_copy_transport(
-                Arc::new(Iceoryx2PubSub::new().with_selected_wire(ProtobufWire)),
+                Arc::new(
+                    iceoryx2_prepared_core(cli)?.into_native_prefix_wire_transport(ProtobufWire),
+                ),
                 cli,
             )
             .await
@@ -330,14 +335,16 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
         #[cfg(feature = "iceoryx2-zero-copy")]
         (FlowTransport::Iceoryx2, FlowWireFormat::Xcdrv2) => {
             run_zero_copy_transport(
-                Arc::new(Iceoryx2PubSub::new().with_selected_wire(XcdrV2Wire)),
+                Arc::new(
+                    iceoryx2_prepared_core(cli)?.into_native_prefix_wire_transport(XcdrV2Wire),
+                ),
                 cli,
             )
             .await
         }
         #[cfg(feature = "lola-transport")]
         (FlowTransport::Lola, FlowWireFormat::Native) => {
-            let core = lola_transport(cli)?.zero_copy_core();
+            let core = lola_prepared_core(cli)?;
             run_zero_copy_transport(
                 Arc::new(core.into_stable_container_transport(cli.native.agreement()?.clone())),
                 cli,
@@ -346,13 +353,21 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
         }
         #[cfg(feature = "lola-transport")]
         (FlowTransport::Lola, FlowWireFormat::Protobuf) => {
-            let core = lola_transport(cli)?.zero_copy_core();
-            run_zero_copy_transport(Arc::new(core.with_selected_wire(ProtobufWire)), cli).await
+            let core = lola_prepared_core(cli)?;
+            run_zero_copy_transport(
+                Arc::new(core.into_native_prefix_wire_transport(ProtobufWire)),
+                cli,
+            )
+            .await
         }
         #[cfg(feature = "lola-transport")]
         (FlowTransport::Lola, FlowWireFormat::Xcdrv2) => {
-            let core = lola_transport(cli)?.zero_copy_core();
-            run_zero_copy_transport(Arc::new(core.with_selected_wire(XcdrV2Wire)), cli).await
+            let core = lola_prepared_core(cli)?;
+            run_zero_copy_transport(
+                Arc::new(core.into_native_prefix_wire_transport(XcdrV2Wire)),
+                cli,
+            )
+            .await
         }
         #[cfg(not(all(
             feature = "zenoh-zero-copy",
@@ -376,10 +391,9 @@ async fn run_zero_copy(cli: &Cli) -> Result<(), UStatus> {
 )]
 async fn run_zero_copy_transport<T>(transport: Arc<T>, cli: &Cli) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
-    T::Tx: UTxBuffer,
-    T::Rx: UZeroCopyRxLease,
+    T: PreparedEndpoint,
 {
+    let transport = Arc::new(PreparedFlow::new(transport, cli).await?);
     match cli.role {
         FlowRole::PubSender => {
             let payload = payload_bytes(cli)?;
@@ -654,6 +668,13 @@ fn lola_default_rx_channel(cli: &Cli) -> Result<LolaDefaultRxChannel, UStatus> {
 
 #[cfg(any(feature = "lola-transport", feature = "lola-owned-frame"))]
 fn lola_transport(cli: &Cli) -> Result<Arc<UTransportLola>, UStatus> {
+    let config = lola_config(cli)?;
+    let response_config = lola_response_transport_config(cli, &config)?;
+    lola_transport_from_config(lola_default_rx_channel(cli)?, config, response_config)
+}
+
+#[cfg(any(feature = "lola-transport", feature = "lola-owned-frame"))]
+fn lola_config(cli: &Cli) -> Result<LolaTransportConfig, UStatus> {
     let config = LolaTransportConfig {
         local_authority: cli.local_authority.clone(),
         instance_specifier: cli.lola_instance_specifier.clone(),
@@ -667,19 +688,52 @@ fn lola_transport(cli: &Cli) -> Result<Arc<UTransportLola>, UStatus> {
             LolaTransportConfig::DEFAULT_PULL_MISMATCH_QUEUE_FULL_POLICY,
         mw_com_config_path: Some(required_lola_mw_com_config_path(cli)?),
     };
-    let response_config = lola_response_transport_config(cli, &config)?;
-    lola_transport_from_config(lola_default_rx_channel(cli)?, config, response_config)
+    Ok(config)
 }
 
 #[cfg(feature = "zenoh-zero-copy")]
-async fn zenoh_zero_copy_core(cli: &Cli) -> Result<ZenohZeroCopyCore, UStatus> {
+async fn zenoh_zero_copy_core(cli: &Cli) -> Result<Arc<ZenohPreparedCore>, UStatus> {
     let config = ZenohConfig::from_file(&cli.zenoh_config).map_err(|error| {
         invalid_config(format!(
             "failed to load Zenoh config {}: {error:?}",
             cli.zenoh_config
         ))
     })?;
-    ZenohZeroCopyCore::new(config, local_uri(cli)?.to_string()).await
+    configurable_streamer_wire_support::prepared::zenoh_core(
+        config,
+        &local_uri(cli)?.to_string(),
+        &prepared::catalog(cli)?,
+        ZenohPreparedConfig::default(),
+    )
+    .await
+}
+
+#[cfg(feature = "iceoryx2-zero-copy")]
+fn iceoryx2_prepared_core(
+    cli: &Cli,
+) -> Result<Arc<up_transport_iceoryx2_rust::Iceoryx2PreparedCore>, UStatus> {
+    let catalog = prepared::catalog(cli)?;
+    configurable_streamer_wire_support::prepared::iceoryx2_core(
+        up_transport_iceoryx2_rust::Iceoryx2PubSubConfig::default(),
+        &catalog,
+        16,
+        4,
+        &Default::default(),
+    )
+}
+
+#[cfg(feature = "lola-transport")]
+fn lola_prepared_core(cli: &Cli) -> Result<Arc<up_transport_lola_rust::LolaPreparedCore>, UStatus> {
+    let config = lola_config(cli)?;
+    let response = lola_response_transport_config(cli, &config)?;
+    configurable_streamer_wire_support::prepared::lola_core(
+        &config,
+        response.as_ref(),
+        &prepared::catalog(cli)?,
+        16,
+        4,
+        config.max_samples,
+    )
 }
 
 #[cfg(feature = "zenoh-owned-frame")]
@@ -802,24 +856,15 @@ async fn receive_owned_frame(
     allow(dead_code)
 )]
 async fn send_zero_copy_frame<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedFlow<T>>,
     metadata: UFrameMetadata,
     payload: &[u8],
-    payload_alignment: usize,
+    _payload_alignment: usize,
 ) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
-    T::Tx: UTxBuffer,
+    T: PreparedEndpoint,
 {
-    let mut tx = transport
-        .loan_validated_tx(UTxLoanSpec::payload(
-            metadata,
-            payload.len(),
-            payload_alignment,
-        )?)
-        .await?;
-    tx.payload_mut().copy_from_slice(payload);
-    transport.send_validated_zero_copy(tx).await
+    std::future::ready(transport.send(&metadata, payload)).await
 }
 
 #[cfg_attr(
@@ -831,14 +876,13 @@ where
     allow(dead_code)
 )]
 async fn send_zero_copy_frame_repeated<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedFlow<T>>,
     metadata: UFrameMetadata,
     payload: &[u8],
     cli: &Cli,
 ) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
-    T::Tx: UTxBuffer,
+    T: PreparedEndpoint,
 {
     send_zero_copy_frame_repeated_with_options(
         transport,
@@ -859,15 +903,14 @@ where
     allow(dead_code)
 )]
 async fn send_zero_copy_frame_repeated_with_options<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedFlow<T>>,
     metadata: UFrameMetadata,
     payload: &[u8],
     payload_alignment: usize,
     options: SendOptions,
 ) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
-    T::Tx: UTxBuffer,
+    T: PreparedEndpoint,
 {
     for attempt in 0..options.count {
         send_zero_copy_frame(transport, metadata.clone(), payload, payload_alignment).await?;
@@ -887,14 +930,13 @@ where
     allow(dead_code)
 )]
 async fn receive_zero_copy_payload<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedFlow<T>>,
     source_filter: &UUri,
     sink_filter: Option<&UUri>,
     timeout_ms: u64,
 ) -> Result<Vec<u8>, UStatus>
 where
-    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease,
+    T: PreparedEndpoint,
 {
     receive_zero_copy_frame(transport, source_filter, sink_filter, timeout_ms)
         .await
@@ -912,47 +954,17 @@ where
     allow(dead_code)
 )]
 async fn receive_zero_copy_frame<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedFlow<T>>,
     source_filter: &UUri,
     sink_filter: Option<&UUri>,
     timeout_ms: u64,
-) -> Result<T::Rx, UStatus>
+) -> Result<Received<<T::Core as up_rust::PreparedTransportCore>::Rx>, UStatus>
 where
-    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease,
+    T: PreparedEndpoint,
 {
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(UStatus::fail_with_code(
-                UCode::DeadlineExceeded,
-                "timed out waiting for zero-copy frame",
-            ));
-        }
-        match tokio::time::timeout(
-            remaining.min(Duration::from_millis(100)),
-            transport.receive_validated_zero_copy(source_filter, sink_filter),
-        )
+    transport
+        .receive(source_filter, sink_filter, timeout_ms)
         .await
-        {
-            Ok(Ok(frame)) => {
-                if let Some(profile) = transport.native_profile() {
-                    NativeContext::from_agreement(profile.clone())?.verify_view(&frame)?;
-                } else if frame.metadata().native_type_token().is_some() {
-                    return Err(invalid_config(
-                        "native receive has no configured adapter agreement",
-                    ));
-                }
-                return Ok(frame);
-            }
-            Ok(Err(error)) if error.code() == UCode::NotFound => {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Ok(Err(error)) => return Err(error),
-            Err(_) => {}
-        }
-    }
 }
 
 fn publish_metadata(cli: &Cli, source_authority: &str) -> Result<UFrameMetadata, UStatus> {

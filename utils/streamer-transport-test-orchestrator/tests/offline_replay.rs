@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Offline CLI replay must reject incomplete evidence without invoking host tools.
 use std::process::Command;

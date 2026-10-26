@@ -15,6 +15,7 @@ pub(crate) async fn send(
     interval: Duration,
     mut message: impl FnMut(u64) -> Result<UMessage, UStatus>,
 ) -> Result<u64, UStatus> {
+    super::startup::wait_for_start().await?;
     let mut sent = 0_u64;
     while count.is_none_or(|limit| sent < limit) {
         tokio::time::sleep(interval).await;

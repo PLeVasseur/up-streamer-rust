@@ -1,13 +1,11 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
+// SPDX-License-Identifier: Apache-2.0
+
 pub(crate) mod classic;
 pub(crate) mod cli;
 #[cfg(all(feature = "selected-wire-common", feature = "wire-formats"))]
 pub(crate) mod encoding;
-#[cfg(any(
-    feature = "iceoryx2-zero-copy",
-    feature = "iceoryx2-owned-frame",
-    feature = "lola-transport",
-    feature = "lola-owned-frame"
-))]
+#[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
 pub(crate) mod endpoint_config;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
 pub(crate) mod flow;
@@ -21,6 +19,7 @@ pub(crate) mod receive;
 pub(crate) mod rpc;
 #[cfg(feature = "payload-contract-large-fixtures")]
 pub(crate) mod sensor_context;
+pub(crate) mod startup;
 #[cfg(feature = "sustained-workload")]
 pub(crate) mod workload;
 

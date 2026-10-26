@@ -18,18 +18,18 @@ use clap::{Parser, ValueEnum};
 use common::cli;
 use common::payloads::NativeContext;
 use common::PublishReceiver;
+use configurable_streamer_wire_support::prepared::{
+    zenoh_core, PreparedAddress, PreparedEndpoint, PreparedSession,
+};
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::info;
-use up_rust::selected_wire_user_api::ProtobufWire;
+use up_rust::ProtobufWire;
 use up_rust::UWithNativePrefixWire;
-use up_rust::{
-    UCode, UListener, UOwnedTransport, UStatus, UTransport, UUri, UZeroCopyRxLease,
-    UZeroCopyTransport,
-};
+use up_rust::{UCode, UListener, UOwnedTransport, UStatus, UTransport, UUri};
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
-    UPTransportZenoh, ZenohOwnedCore, ZenohZeroCopyCore,
+    UPTransportZenoh, ZenohOwnedCore, ZenohPreparedConfig,
 };
 use up_wire_arrow::ArrowWire;
 use up_wire_omgidl::OmgIdlWire;
@@ -215,8 +215,48 @@ async fn run_selected_wire_subscriber(
     )?;
     let zenoh_config = zenoh_config_from_args(args)?;
 
-    let payload = match (route_family, args.encoding) {
-        (RouteFamily::OwnedFrame, Encoding::Native) => {
+    if route_family == RouteFamily::CopyMinimized {
+        // A receive-only catalog reserves no TX payload loan. The actual received
+        // SHM frame remains owned by the publishing session's provider.
+        let catalog = [common::endpoint_config::prepared_address(
+            &source_filter,
+            None,
+            0,
+            8,
+            false,
+        )];
+        let core = zenoh_core(
+            zenoh_config,
+            &local_uri.to_string(),
+            &catalog,
+            ZenohPreparedConfig::default(),
+        )
+        .await?;
+        print_selected_wire_ready();
+        macro_rules! receive {
+            ($transport:expr) => {
+                receive_zero_copy_payload(Arc::new($transport), &catalog, &source_filter, args)
+                    .await?
+            };
+        }
+        let payload = match args.encoding {
+            Encoding::Native => {
+                receive!(core.into_stable_container_transport(args.native.agreement()?.clone()))
+            }
+            Encoding::Protobuf => receive!(core.into_protobuf_transport()),
+            Encoding::Xcdrv2 => receive!(core.into_native_prefix_wire_transport(XcdrV2Wire)),
+            Encoding::Arrow => receive!(core.into_native_prefix_wire_transport(ArrowWire)),
+            Encoding::Omgidl => receive!(core.into_native_prefix_wire_transport(OmgIdlWire)),
+        };
+        println!(
+            "FLOW observed_payload_bytes={} role=subscriber",
+            payload.len()
+        );
+        return Ok(());
+    }
+
+    let payload = match args.encoding {
+        Encoding::Native => {
             let transport = Arc::new(
                 ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
                     .await?
@@ -225,7 +265,7 @@ async fn run_selected_wire_subscriber(
             print_selected_wire_ready();
             receive_owned_payload(&transport, &source_filter, args).await?
         }
-        (RouteFamily::OwnedFrame, Encoding::Protobuf) => {
+        Encoding::Protobuf => {
             let transport = Arc::new(
                 ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
                     .await?
@@ -234,7 +274,7 @@ async fn run_selected_wire_subscriber(
             print_selected_wire_ready();
             receive_owned_payload(&transport, &source_filter, args).await?
         }
-        (RouteFamily::OwnedFrame, Encoding::Xcdrv2) => {
+        Encoding::Xcdrv2 => {
             let transport = Arc::new(
                 ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
                     .await?
@@ -243,7 +283,7 @@ async fn run_selected_wire_subscriber(
             print_selected_wire_ready();
             receive_owned_payload(&transport, &source_filter, args).await?
         }
-        (RouteFamily::OwnedFrame, Encoding::Arrow) => {
+        Encoding::Arrow => {
             let transport = Arc::new(
                 ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
                     .await?
@@ -252,7 +292,7 @@ async fn run_selected_wire_subscriber(
             print_selected_wire_ready();
             receive_owned_payload(&transport, &source_filter, args).await?
         }
-        (RouteFamily::OwnedFrame, Encoding::Omgidl) => {
+        Encoding::Omgidl => {
             let transport = Arc::new(
                 ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
                     .await?
@@ -260,51 +300,6 @@ async fn run_selected_wire_subscriber(
             ) as Arc<dyn UOwnedTransport>;
             print_selected_wire_ready();
             receive_owned_payload(&transport, &source_filter, args).await?
-        }
-        (RouteFamily::CopyMinimized, Encoding::Native) => {
-            let transport = Arc::new(
-                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
-                    .await?
-                    .into_stable_container_transport(args.native.agreement()?.clone()),
-            );
-            print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args).await?
-        }
-        (RouteFamily::CopyMinimized, Encoding::Protobuf) => {
-            let transport = Arc::new(
-                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
-                    .await?
-                    .with_selected_wire(ProtobufWire),
-            );
-            print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args).await?
-        }
-        (RouteFamily::CopyMinimized, Encoding::Xcdrv2) => {
-            let transport = Arc::new(
-                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
-                    .await?
-                    .with_selected_wire(XcdrV2Wire),
-            );
-            print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args).await?
-        }
-        (RouteFamily::CopyMinimized, Encoding::Arrow) => {
-            let transport = Arc::new(
-                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
-                    .await?
-                    .with_selected_wire(ArrowWire),
-            );
-            print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args).await?
-        }
-        (RouteFamily::CopyMinimized, Encoding::Omgidl) => {
-            let transport = Arc::new(
-                ZenohZeroCopyCore::new(zenoh_config, local_uri.to_string())
-                    .await?
-                    .with_selected_wire(OmgIdlWire),
-            );
-            print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args).await?
         }
     };
 
@@ -363,16 +358,17 @@ async fn receive_owned_payload(
 }
 
 async fn receive_zero_copy_payload<T>(
-    transport: &Arc<T>,
+    transport: Arc<T>,
+    catalog: &[PreparedAddress],
     source_filter: &UUri,
     args: &Args,
 ) -> Result<Vec<u8>, UStatus>
 where
-    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease + Send + 'static,
+    T: PreparedEndpoint,
 {
+    let session = Arc::new(PreparedSession::new(transport, catalog)?);
     let frame = common::receive::zero_copy_with_ready(
-        transport,
+        &session,
         source_filter,
         None,
         args.timeout_ms,

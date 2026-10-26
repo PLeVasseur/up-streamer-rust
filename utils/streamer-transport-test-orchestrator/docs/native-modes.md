@@ -1,5 +1,24 @@
 # Native agreement mode controls
 
+Generated copy-minimized endpoints supply the shared `PreparedAddress` catalog
+before any native route is installed. The source island receives forward traffic;
+the sink island transmits it. RPC includes the reverse response address, with TX
+ownership reversed. Publication and notification need one forwarding direction;
+they do not declare an unused reverse route or a new publisher during traffic.
+Ordinary catalogs reserve up to 8192 payload bytes. Representative configuration
+replaces those logical extents with the actual sensor and encoded metadata sizes,
+retaining its existing physical slot and SHM budgets. Binding constructors retain
+physical geometry, service mapping and ownership responsibilities.
+
+Startup has distinct configuration and traffic-ready boundaries. After the bridge
+prints `READY streamer_configured`, the controller launches both peers before
+waiting for their matching checks. The finite active role waits on a fresh,
+controller-owned `source-start` file. The controller releases it only after the
+passive listener, active first-send barrier and final bridge readiness are observed.
+Each boundary is recorded separately; no application message is used as warm-up.
+Configured stabilization gates precede release. Sustained workers instead use
+their existing phase-control file, with all three actors ready before warm-up.
+
 Ordinary connectivity runs generate a Table agreement from the actual linked
 application inventory. `--native-single-type <exact-type-name>` instead selects
 one exact representation at revision zero through the same exporter and immutable
@@ -28,6 +47,6 @@ no retries. Negative cases require the named typed/policy rejection and no recei
 or forwarded payload; preflight rejection is reported as such. Each case records
 arguments, logs, source/dependency/driver identity and complete owned-process cleanup.
 Control cases have a separate denominator from connectivity and direct-pair rows.
-The two small native example representations have equal272-byte sizes but distinct
+The two small native example representations have equal 272-byte sizes but distinct
 descriptors; size equality never authorizes a typed borrow. Native middleware setup
 and backend storage guarantees remain documented by their respective bindings.

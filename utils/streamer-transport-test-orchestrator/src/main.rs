@@ -55,6 +55,8 @@ const ZENOH_ENDPOINT: &str = "tcp/127.0.0.1:7447";
 const ZENOH_SOURCE_PORT: u16 = 7447;
 const ZENOH_SINK_PORT: u16 = 7448;
 const READY_STREAMER: &str = "READY streamer_initialized";
+const READY_STREAMER_CONFIGURED: &str = "READY streamer_configured";
+const READY_SOURCE_WAITING: &str = "READY source_waiting";
 const READY_LISTENER: &str = "READY listener_registered";
 const READY_ZENOH_LISTENER: &str = "READY zenoh_listener_registered";
 const READY_VSOMEIP_SUBSCRIPTION: &str = "SUBSCRIBE ACK(";
@@ -4557,7 +4559,7 @@ fn run_row_attempt(
         lola_manifest_paths,
         lola_manifest_path,
         process_env,
-        active_env,
+        mut active_env,
         passive_env,
         native_library_paths,
     } = prepared::prepare_row(artifacts_root, bundle, row, cli, iteration, attempt)?;
@@ -4644,6 +4646,15 @@ fn run_row_attempt(
         }),
     )?;
     let streamer_started = Instant::now();
+    let source_start_file = row_dir.join("source-start");
+    anyhow::ensure!(
+        !source_start_file.exists(),
+        "source start marker must be fresh"
+    );
+    active_env.push((
+        "UPROTOCOL_SOURCE_START_FILE".into(),
+        source_start_file.display().to_string(),
+    ));
     let mut streamer = spawn_process(
         bundle,
         "streamer",
@@ -4663,16 +4674,15 @@ fn run_row_attempt(
     let result = (|| -> Result<()> {
         let readiness = wait_for_marker(
             &mut streamer,
-            READY_STREAMER,
+            READY_STREAMER_CONFIGURED,
             Duration::from_secs(10),
             cancellation,
         );
-        timings.streamer_readiness_us = duration_us(streamer_started.elapsed());
         let readiness = readiness?;
         timings.readiness.push(ReadinessEvidence {
-            phase: "streamer_readiness",
-            contract: "streamer_initialized_marker",
-            target: READY_STREAMER.to_string(),
+            phase: "streamer_configuration",
+            contract: "configuration_before_native_peer_setup",
+            target: READY_STREAMER_CONFIGURED.to_string(),
             timeout_ms: Some(10_000),
             checks: readiness.checks,
             configured_stabilization_ms: 0,
@@ -4703,6 +4713,29 @@ fn run_row_attempt(
             "passive".to_string(),
             passive.log_path.display().to_string(),
         );
+        // Both peers reserve their native resources before waiting for matching.
+        // The active role cannot publish until the controller releases its file.
+        let active_started = Instant::now();
+        let active_spec = role_command(
+            row,
+            true,
+            &zenoh_config_paths,
+            &vsomeip_config_paths,
+            lola_manifest_paths.as_ref().map(|paths| paths.role(true)),
+            &lola_run_namespace,
+            cli,
+        )?;
+        let mut active = spawn_process(
+            bundle,
+            "active",
+            &bundle.executable(&active_spec.binary)?,
+            &active_spec.args,
+            repo_root,
+            &active_env,
+            &row_dir,
+            Some(&namespace),
+        )?;
+        logs.insert("active".to_string(), active.log_path.display().to_string());
         let (passive_marker, passive_contract) = passive_readiness_contract(row);
         let readiness = wait_for_marker(
             &mut passive,
@@ -4725,7 +4758,7 @@ fn run_row_attempt(
             record_post_ready_gate(
                 &mut timings,
                 "lola_listener",
-                "role_ready_plus_configurable_pre_active_gate",
+                "role_ready_plus_configurable_source_release_gate",
                 cli.lola_pre_active_stabilization_ms,
                 cancellation,
             )?;
@@ -4757,27 +4790,38 @@ fn run_row_attempt(
             )?;
         }
 
-        let active_started = Instant::now();
-        let active_spec = role_command(
-            row,
-            true,
-            &zenoh_config_paths,
-            &vsomeip_config_paths,
-            lola_manifest_paths.as_ref().map(|paths| paths.role(true)),
-            &lola_run_namespace,
-            cli,
-        )?;
-        let mut active = spawn_process(
-            bundle,
-            "active",
-            &bundle.executable(&active_spec.binary)?,
-            &active_spec.args,
-            repo_root,
-            &active_env,
-            &row_dir,
-            Some(&namespace),
-        )?;
-        logs.insert("active".to_string(), active.log_path.display().to_string());
+        for (process, marker, phase, contract) in [
+            (
+                &mut active,
+                READY_SOURCE_WAITING,
+                "source_start_barrier",
+                "source_held_before_first_send",
+            ),
+            (
+                &mut streamer,
+                READY_STREAMER,
+                "streamer_readiness",
+                "streamer_initialized_marker",
+            ),
+        ] {
+            let readiness = wait_for_marker(
+                process,
+                marker,
+                remaining_timeout(started, cli.scenario_timeout_secs, phase)?,
+                cancellation,
+            )?;
+            timings.readiness.push(ReadinessEvidence {
+                phase,
+                contract,
+                target: marker.into(),
+                timeout_ms: Some(cli.scenario_timeout_secs.saturating_mul(1000)),
+                checks: readiness.checks,
+                configured_stabilization_ms: 0,
+                duration_us: readiness.duration_us,
+            });
+        }
+        timings.streamer_readiness_us = duration_us(streamer_started.elapsed());
+        atomic_write(&source_start_file, b"START\n")?;
 
         if requires_vsomeip_subscription_acceptance(row) {
             let readiness = wait_for_marker(
@@ -5445,10 +5489,7 @@ fn push_endpoint(
     role: RoleStyle,
     native_paths: Option<&NativeProfilePaths>,
 ) {
-    let forwarding_routes = if role == RoleStyle::NotifierNotifyee
-        && side == "sink"
-        && profile.physical == PhysicalTransport::Vsomeip
-    {
+    let forwarding_routes = if role != RoleStyle::ClientServerRpc && side == "sink" {
         Vec::new()
     } else {
         vec![json!({ "endpoint": forward_endpoint, "wire_format": encoding.wire_format() })]
@@ -5468,6 +5509,7 @@ fn push_endpoint(
     }
     if profile.kind == EndpointKind::CopyMinimized {
         value["copy_minimized_payload_alignment"] = json!(8);
+        value["prepared_routes"] = json!(prepared::endpoint_catalog(role, side));
     }
     if profile.physical == PhysicalTransport::Zenoh {
         value["zenoh_config_file"] = json!(zenoh_config_paths
@@ -10957,6 +10999,80 @@ mod tests {
             "arrow"
         );
         fs::remove_dir_all(root).expect("remove config test root");
+    }
+
+    #[test_case::test_case(RoleStyle::PublisherSubscriber; "publication")]
+    #[test_case::test_case(RoleStyle::NotifierNotifyee; "notification")]
+    #[test_case::test_case(RoleStyle::ClientServerRpc; "correlated request response")]
+    fn generated_native_config_reserves_only_actual_transmit_directions(role: RoleStyle) {
+        use configurable_streamer_wire_support::prepared::PreparedAddress;
+        let row = matrix_rows()
+            .into_iter()
+            .find(|row| {
+                row.source.id == "iceoryx2-copy-minimized"
+                    && row.sink.id == "zenoh-copy-minimized"
+                    && row.role == role
+                    && row.encoding == WireEncoding::Protobuf
+            })
+            .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        write_config(
+            Path::new("/workspace"),
+            &row,
+            &path,
+            &ZenohConfigPaths::new(root.path()),
+            &VsomeipConfigPaths::new(root.path()),
+            None,
+            "unused",
+        )
+        .unwrap();
+        let config: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        let input = &config["transports"]["iceoryx2"]["endpoints"][0];
+        let output = &config["transports"]["zenoh"]["endpoints"][0];
+        let source: Vec<PreparedAddress> =
+            serde_json::from_value(input["prepared_routes"].clone()).unwrap();
+        let sink: Vec<PreparedAddress> =
+            serde_json::from_value(output["prepared_routes"].clone()).unwrap();
+        assert_eq!(
+            source.len(),
+            if role == RoleStyle::ClientServerRpc {
+                2
+            } else {
+                1
+            }
+        );
+        assert_eq!(source.len(), sink.len());
+        assert_eq!(input["forwarding_routes"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            output["forwarding_routes"].as_array().unwrap().len(),
+            usize::from(role == RoleStyle::ClientServerRpc)
+        );
+        for (receive, transmit) in source.iter().zip(&sink) {
+            let a = receive
+                .reservation()
+                .expect("SDK validates generated source catalog");
+            let b = transmit
+                .reservation()
+                .expect("SDK validates generated sink catalog");
+            assert_eq!(a.source, b.source);
+            assert_eq!(a.sink, b.sink);
+            assert_ne!(receive.transmit, transmit.transmit);
+            assert_eq!(a.limits.max_payload_len, 8192);
+            if role == RoleStyle::PublisherSubscriber {
+                assert!(a.sink.is_none());
+            } else {
+                assert!(a.sink.is_some());
+            }
+        }
+        assert!(!source[0].transmit);
+        assert!(sink[0].transmit);
+        if role == RoleStyle::ClientServerRpc {
+            assert_eq!(source[0].source, source[1].sink.clone().unwrap());
+            assert_eq!(source[0].sink.clone().unwrap(), source[1].source);
+            assert!(source[1].transmit);
+            assert!(!sink[1].transmit);
+        }
     }
 
     #[test]

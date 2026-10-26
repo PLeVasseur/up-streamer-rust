@@ -232,8 +232,7 @@ pub(super) fn configure_endpoints(
     directory: &Path,
 ) -> Result<Geometry> {
     use up_rust::{
-        NativePrefixFrameMetadataCodec, StableContainerWireFormat, UWireMetadataCodec,
-        UWireMetadataContext,
+        StableContainerWire, UFrameFieldsMetadataCodec, UWireMetadataCodec, UWireMetadataContext,
     };
     let sensor = fixture(row)?;
     let profile = document.resolve().map_err(|e| anyhow!("{e}"))?;
@@ -250,16 +249,13 @@ pub(super) fn configure_endpoints(
     )
     .map_err(|e| anyhow!("{e}"))?;
     let metadata =
-        up_rust::frame::metadata::try_project_umessage_to_frame_metadata_with_native_profile(
+        up_rust::frame::metadata::try_project_umessage_to_frame_metadata_with_native_agreement(
             &message, &agreement,
         )
         .map_err(|e| anyhow!("{e}"))?;
-    let encoded = NativePrefixFrameMetadataCodec
+    let encoded = UFrameFieldsMetadataCodec
         .encode_frame_metadata(
-            UWireMetadataContext::from_wire::<
-                StableContainerWireFormat,
-                NativePrefixFrameMetadataCodec,
-            >(),
+            UWireMetadataContext::from_wire::<StableContainerWire, UFrameFieldsMetadataCodec>(),
             &metadata,
         )
         .map_err(|e| anyhow!("{e}"))?;
@@ -288,6 +284,28 @@ pub(super) fn configure_endpoints(
         identity: expected,
     };
     let mut config: serde_json::Value = read(path)?;
+    for transport in config["transports"]
+        .as_object_mut()
+        .context("missing transports")?
+        .values_mut()
+    {
+        for endpoint in transport["endpoints"]
+            .as_array_mut()
+            .context("missing endpoint list")?
+        {
+            if endpoint["routing_mode"] == "copy_minimized" {
+                let routes = endpoint["prepared_routes"]
+                    .as_array_mut()
+                    .context("missing prepared sensor catalog")?;
+                anyhow::ensure!(!routes.is_empty(), "empty prepared sensor catalog");
+                for route in routes {
+                    route["max_metadata_len"] = json!(geometry.metadata_bytes);
+                    route["max_payload_len"] = json!(geometry.payload_bytes);
+                    route["payload_alignment"] = json!(geometry.alignment);
+                }
+            }
+        }
+    }
     let ice = config
         .pointer_mut("/transports/iceoryx2/endpoints")
         .and_then(|v| v.as_array_mut())
@@ -507,7 +525,7 @@ pub(super) fn audit_resources(
         if plan.mode != Mode::Diagnostic {
             anyhow::ensure!(
                 duration >= 86.0 && points.len() >= 80 && slope <= limit,
-                "{group}/{phase}: incomplete90s window or PSS slope {slope} exceeds {limit}"
+                "{group}/{phase}: incomplete 90 s window or PSS slope {slope} exceeds {limit}"
             );
         }
         slopes.push(json!({"group":group,"phase":phase,"duration":duration,"samples":points.len(),"bytes_per_minute":slope,"limit":limit}));

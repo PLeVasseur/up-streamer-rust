@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Shared DDS role flow over endpoints constructed in each role binary.
 
@@ -24,6 +25,8 @@ mod proof;
 #[cfg(feature = "payload-contract-large-fixtures")]
 #[path = "sensor_context.rs"]
 mod sensor_context;
+#[path = "startup.rs"]
+mod startup;
 #[cfg(feature = "sustained-workload")]
 #[path = "workload.rs"]
 mod workload;
@@ -258,6 +261,7 @@ pub(crate) async fn run_classic(
     }
     if matches!(role, Role::Publisher | Role::Notifier) {
         transport.wait_ready(2, timeout(args))?;
+        startup::wait_for_start().await?;
         let message = outbound_message(role, args)?;
         proof::send(transport.as_ref(), message.clone()).await?;
         transport.wait_acknowledged(timeout(args))?;
@@ -273,6 +277,7 @@ pub(crate) async fn run_classic(
     println!("READY listener_registered");
     if matches!(role, Role::Client) {
         transport.wait_ready(2, timeout(args))?;
+        startup::wait_for_start().await?;
         proof::send(transport.as_ref(), outbound_message(role, args)?).await?;
     }
     let message = receive(&mut rx, timeout(args), "classic message").await?;
@@ -305,6 +310,7 @@ pub(crate) async fn run_owned(
 ) -> Result<(), UStatus> {
     if matches!(role, Role::Publisher | Role::Notifier) {
         transport.wait_ready(2, timeout(args))?;
+        startup::wait_for_start().await?;
         let frame = frame_from_message(&outbound_message(role, args)?, args)?;
         let len = frame.payload_bytes().len();
         proof::send_owned(transport.as_ref(), frame).await?;
@@ -321,6 +327,7 @@ pub(crate) async fn run_owned(
     println!("READY listener_registered");
     if matches!(role, Role::Client) {
         transport.wait_ready(2, timeout(args))?;
+        startup::wait_for_start().await?;
         proof::send_owned(
             transport.as_ref(),
             frame_from_message(&outbound_message(role, args)?, args)?,
@@ -372,9 +379,8 @@ pub(crate) async fn run_encoded_owned<W>(
     ) -> up_rust::UNativePrefixWireTransport<DdsEncodedOwnedCore, W>,
 ) -> Result<(), UStatus>
 where
-    W: up_rust::wire_implementer_api::UWire + Copy + Send + Sync + 'static,
-    up_rust::wire_implementer_api::NativePrefixFrameMetadataCodec:
-        up_rust::wire_implementer_api::UWireMetadataCodecFor<W>,
+    W: up_rust::UWire + Copy + Send + Sync + 'static,
+    up_rust::UFrameFieldsMetadataCodec: up_rust::UWireMetadataCodecFor<W>,
 {
     let required_matches = usize::from(matches!(
         role,
@@ -383,6 +389,7 @@ where
     core.wait_ready(required_matches, timeout(args))?;
     let transport = Arc::new(configure(core));
     if matches!(role, Role::Publisher | Role::Notifier) {
+        startup::wait_for_start().await?;
         let frame = frame_from_message(&outbound_message(role, args)?, args)?;
         let payload_len = frame.payload_bytes().len();
         proof::send_owned(transport.as_ref(), frame).await?;
@@ -398,6 +405,7 @@ where
         .await?;
     println!("READY listener_registered");
     if matches!(role, Role::Client) {
+        startup::wait_for_start().await?;
         proof::send_owned(
             transport.as_ref(),
             frame_from_message(&outbound_message(role, args)?, args)?,

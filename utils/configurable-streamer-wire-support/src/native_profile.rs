@@ -124,13 +124,10 @@ pub fn matrix_native_inventory() -> Result<InventoryArtifact, UStatus> {
 /// Coordinated identity declarations for this validation deployment.
 pub fn matrix_identity_declarations() -> IdentityDeclarations {
     let wires = [
-        (
-            WireNamespace::Wire,
-            up_rust::StableContainerWireFormat::WIRE_ID,
-        ),
+        (WireNamespace::Wire, up_rust::StableContainerWire::WIRE_ID),
         (
             WireNamespace::PayloadFamily,
-            up_rust::StableContainerWireFormat::PAYLOAD_FAMILY_ID,
+            up_rust::StableContainerWire::PAYLOAD_FAMILY_ID,
         ),
     ]
     .into_iter()
@@ -291,7 +288,7 @@ impl NativeDeploymentConfig {
             .artifact(&self.local_endpoint)
             .map_err(|error| invalid(error.to_string()))?;
         artifact
-            .require_wire::<up_rust::StableContainerWireFormat, up_rust::NativePrefixFrameMetadataCodec>()
+            .require_wire::<up_rust::StableContainerWire, up_rust::UFrameFieldsMetadataCodec>()
             .map_err(|error| invalid(error.to_string()))?;
         let agreement = loaded
             .agreement(&self.route, &self.local_endpoint, &self.peer_endpoint)
@@ -487,7 +484,7 @@ impl<T: StablePayload> NativePayloadContext<T> {
         &self,
         message: &up_rust::UMessage,
     ) -> Result<up_rust::UFrameMetadata, UStatus> {
-        up_rust::frame::metadata::try_project_umessage_to_frame_metadata_with_native_profile(
+        up_rust::frame::metadata::try_project_umessage_to_frame_metadata_with_native_agreement(
             message,
             self.agreement()?,
         )
@@ -507,7 +504,7 @@ impl<T: StablePayload> NativePayloadContext<T> {
     /// Checks a view before copying opaque bytes, without constructing a typed
     /// reference. Typed access additionally uses the loan API below.
     pub fn verify_view(&self, frame: &impl up_rust::UFrameView) -> Result<(), UStatus> {
-        if let Some(retained) = frame.native_profile() {
+        if let Some(retained) = frame.native_agreement() {
             if retained.profile() != self.agreement()?.profile() {
                 return Err(invalid(
                     "native receive profile generation differs from worker context",
@@ -892,7 +889,7 @@ mod tests {
         fn metadata(&self) -> &UFrameMetadata {
             self.frame.metadata()
         }
-        fn native_profile(&self) -> Option<&NativeProfileAgreement> {
+        fn native_agreement(&self) -> Option<&NativeProfileAgreement> {
             Some(&self.profile)
         }
         fn payload_len(&self) -> usize {
@@ -1059,7 +1056,7 @@ mod tests {
                 .identity_for(&SelectedWireNativePayload::native_representation())
                 .unwrap()
                 .encoding(),
-            PayloadEncoding::IMPLICIT
+            PayloadEncoding::CONTRACT_DEFINED
         );
         assert!(agreement
             .identity_for(&NativeFlowPayload::native_representation())
@@ -1067,7 +1064,7 @@ mod tests {
         let context =
             NativePayloadContext::<SelectedWireNativePayload>::from_agreement(agreement).unwrap();
         let message = UMessageBuilder::publish(topic())
-            .build_with_payload(vec![0; 272], PayloadEncoding::IMPLICIT)
+            .build_with_payload(vec![0; 272], PayloadEncoding::CONTRACT_DEFINED)
             .unwrap();
         assert!(context.verify_classic(&message).is_ok());
         let metadata = context.project_classic(&message).unwrap();

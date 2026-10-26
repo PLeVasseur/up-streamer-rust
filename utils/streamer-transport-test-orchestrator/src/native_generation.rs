@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Immutable evidence for application-linked native agreement generation.
 
@@ -168,7 +169,7 @@ impl NativeGeneration {
         }
         profile
             .0
-            .require_wire::<up_rust::StableContainerWireFormat, up_rust::NativePrefixFrameMetadataCodec>()?;
+            .require_wire::<up_rust::StableContainerWire, up_rust::UFrameFieldsMetadataCodec>()?;
         Ok(())
     }
 

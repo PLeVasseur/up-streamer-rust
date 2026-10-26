@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Bounded application receive queues retaining the supplied message or storage lease.
 //!
@@ -105,7 +106,7 @@ impl<T> Drop for Delivery<T> {
 
 /// Creates a bounded inbox without constructing or configuring any transport.
 ///
-/// Capacity is1..=65,536. Physical transport/loan capacity remains an independently
+/// Capacity is 1..=65,536. Physical transport/loan capacity remains an independently
 /// configured binding contract; this function cannot enlarge a middleware pool.
 pub fn bounded<T>(capacity: usize) -> Result<(Sender<T>, Receiver<T>)> {
     ensure!(

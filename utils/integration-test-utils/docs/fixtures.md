@@ -18,7 +18,7 @@ The discrepancy assertion requires nonzero counts and treats its slack argument 
 a fraction of sent messages. The ordering assertion groups by source and message
 kind and permits equal UUID timestamps; it does not claim strict sequence ordering.
 
-URI helpers build local/remote service fixtures at major version1/resource2.
+URI helpers build local/remote service fixtures at major version 1/resource 2.
 Message helpers derive event or resource-zero recipient URIs as needed and produce
 payloadless examples. Response helpers create fixture correlation UUIDs rather than
 replying to a captured request. Use actual request metadata for protocol-level RPC tests.

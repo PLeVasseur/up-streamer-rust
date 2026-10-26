@@ -172,14 +172,14 @@ sustained-workload = ["flow-evidence", "selected-wire-common", "wire-formats", "
 flow-evidence = ["dep:streamer-flow-evidence"]
 selected-wire-common = ["up-rust/owned-frame-transport", "up-rust/selected-wire-user-api", "dep:configurable-streamer-wire-support"]
 wire-formats = ["up-wire-arrow", "up-wire-omgidl", "up-wire-xcdrv2"]
-zenoh-transport = ["selected-wire-common", "wire-formats", "up-transport-zenoh", "up-transport-zenoh/benchmark-owned", "up-transport-zenoh/zero-copy", "zenoh"]
+zenoh-transport = ["selected-wire-common", "wire-formats", "up-transport-zenoh", "up-transport-zenoh/benchmark-owned", "up-transport-zenoh/zero-copy", "zenoh", "configurable-streamer-wire-support/zenoh-zero-copy"]
 zenoh-owned-frame = ["selected-wire-common", "zenoh-transport", "up-transport-zenoh/benchmark-owned", "up-wire-xcdrv2"]
-zenoh-zero-copy = ["selected-wire-common", "zenoh-transport", "up-transport-zenoh/zero-copy", "up-wire-xcdrv2"]
+zenoh-zero-copy = ["selected-wire-common", "zenoh-transport", "up-transport-zenoh/zero-copy", "up-wire-xcdrv2", "configurable-streamer-wire-support/zenoh-zero-copy"]
 zenoh-selected-wire = ["zenoh-owned-frame", "zenoh-zero-copy"]
 iceoryx2-owned-frame = ["selected-wire-common", "wire-formats", "up-transport-iceoryx2-rust", "up-transport-iceoryx2-rust/benchmark-owned", "configurable-streamer-wire-support/iceoryx2-owned-frame"]
 iceoryx2-zero-copy = ["selected-wire-common", "wire-formats", "up-transport-iceoryx2-rust", "configurable-streamer-wire-support/iceoryx2-zero-copy"]
 iceoryx2-selected-wire = ["iceoryx2-owned-frame", "iceoryx2-zero-copy"]
-lola-transport = ["selected-wire-common", "wire-formats", "up-transport-lola-rust"]
+lola-transport = ["selected-wire-common", "wire-formats", "up-transport-lola-rust", "configurable-streamer-wire-support/lola-transport"]
 lola-owned-frame = ["lola-transport", "up-transport-lola-rust/benchmark-owned"]
 lola-zero-copy = ["lola-transport"]
 lola-selected-wire = ["lola-owned-frame", "lola-zero-copy"]
@@ -207,7 +207,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "958ed28857e13edc27d7141327d5a791fa095b6e", optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "1a8d0e75a1de688464f27b95e573f06847f4a837", optional = true }
 up-transport-zenoh = { workspace = true, optional = true }
 up-transport-vsomeip = { workspace = true, optional = true }
 up-transport-mqtt5 = { workspace = true, optional = true }

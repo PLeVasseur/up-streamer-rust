@@ -1,10 +1,20 @@
 # Streamer Transport Test Orchestrator
 
 Maintained workload deployments explicitly configure Zenoh reliable publications
-with blocking congestion control. Finite counted offers are separated by50ms after
+with blocking congestion control. Finite counted offers are separated by 50 ms after
 send completion; each workload retains its declared deadline and loss criteria. See the
 [worker guide](../../example-streamer-uses/docs/sustained-workloads.md).
-Finite inbox capacity is5 to admit the entire finite backend burst.
+Finite inbox capacity is 5 to admit the entire finite backend burst.
+
+Generated native endpoints include exact setup-time RX/TX catalogs. Publication
+and notification configure the source-to-sink direction; RPC also reserves the
+correlated return direction. Representative catalogs use the fixture's actual
+metadata/payload extents while retaining the declared native pool budgets. See
+[native setup and mode controls](docs/native-modes.md).
+Peer setup starts after bridge configuration readiness, with first traffic held
+until receiver and final bridge readiness. Finite runs use a fresh source-release
+file; sustained runs keep their phase-control barrier. These stages are recorded
+separately so peer matching cannot wait on a process the controller has not started.
 
 New representative plans explicitly require a post-warmup owning-pool page
 census. Raw Linux mapping snapshots and process identities are retained and
@@ -466,8 +476,8 @@ deployment cards and reject this connectivity-only override. See the
 ## Representative sensor workload
 
 `--soak conservation` uses the fixed thirty mixed pub/sub/RPC rows for a finite
-correctness lane: five unique messages per source at50ms, full receiver admission
-and1000ms drain, zero rejection/loss/unaccounted and five paired RPC completions.
+correctness lane: five unique messages per source at 50 ms, full receiver admission
+and 1000 ms drain, zero rejection/loss/unaccounted and five paired RPC completions.
 One-second warm-up and inactive transition windows preserve controller ordering;
 finite sources offer only during normal and stop at five. No slow-loss allowance
 or resource-growth inference applies to this short run. Its denominator is separate
@@ -481,7 +491,7 @@ JSON field. No approximate-equality allowance bypasses resource thresholds or
 journal/source identity checks.
 
 Representative worker/backend builds retain the isolated `matrix` output/profile
-and explicit current compiler, but use opt-level3 for full-sized initialization,
+and explicit current compiler, but use opt-level 3 for full-sized initialization,
 semantic checks and evidence hashing. The ordinary connectivity/fast build policy
 is unchanged. Build receipts record that override and bind actual executable hashes;
 `--skip-build` requires externally frozen matching build evidence. This is a
@@ -490,26 +500,26 @@ compiler-role choice, not an alteration of the rate or acceptance thresholds.
 Build the maintained orchestrator with `payload-contract-large-fixtures`, then
 select `--soak-lane representative` together with `--soak diagnostic`, `calibration`
 or `acceptance`. Acceptance requires matching concurrent calibration. Ordinary
-`--soak-lane fast` keeps the existing30-stream workload. The representative cohort
+`--soak-lane fast` keeps the existing 30-stream workload. The representative cohort
 uses four full LiDAR and four full camera streams, each iceoryx2→Streamer→Zenoh,
 with independent providers and exact typed deployment identities. Diagnostic uses
-one of each and shorter10/20/20/10-second phases; it cannot qualify the full lane.
+one of each and shorter 10/20/20/10-second phases; it cannot qualify the full lane.
 
-Full representative timing is120s warm-up,180s normal,180s delayed,30s drain within
-600s. The offer rate is2/s and delayed processing1000ms, queue4, admittedRX≤5,
-transientRX≤1 and TX≤1. Generated `sensor-geometry.json` records actual encoded
+Full representative timing is 120 s warm-up, 180 s normal, 180 s delayed, 30 s drain within
+600 s. The offer rate is 2/s and delayed processing 1000 ms, queue 4, admitted RX ≤ 5,
+transient RX ≤ 1 and TX ≤ 1. Generated `sensor-geometry.json` records actual encoded
 metadata plus alignment slack and full fixture payload for the static iceoryx2
 slice; the two actual directed/sinkless native registrations require
-service2subscribers/buffer2/borrowed2/history0/TX1, giving nine slots. Source readiness
+service 2 subscribers/buffer 2/borrowed 2/history 0/TX 1, giving nine slots. Source readiness
 requires both native subscribers; no extra monitoring subscriber is attached. Zenoh
-providers are48MiB per LiDAR and96MiB per camera stream. Each registration receives
+providers are 48 MiB per LiDAR and 96 MiB per camera stream. Each registration receives
 its own iceoryx2 Sample; native fan-out retains shared chunks without a local
 sample-sharing box. A retained receive lease also keeps its native port alive after
 logical unregister.
 
-Resource samples include PID/start-time/group identity. The final90s of normal and
+Resource samples include PID/start-time/group identity. The final 90 s of normal and
 delayed phases use per source/sink/bridge process-group PSS least-squares slopes,
-bounded at1/2MiB per minute respectively. Controller and launcher PSS are reported
+bounded at 1/2 MiB per minute respectively. Controller and launcher PSS are reported
 separately, with complete inclusive sums retained. Missing samples or threshold
 breaches fail; the diagnostic's short windows report slopes without qualifying
-those90s limits. Fixed aggregate memory/FD/thread safety bounds remain in force.
+those 90 s limits. Fixed aggregate memory/FD/thread safety bounds remain in force.

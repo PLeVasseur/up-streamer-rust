@@ -1,5 +1,26 @@
 # Role entrypoints and shared flow
 
+Finite connectivity controllers may set `UPROTOCOL_SOURCE_START_FILE` on the
+active role. After setup it announces `READY source_waiting` and waits for the
+controller to atomically write exactly `START` followed by a newline. Missing
+release times out after 30 seconds; malformed or unreadable markers fail without
+publication. The wait completes once per process, before first traffic; it sends
+no warm-up samples or first-client RPC requests. Ordinary examples omit the
+variable. Sustained workers retain their existing phase-control barrier.
+Controllers must use a fresh file and release only after the passive receiver and
+bridge report readiness. Request factories run after this barrier so setup does
+not consume the new request's TTL.
+
+Prepared native construction uses the shared
+[`PreparedAddress` catalog and `PreparedSession`](../../utils/configurable-streamer-wire-support/docs/prepared.md).
+Exact TX destinations, including the client's response address, are reserved
+before traffic. Finite receive owns one bounded native inbox and its physical
+subscription; it does not insert a second binding mailbox or spawn a task for
+each sample. RPC response registration precedes publication. Header identity and
+decoded source/sink filters are checked before compatibility metadata is exposed.
+The diagnostic compatibility view owns decoded metadata but retains the actual
+native frame/payload, so it is distinct from the typed in-place allocation path.
+
 For optional iceoryx2 slice/allocation/subscriber/TX controls, see
 [native capacity configuration](../../configurable-streamer/docs/native-capacity.md).
 Those options are visible in every iceoryx2 frontend and applied to the real
@@ -19,8 +40,8 @@ backend constructors remain in the entrypoint.
 
 LoLa roles retain their explicit primary/optional RPC-response channel settings.
 Reusable option validation requires a canonical complete MW COM manifest shared
-by both channels; each role constructs `UTransportLola` and chooses its native or
-owned endpoint locally. Hidden compatibility transport/role selectors and existing
+by both channels; each role constructs either a prepared native core or an owned
+`UTransportLola` endpoint locally. Hidden compatibility transport/role selectors and existing
 defaults remain available. See the
 [LoLa binding documentation](https://github.com/PLeVasseur/up-transport-lola-rust#readme)
 for physical sample configuration, setup and storage lifecycle requirements.
@@ -97,7 +118,10 @@ concrete backend/wire constructors while sharing actual message flow:
   unregister after finite receipt or timeout, retain the received frame/lease
   through cleanup and validate native representations before inspection.
 - `common/rpc.rs` owns the selected-wire client's exchange loop, response polling,
-  payload comparison and cancellation/reaping when sending fails. Its configured
+  correlation, payload comparison and cleanup when sending fails. Prepared native
+  clients attach one response receiver before the first request and retain it
+  across exchanges. The owned compatibility control cancels/reaps its receive
+  task on failed sends. The configured
   100ms receive-start settle delay, timeout, repeated request identity, finite
   send count and zero-count unbounded exchange policy are retained. This settle
   delay is existing connectivity behavior, not a conservation readiness proof.
@@ -106,6 +130,12 @@ Publisher/subscriber/client custom URI fields and payload factories remain
 distinct from the generic fixture addresses. Owned selected publisher repeats
 retain their immediate-send policy; native repeats retain the configured interval.
 Classic counter exhaustion and target-size count overflow fail with typed errors.
+The three custom Zenoh roles also use the shared prepared constructor/session.
+Publishers reserve their actual encoded payload extent; clients reserve request
+TX plus response RX before admission. Receive-only entries reserve no TX payload
+loan, and received frames retain the publisher's native owner through cleanup.
+The ordinary `zenoh-transport` feature includes this shared setup, so selected
+wire examples do not rely on another workspace member enabling it.
 
 The finite iceoryx2/LoLa connectivity role repeats one message identity for `--send-count`
 (with zero retaining the existing minimum of one send). Passive connectivity

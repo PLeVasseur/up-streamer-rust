@@ -5,6 +5,9 @@ Finite worker plans can exercise full-window five-message conservation through
 the same endpoints; see [workload workers](docs/sustained-workloads.md) for unique
 identity, pacing and receiver drain behavior.
 The generic native worker frontend also honors `RUST_LOG` for backend diagnostics.
+Finite controllers can hold the active role's first send with
+`UPROTOCOL_SOURCE_START_FILE`; see [role startup](docs/role-frontends.md) for the
+readiness marker, exact release bytes and timeout. Normal examples omit it.
 
 The optional `payload-contract-large-fixtures` feature enables full SDK sensor
 representations in explicitly configured native pub/sub worker plans. See
@@ -23,6 +26,14 @@ connectivity semantics and the boundary with sustained workloads.
 All six Zenoh roles also share classic/selected-wire send, receive and RPC flow;
 their local configuration, defaults and wire constructors stay visible in the
 entrypoints. The role guide describes timing, readiness and cleanup semantics.
+Prepared native roles share explicit address/capacity catalogs and `PreparedSession`
+setup with the configurable frontend. Native receivers attach before READY and
+before publishing a request that needs a response. Finite compatibility controls
+retain the actual native frame while decoding metadata for diagnostic output;
+this allocating conversion is separate from in-place typed allocation evidence.
+The custom Zenoh publisher, subscriber and client use that same setup while
+retaining their custom URI fields, payloads and send timing. The ordinary
+`zenoh-transport` feature includes their prepared native constructors.
 MQTT classic roles additionally support Arrow and OMG IDL payloads with the
 ordinary `mqtt-transport` feature. Their existing flags and defaults remain;
 `--encoding` adds `arrow` and `omgidl`. See the role guide for encoding and opaque
@@ -144,7 +155,7 @@ Native workers require an independently provisioned manifest and explicit root,
 route, local endpoint and peer endpoint. Set all five deployment environment
 variables in the [native deployment guide](../configurable-streamer/docs/native-deployment.md).
 Startup verifies complete route agreement and the actual linked application type.
-Partial, legacy or mismatched configuration fails; there is no automatic ID0 fallback.
+Partial, legacy or mismatched configuration fails; there is no automatic ID 0 fallback.
 
 See [native deployment profiles](../configurable-streamer/README.md#native-deployment-profiles)
 for generation, private allocations and endpoint configuration. The matrix

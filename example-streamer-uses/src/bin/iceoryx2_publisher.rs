@@ -220,6 +220,7 @@ async fn main() -> Result<(), UStatus> {
         send_interval_ms: cli.send_interval_ms,
         timeout_ms: cli.timeout_ms,
         rpc_response_delay_ms: cli.rpc_response_delay_ms,
+        zenoh_wait_for_subscriber: cli.zenoh_wait_for_subscriber,
         #[cfg(feature = "sustained-workload")]
         workload_plan: cli.workload_plan.clone(),
     };
@@ -231,7 +232,7 @@ async fn main() -> Result<(), UStatus> {
                 cli.iceoryx2_min_subscribers,
                 &capacities,
             )?;
-            let core = up_transport_iceoryx2_rust::Iceoryx2PubSub::try_with_config(physical)?;
+            let core = common::endpoint_config::prepared_iceoryx2(physical, &config, &capacities)?;
             run_endpoint!(core, &config, run_native)
         }
         #[cfg(feature = "iceoryx2-owned-frame")]
@@ -251,17 +252,13 @@ async fn main() -> Result<(), UStatus> {
                     cli.zenoh_config
                 ))
             })?;
-            let mut builder = up_transport_zenoh::ZenohZeroCopyCore::builder(
-                config.local_endpoint()?.to_string(),
+            let core = common::endpoint_config::prepared_zenoh(
+                physical,
+                &config,
+                cli.zenoh_shm_segment_size,
             )
-            .with_config(physical);
-            if let Some(bytes) = cli.zenoh_shm_segment_size {
-                builder = builder.with_shm_segment_size(bytes)?;
-            }
-            if cli.zenoh_wait_for_subscriber {
-                builder = builder.with_publisher_readiness(std::time::Duration::from_secs(5))?;
-            }
-            run_endpoint!(builder.build().await?, &config, run_native)
+            .await?;
+            run_endpoint!(core, &config, run_native)
         }
         #[cfg(feature = "zenoh-owned-frame")]
         (FlowMode::OwnedFrame, FlowTransport::Zenoh) => {
@@ -296,19 +293,31 @@ async fn main() -> Result<(), UStatus> {
                 max_samples: cli.lola_max_samples,
             };
             let (primary, response, channel) = options.configuration(&cli.local_authority)?;
-            let physical =
+            let physical = || {
                 up_transport_lola_rust::UTransportLola::build_with_response_channel_and_default_rx(
-                    primary, response, channel,
-                )?;
+                    primary.clone(),
+                    response.clone(),
+                    channel,
+                )
+            };
+            let _ = &physical;
             match mode {
                 #[cfg(feature = "lola-transport")]
                 FlowMode::CopyMinimized => {
-                    run_endpoint!(physical.zero_copy_core(), &config, run_native)
+                    run_endpoint!(
+                        common::endpoint_config::prepared_lola(
+                            &primary,
+                            response.as_ref(),
+                            &config
+                        )?,
+                        &config,
+                        run_native
+                    )
                 }
                 #[cfg(feature = "lola-owned-frame")]
                 FlowMode::OwnedFrame => {
                     run_endpoint!(
-                        up_transport_lola_rust::LolaOwnedCore::new(physical.zero_copy_core()),
+                        up_transport_lola_rust::LolaOwnedCore::new(physical()?.zero_copy_core()),
                         &config,
                         run_owned
                     )

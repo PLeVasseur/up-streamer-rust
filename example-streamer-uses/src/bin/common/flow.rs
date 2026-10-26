@@ -8,9 +8,12 @@
 use std::{sync::Arc, time::Duration};
 
 use clap::ValueEnum;
+use configurable_streamer_wire_support::prepared::{
+    NativeSetupReady, PreparedEndpoint, PreparedSession,
+};
 use up_rust::{
     PayloadCodecIdentity, PayloadEncoding, UCode, UFrameMetadata, UFrameView, UOwnedFrame,
-    UOwnedTransport, UStatus, UTxBuffer, UTxLoanSpec, UUri, UZeroCopyRxLease, UZeroCopyTransport,
+    UOwnedTransport, UStatus, UUri,
 };
 #[cfg(feature = "sustained-workload")]
 use up_rust::{UMessage, UMessageBuilder};
@@ -85,6 +88,7 @@ pub(crate) struct FlowConfig {
     pub send_interval_ms: u64,
     pub timeout_ms: u64,
     pub rpc_response_delay_ms: u64,
+    pub zenoh_wait_for_subscriber: bool,
     #[cfg(feature = "sustained-workload")]
     pub workload_plan: Option<std::path::PathBuf>,
 }
@@ -217,7 +221,7 @@ impl FlowConfig {
         )
     }
 
-    fn alignment(&self) -> usize {
+    pub(crate) fn alignment(&self) -> usize {
         if self.wire_format == FlowWireFormat::Native {
             native_payload_alignment()
         } else {
@@ -255,6 +259,12 @@ pub(crate) async fn run_owned_with_ready(
     config: &FlowConfig,
     ready: fn(),
 ) -> Result<(), UStatus> {
+    if matches!(
+        config.role,
+        FlowRole::PubSender | FlowRole::NotifySender | FlowRole::RpcClient
+    ) {
+        super::startup::wait_for_start().await?;
+    }
     match config.role {
         FlowRole::PubSender | FlowRole::NotifySender => {
             let payload = config.payload(1, false)?;
@@ -339,9 +349,8 @@ pub(crate) async fn run_owned_with_ready(
 
 pub(crate) async fn run_native<T>(transport: Arc<T>, config: &FlowConfig) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
-    T::Tx: UTxBuffer,
-    T::Rx: UZeroCopyRxLease + Send + 'static,
+    T: PreparedEndpoint,
+    T::Core: NativeSetupReady,
 {
     run_native_with_ready(transport, config, super::receive::listener_ready).await
 }
@@ -352,10 +361,13 @@ pub(crate) async fn run_native_with_ready<T>(
     ready: fn(),
 ) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
-    T::Tx: UTxBuffer,
-    T::Rx: UZeroCopyRxLease + Send + 'static,
+    T: PreparedEndpoint,
+    T::Core: NativeSetupReady,
 {
+    let transport = Arc::new(PreparedSession::new(
+        transport,
+        &super::endpoint_config::prepared_catalog(config)?,
+    )?);
     #[cfg(feature = "sustained-workload")]
     if let Some(path) = &config.workload_plan {
         let plan = super::workload::WorkerPlan::load(path)?;
@@ -385,12 +397,17 @@ where
             plan,
             source,
             filter,
+            config.zenoh_wait_for_subscriber,
             |sequence| config.workload_message(sequence),
         )
         .await;
     }
     match config.role {
         FlowRole::PubSender | FlowRole::NotifySender => {
+            transport
+                .wait_ready(config.zenoh_wait_for_subscriber)
+                .await?;
+            super::startup::wait_for_start().await?;
             let payload = config.payload(1, false)?;
             send_native_repeated(
                 &transport,
@@ -404,24 +421,31 @@ where
         }
         FlowRole::PubReceiver | FlowRole::NotifyReceiver => {
             let (source, sink) = config.filters()?;
-            let frame = super::receive::zero_copy_with_ready(
-                &transport,
-                &source,
-                sink.as_ref(),
-                config.timeout_ms,
-                ready,
-            )
-            .await?;
+            let mut receiver =
+                super::receive::register_native(&transport, &source, sink.as_ref()).await?;
+            transport
+                .wait_ready(config.zenoh_wait_for_subscriber)
+                .await?;
+            ready();
+            let frame = receiver.receive(config.timeout_ms).await?;
+            receiver.stop().await?;
             let payload = super::payloads::copy_payload_bytes(&frame)?;
             observed_receive(config.role, payload.len());
         }
         FlowRole::RpcClient => {
             let payload = config.payload(1, false)?;
-            let metadata = config.outbound_metadata()?;
             let (source, sink) = config.filters()?;
+            let mut receiving =
+                super::receive::register_native(&transport, &source, sink.as_ref()).await?;
+            transport
+                .wait_ready(config.zenoh_wait_for_subscriber)
+                .await?;
+            ready();
+            super::startup::wait_for_start().await?;
+            let metadata = config.outbound_metadata()?;
             let response = if config.send_count <= 1 {
                 send_native(&transport, metadata, &payload, config.alignment()).await?;
-                receive_native_pull(&transport, &source, sink.as_ref(), config.timeout_ms).await?
+                receiving.receive(config.timeout_ms).await?
             } else {
                 let sender = Arc::clone(&transport);
                 let bytes = payload.clone();
@@ -436,27 +460,26 @@ where
                     )
                     .await
                 });
-                let response =
-                    receive_native_pull(&transport, &source, sink.as_ref(), config.timeout_ms)
-                        .await;
+                let response = receiving.receive(config.timeout_ms).await;
                 task.abort();
                 let _ = task.await;
                 response?
             };
+            receiving.stop().await?;
             let bytes = super::payloads::copy_payload_bytes(&response)?;
             ensure_payload_matches(&payload, &bytes)?;
             observed_receive(config.role, bytes.len());
         }
         FlowRole::RpcServer => {
             let (source, sink) = config.filters()?;
-            let request = super::receive::zero_copy_with_ready(
-                &transport,
-                &source,
-                sink.as_ref(),
-                config.timeout_ms,
-                ready,
-            )
-            .await?;
+            let mut receiver =
+                super::receive::register_native(&transport, &source, sink.as_ref()).await?;
+            transport
+                .wait_ready(config.zenoh_wait_for_subscriber)
+                .await?;
+            ready();
+            let request = receiver.receive(config.timeout_ms).await?;
+            receiver.stop().await?;
             let payload = super::payloads::copy_payload_bytes(&request)?;
             let metadata = config.response_metadata(request.metadata())?;
             tokio::time::sleep(Duration::from_millis(config.rpc_response_delay_ms)).await;
@@ -506,32 +529,26 @@ pub(crate) async fn send_owned_repeated(
 }
 
 async fn send_native<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedSession<T>>,
     metadata: UFrameMetadata,
     payload: &[u8],
-    alignment: usize,
+    _alignment: usize,
 ) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
-    T::Tx: UTxBuffer,
+    T: PreparedEndpoint,
 {
-    let mut loan = transport
-        .loan_validated_tx(UTxLoanSpec::payload(metadata, payload.len(), alignment)?)
-        .await?;
-    loan.payload_mut().copy_from_slice(payload);
-    super::proof::send_loan(transport.as_ref(), loan).await
+    super::proof::send_prepared(transport.as_ref(), &metadata, payload)
 }
 
 pub(crate) async fn send_native_repeated<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedSession<T>>,
     metadata: UFrameMetadata,
     payload: &[u8],
     alignment: usize,
     options: SendOptions,
 ) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
-    T::Tx: UTxBuffer,
+    T: PreparedEndpoint,
 {
     for attempt in 0..options.count.max(1) {
         send_native(transport, metadata.clone(), payload, alignment).await?;
@@ -585,46 +602,15 @@ pub(crate) async fn receive_owned_pull(
 }
 
 pub(crate) async fn receive_native_pull<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedSession<T>>,
     source: &UUri,
     sink: Option<&UUri>,
     timeout: u64,
-) -> Result<T::Rx, UStatus>
+) -> Result<super::receive::NativeFrame<T>, UStatus>
 where
-    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease,
+    T: PreparedEndpoint,
 {
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout);
-    loop {
-        if tokio::time::Instant::now() >= deadline {
-            return Err(UStatus::fail_with_code(
-                UCode::DeadlineExceeded,
-                "timed out waiting for zero-copy frame",
-            ));
-        }
-        let result = tokio::time::timeout_at(
-            deadline,
-            transport.receive_validated_zero_copy(source, sink),
-        )
-        .await
-        .map_err(|_| {
-            UStatus::fail_with_code(
-                UCode::DeadlineExceeded,
-                "timed out waiting for zero-copy frame",
-            )
-        })?;
-        match result {
-            Ok(frame) => {
-                super::proof::received_frame(&frame);
-                super::payloads::verify_received_frame(transport.as_ref(), &frame)?;
-                return Ok(frame);
-            }
-            Err(error) if error.code() == UCode::NotFound => {
-                tokio::time::sleep(Duration::from_millis(10)).await
-            }
-            Err(error) => return Err(error),
-        }
-    }
+    super::receive::zero_copy_with_ready(transport, source, sink, timeout, || {}).await
 }
 
 fn ensure_payload_matches(expected: &[u8], actual: &[u8]) -> Result<(), UStatus> {
@@ -693,6 +679,7 @@ mod tests {
             send_interval_ms: 200,
             timeout_ms: 5000,
             rpc_response_delay_ms: 250,
+            zenoh_wait_for_subscriber: false,
             #[cfg(feature = "sustained-workload")]
             workload_plan: None,
         }

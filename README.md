@@ -7,6 +7,18 @@ to write a uStreamer application to bridge from one transport to another.
 
 Reference its README.md for further details.
 
+Native copy-minimized endpoints compose concrete SDK prepared cores and selected
+wires. Configure exact egress addresses and bounds with `with_routes` before
+installing a route; a generic SDK registration worker forwards opaque payloads
+into the existing egress loan. Copy counters include copied-then-failed native
+publications. See [prepared routing](up-streamer/docs/prepared-routing.md) for
+setup, ownership, bounded admission and classic/owned conversion contracts.
+Ingress-only native endpoints declare `with_receive_routes`; optional
+`with_observed_routes` callbacks expose actual copied bytes and failed sends using
+setup-owned observer storage and carried UUID correlation.
+Each admitted ingress observation completes even when its egress address is
+unreserved; rejected-before-copy and copied-then-failed sends remain distinguishable.
+
 ## example-streamer-implementations
 
 Two concrete implementations of a uStreamer as a binary. These can be used out of the box either to try running different UStreamer setups or to directly use them in a project!

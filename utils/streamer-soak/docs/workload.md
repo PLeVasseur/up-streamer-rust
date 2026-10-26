@@ -21,12 +21,12 @@ The controller supplies I/O/barriers and verifies elapsed durations separately.
 plan SHA-256, role, application queue capacity and pending-message limit. These
 come from the independently frozen workload inputs, not a journal choosing its own
 acceptance context. Each record and manifest carries that identity. The pending
-limit is explicit and at most65,536 identities; retired duplicate detection keeps
+limit is explicit and at most 65,536 identities; retired duplicate detection keeps
 at most twice that limit. Late facts outside the retired window still cannot
 form a complete source-sequenced message and must fail final reconciliation.
 
-Records are newline-terminated and at most64KiB. Compressed chunks contain at most
-the chosen64KiB-to4MiB uncompressed limit. Every chunk has a content hash, ordinal
+Records are newline-terminated and at most 64 KiB. Compressed chunks contain at most
+the chosen 64 KiB-to-4 MiB uncompressed limit. Every chunk has a content hash, ordinal
 extent and previous-chunk hash. Replay checks all chunks and their complete extents,
 not a sampled subset. Closing with `complete = false` preserves failed evidence and
 cannot yield a passing replay. Existing chunk/manifest files are never overwritten.

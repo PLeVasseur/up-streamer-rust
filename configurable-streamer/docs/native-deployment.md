@@ -63,9 +63,9 @@ Their typed constructors also check the actual linked representation against the
 active allocation. An absent set permits non-native opaque operation; a partial
 set is an error. `UPROTOCOL_NATIVE_PROFILE`, `UPROTOCOL_NATIVE_PEER_PROFILE`,
 `native_profile_file` and `native_peer_profile_file` are retired and rejected.
-There is no native table-to-ID0 fallback. SingleType artifacts must be generated
+There is no native table-to-ID-0 fallback. SingleType artifacts must be generated
 explicitly for one deployment-scoped representation, without an operation label.
-The tool uses `single-type`; artifact mode is `single_type` and canonical tag is3.
+The tool uses `single-type`; artifact mode is `single_type` and canonical tag is 3.
 Old `contract_defined` artifacts are rejected by name and must be regenerated.
 
 ## Complete-route policy
@@ -114,7 +114,7 @@ routes may keep their existing format-free configuration.
 ## Bundle and startup evidence
 
 The matrix orchestrator builds and stages the actual application exporter with
-its other executables, then invokes it in the new run bundle. Bundle schema5
+its other executables, then invokes it in the new run bundle. Bundle schema 5
 records the command, exporter hash, target-qualified inventory, seed/declaration
 inputs, genesis predecessor state, generated agreement and raw file hashes.
 `native/` retains all four JSON inputs/outputs plus stdout/stderr; they become

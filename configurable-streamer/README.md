@@ -57,6 +57,32 @@ The 'vsomeip-config/point_to_point.json' is a configuration file only needed for
 
 The configurable streamer can expose copy-minimized routes when it is built with `experimental-copy-minimized-routing` and the matching zero-copy transport features. The example files use the current grouped transport schema under `transports`:
 
+Prepared native endpoints require an explicit `prepared_routes` catalog containing
+exact `source`, optional `sink` and `max_payload_len`. Optional logical bounds are
+`max_metadata_len` (3072), `payload_alignment` (8), `max_token_len` (2048),
+`allow_traceparent` (true) and `transmit` (true). Receiver-only entries set
+`transmit: false`. `prepared_route_capacity` and `prepared_registration_capacity`
+reserve logical tables (defaults 128/100), independently of physical native queue,
+borrowed-sample and pool budgets. See [shared prepared setup](../utils/configurable-streamer-wire-support/docs/prepared.md).
+Zenoh prepared providers initialize eagerly and share one physical core across
+wire adapters; native storage policy remains binding-owned.
+The iceoryx2 shared constructor derives a fixed sample extent from this catalog
+unless an explicit capacity overrides it. Native iceoryx2 and LoLa endpoints open
+their prepared core directly, without an additional unused owned transport.
+Requested native readiness is completed after route subscribers are attached and
+before `READY streamer_initialized`. This observes actual native connections
+without sending warm-up samples or populating first-client RPC cache entries.
+`READY streamer_configured` is an earlier setup marker, emitted before native
+transport creation. Controllers use it to start peer setup concurrently, avoiding
+a cycle where the bridge waits for subscribers that have not been launched.
+Application traffic still waits for the final initialized marker and peer readiness.
+
+The separate `configurable-streamer-payload-flow` compatibility command reserves
+its finite native addresses/routes and receiver inbox at startup, before printing
+listener readiness or publishing an RPC request. It retains the received native
+lease but decodes owned metadata for its compatibility validation/output; that
+command is an allocating diagnostic, not the per-stream allocation oracle.
+
 - `CONFIG_ZENOH_ICEORYX2_ZEROCOPY_EXAMPLE.json5` routes between Zenoh shared memory and iceoryx2.
 - `CONFIG_LOLA_ZEROCOPY_EXAMPLE.json5` routes between Zenoh shared memory and LoLa using `MW_COM_CONFIG_LOLA.json`.
 - `CONFIG_ZEROCOPY_EXAMPLE.json5` includes Zenoh shared memory, iceoryx2, and LoLa with pairwise copy-minimized forwarding.
@@ -64,6 +90,17 @@ The configurable streamer can expose copy-minimized routes when it is built with
 - `MW_COM_CONFIG_LOLA.json` is the LoLa MW COM service/event fixture used by the LoLa examples.
 - `CONFIG_DDS_ARROW_EXAMPLE.json5` routes between DDS owned-frame and
   encoded-owned endpoints with Arrow selected wire.
+
+All fourteen positive copy-minimized templates declare their publication or RPC
+catalogs with an 8192-byte payload maximum. Publication addresses follow the static
+subscription fixture; the three-backend example also declares the authority-c
+topic for a deployment supplying its subscriptions. RPC templates reserve client
+resource 0, method resource `0x1000` and the exact reversed response address for
+their named direction. Additional traffic needs explicit source/sink entries on
+both islands. Changing a catalog is setup work, before admitting traffic.
+Templates selecting `up_native` still require an independently provisioned
+`native_deployment` and complete native route policy; a prepared catalog does not
+supply or infer an agreement.
 
 LoLa-backed examples use checked-in S-CORE MW COM deployment manifests such as
 `MW_COM_CONFIG_LOLA.json`. The streamer passes these paths explicitly through

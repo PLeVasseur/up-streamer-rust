@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Existing deployment preparation shared by finite and sustained workload execution.
 //!
@@ -17,6 +18,58 @@ use std::path::{Path, PathBuf};
 // Explicit deployment fixture budget, delegated to the binding's existing pool
 // configuration. Workload orchestration does not implement allocation behavior.
 const WORKLOAD_ZENOH_POOL_BYTES: usize = 16 * 1024 * 1024;
+
+/// Reserves the actual fixture directions before bridge admission. The source
+/// island receives requests/publications; the sink island transmits them. RPC
+/// additionally reserves the reversed response direction on those same cores.
+pub(super) fn endpoint_catalog(
+    role: super::RoleStyle,
+    side: &str,
+) -> Vec<configurable_streamer_wire_support::prepared::PreparedAddress> {
+    use super::{
+        RoleStyle, AUTHORITY_A, AUTHORITY_B, METHOD_RESOURCE_ID, TOPIC_RESOURCE_ID, UE_ID,
+        UE_VERSION_MAJOR,
+    };
+    use configurable_streamer_wire_support::prepared::PreparedAddress;
+    let to_sink = side == "sink";
+    let uri = |authority, resource| {
+        up_rust::UUri::try_from_parts(authority, UE_ID, UE_VERSION_MAJOR, resource)
+            .expect("constant fixture URI is valid")
+            .to_uri(false)
+    };
+    let entry = |source, sink, transmit| PreparedAddress {
+        source,
+        sink,
+        max_metadata_len: 3072,
+        max_payload_len: 8192,
+        payload_alignment: 8,
+        max_token_len: 2048,
+        allow_traceparent: true,
+        transmit,
+    };
+    match role {
+        RoleStyle::PublisherSubscriber => {
+            vec![entry(uri(AUTHORITY_A, TOPIC_RESOURCE_ID), None, to_sink)]
+        }
+        RoleStyle::NotifierNotifyee => vec![entry(
+            uri(AUTHORITY_A, TOPIC_RESOURCE_ID),
+            Some(uri(AUTHORITY_B, 0)),
+            to_sink,
+        )],
+        RoleStyle::ClientServerRpc => vec![
+            entry(
+                uri(AUTHORITY_A, 0),
+                Some(uri(AUTHORITY_B, METHOD_RESOURCE_ID)),
+                to_sink,
+            ),
+            entry(
+                uri(AUTHORITY_B, METHOD_RESOURCE_ID),
+                Some(uri(AUTHORITY_A, 0)),
+                !to_sink,
+            ),
+        ],
+    }
+}
 
 pub(super) fn configure_workload_endpoints(path: &Path) -> Result<()> {
     let mut config: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;

@@ -26,6 +26,9 @@
           authority: "authority-a",
           endpoint: "iceoryx2-zc",
           routing_mode: "copy_minimized",
+          prepared_routes: [
+            { source: "//authority-b/5BA0/1/8001", max_payload_len: 8192 },
+          ],
           copy_minimized_payload_alignment: 8,
           forwarding_routes: [],
         },
@@ -37,6 +40,9 @@
           authority: "authority-b",
           endpoint: "lola-zc",
           routing_mode: "copy_minimized",
+          prepared_routes: [
+            { source: "//authority-b/5BA0/1/8001", max_payload_len: 8192, transmit: false },
+          ],
           copy_minimized_payload_alignment: 8,
           lola_instance_specifier: "uprotocol/transportNativeIoxZcL2I",
           lola_service_type: "/uprotocol/TransportR004D2NativeIoxZcL2I",

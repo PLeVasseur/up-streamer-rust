@@ -1,3 +1,5 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
+// SPDX-License-Identifier: Apache-2.0
 //! Verify owned/native-loan adapter routing and teardown across endpoint API classes.
 #![cfg(all(
     feature = "experimental-copy-minimized-routing",
@@ -12,10 +14,11 @@ use up_rust::communication::SubscriptionStatus;
 use up_rust::core::usubscription::{ResetReason, SubscriptionInfo, USubscription};
 use up_rust::frame::metadata::try_project_umessage_to_frame_metadata;
 use up_rust::{
-    PayloadEncoding, UCode, UFrameView, UMessageBuilder, UOwnedFrame, UOwnedListener,
-    UOwnedTransportImpl, UStatus, UTxLoanSpec, UUri, UVecRxLease, UVecTxBuffer, UZeroCopyListener,
-    UZeroCopyTransportImpl,
+    PayloadEncoding, ProtobufWire, UCode, UFrameView, UMessageBuilder, UOwnedFrame, UOwnedListener,
+    UOwnedTransportImpl, UStatus, UUri, UWithNativePrefixWire,
 };
+#[path = "support/prepared.rs"]
+mod prepared;
 use up_streamer::{
     CopyMinimizedRouteOptions, OwnedFrameEndpoint, RouteCopySemantics, RouteKind, UStreamer,
     ZeroCopyFrameEndpoint,
@@ -49,7 +52,13 @@ impl USubscription for EmptySubscription {
         &self,
         _topic: &UUri,
     ) -> Result<Vec<SubscriptionInfo>, UStatus> {
-        Ok(Vec::new())
+        Ok(vec![SubscriptionInfo::new(
+            topic(),
+            UUri::try_from_parts("authority-b", 0x5678, 1, 0).unwrap(),
+            SubscriptionStatus::Subscribed,
+            None,
+            None,
+        )])
     }
 
     async fn fetch_subscriptions_by_subscriber(
@@ -82,83 +91,9 @@ impl USubscription for EmptySubscription {
 #[derive(Default)]
 struct RecordingOwnedTransport {
     sent: Mutex<Vec<UOwnedFrame>>,
-    listeners: Mutex<Vec<Arc<dyn UOwnedListener>>>,
+    listeners: Mutex<Vec<OwnedEntry>>,
 }
-
-#[derive(Default)]
-struct RecordingZeroCopyTransport {
-    sent: Mutex<Vec<UVecRxLease>>,
-    listeners: Mutex<Vec<Arc<dyn UZeroCopyListener<UVecRxLease>>>>,
-}
-
-impl RecordingZeroCopyTransport {
-    fn sent_frames(&self) -> Vec<UVecRxLease> {
-        self.sent.lock().expect("sent lock").clone()
-    }
-
-    async fn inject(&self, frame: UVecRxLease) {
-        let listeners = self.listeners.lock().expect("listener lock").clone();
-        for listener in listeners {
-            listener.on_receive_zero_copy(frame.clone()).await;
-        }
-    }
-}
-
-#[async_trait]
-impl UZeroCopyTransportImpl for RecordingZeroCopyTransport {
-    type Tx = UVecTxBuffer;
-    type Rx = UVecRxLease;
-
-    async fn loan_validated_tx(&self, spec: UTxLoanSpec) -> Result<Self::Tx, UStatus> {
-        UVecTxBuffer::with_alignment(
-            spec.metadata().clone(),
-            spec.payload_len(),
-            spec.payload_alignment_proof().as_usize(),
-        )
-    }
-
-    async fn send_validated_zero_copy(&self, buffer: Self::Tx) -> Result<(), UStatus> {
-        let payload = buffer
-            .metadata()
-            .payload_encoding()
-            .is_some()
-            .then(|| buffer.payload().to_vec());
-        let frame = UVecRxLease::new(buffer.metadata().clone(), payload)?;
-        self.sent.lock().expect("sent lock").push(frame);
-        Ok(())
-    }
-
-    async fn receive_validated_zero_copy(
-        &self,
-        _source_filter: &UUri,
-        _sink_filter: Option<&UUri>,
-    ) -> Result<Self::Rx, UStatus> {
-        Err(UStatus::fail_with_code(UCode::NotFound, "unused"))
-    }
-
-    async fn register_validated_zero_copy_listener(
-        &self,
-        _source_filter: &UUri,
-        _sink_filter: Option<&UUri>,
-        listener: Arc<dyn UZeroCopyListener<Self::Rx>>,
-    ) -> Result<(), UStatus> {
-        self.listeners.lock().expect("listener lock").push(listener);
-        Ok(())
-    }
-
-    async fn unregister_validated_zero_copy_listener(
-        &self,
-        _source_filter: &UUri,
-        _sink_filter: Option<&UUri>,
-        listener: Arc<dyn UZeroCopyListener<Self::Rx>>,
-    ) -> Result<(), UStatus> {
-        self.listeners
-            .lock()
-            .expect("listener lock")
-            .retain(|registered| !Arc::ptr_eq(registered, &listener));
-        Ok(())
-    }
-}
+type OwnedEntry = (UUri, Option<UUri>, Arc<dyn UOwnedListener>);
 
 impl RecordingOwnedTransport {
     fn sent_frames(&self) -> Vec<UOwnedFrame> {
@@ -167,8 +102,16 @@ impl RecordingOwnedTransport {
 
     async fn inject(&self, frame: UOwnedFrame) {
         let listeners = self.listeners.lock().expect("listener lock").clone();
-        for listener in listeners {
-            listener.on_receive_owned(frame.clone()).await;
+        for (source, sink, listener) in listeners {
+            if source.matches(frame.metadata().source())
+                && match (sink.as_ref(), frame.metadata().sink()) {
+                    (None, None) => true,
+                    (Some(filter), Some(actual)) => filter.matches(actual),
+                    _ => false,
+                }
+            {
+                listener.on_receive_owned(frame.clone()).await;
+            }
         }
     }
 }
@@ -193,11 +136,15 @@ impl UOwnedTransportImpl for RecordingOwnedTransport {
 
     async fn register_validated_owned_listener(
         &self,
-        _source_filter: &UUri,
-        _sink_filter: Option<&UUri>,
+        source_filter: &UUri,
+        sink_filter: Option<&UUri>,
         listener: Arc<dyn UOwnedListener>,
     ) -> Result<(), UStatus> {
-        self.listeners.lock().expect("listener lock").push(listener);
+        self.listeners.lock().expect("listener lock").push((
+            source_filter.clone(),
+            sink_filter.cloned(),
+            listener,
+        ));
         Ok(())
     }
 
@@ -210,7 +157,7 @@ impl UOwnedTransportImpl for RecordingOwnedTransport {
         self.listeners
             .lock()
             .expect("listener lock")
-            .retain(|registered| !Arc::ptr_eq(registered, &listener));
+            .retain(|(_, _, registered)| !Arc::ptr_eq(registered, &listener));
         Ok(())
     }
 }
@@ -227,15 +174,15 @@ fn owned_payload_frame(payload: &'static [u8]) -> UOwnedFrame {
     UOwnedFrame::with_payload(metadata, Bytes::from_static(payload)).expect("owned frame")
 }
 
-fn zero_copy_payload_frame(payload: &'static [u8]) -> UVecRxLease {
+fn zero_copy_payload_frame(payload: &'static [u8]) -> UOwnedFrame {
     let message = UMessageBuilder::publish(topic())
         .build_with_payload(Bytes::from_static(payload), PayloadEncoding::PROTOBUF)
         .expect("message");
     let metadata = try_project_umessage_to_frame_metadata(&message).expect("metadata");
-    UVecRxLease::new(metadata, Some(payload.to_vec())).expect("zero-copy frame")
+    UOwnedFrame::new(metadata, Some(Bytes::from_static(payload))).expect("prepared input frame")
 }
 
-async fn wait_for_zero_copy_sent_count(transport: &RecordingZeroCopyTransport, expected: usize) {
+async fn wait_for_zero_copy_sent_count(transport: &prepared::Core, expected: usize) {
     for _ in 0..20 {
         if transport.sent_frames().len() >= expected {
             return;
@@ -256,9 +203,15 @@ async fn wait_for_owned_sent_count(transport: &RecordingOwnedTransport, expected
 #[tokio::test]
 async fn owned_to_copy_minimized_adapter_copies_payload_into_egress_loan() {
     let ingress = Arc::new(RecordingOwnedTransport::default());
-    let egress = Arc::new(RecordingZeroCopyTransport::default());
+    let egress = Arc::new(prepared::Core::default());
     let ingress_endpoint = OwnedFrameEndpoint::from_owned("owned", "authority-a", ingress.clone());
-    let egress_endpoint = ZeroCopyFrameEndpoint::new("copy", "authority-b", egress.clone());
+    let egress_endpoint = ZeroCopyFrameEndpoint::new(
+        "copy",
+        "authority-b",
+        Arc::new(Arc::clone(&egress).into_protobuf_transport()),
+    )
+    .with_routes(&[prepared::reservation(topic(), None)])
+    .unwrap();
     let mut streamer = UStreamer::new("owned-to-copy", 4, Arc::new(EmptySubscription))
         .await
         .expect("streamer");
@@ -300,9 +253,15 @@ async fn owned_to_copy_minimized_adapter_copies_payload_into_egress_loan() {
 
 #[tokio::test]
 async fn copy_minimized_to_owned_adapter_coalesces_payload_slices() {
-    let ingress = Arc::new(RecordingZeroCopyTransport::default());
+    let ingress = Arc::new(prepared::Core::default());
     let egress = Arc::new(RecordingOwnedTransport::default());
-    let ingress_endpoint = ZeroCopyFrameEndpoint::new("copy", "authority-a", ingress.clone());
+    let ingress_endpoint = ZeroCopyFrameEndpoint::new(
+        "copy",
+        "authority-a",
+        Arc::new(Arc::clone(&ingress).into_protobuf_transport()),
+    )
+    .with_receive_routes(&[(topic(), None)])
+    .unwrap();
     let egress_endpoint = OwnedFrameEndpoint::from_owned("owned", "authority-b", egress.clone());
     let mut streamer = UStreamer::new("copy-to-owned", 4, Arc::new(EmptySubscription))
         .await
@@ -315,7 +274,7 @@ async fn copy_minimized_to_owned_adapter_coalesces_payload_slices() {
 
     let frame = zero_copy_payload_frame(b"copy-owned");
     let expected_metadata = frame.metadata().clone();
-    ingress.inject(frame).await;
+    ingress.inject::<ProtobufWire>(frame);
     wait_for_owned_sent_count(&egress, 1).await;
 
     let sent = egress.sent_frames();
@@ -336,4 +295,38 @@ async fn copy_minimized_to_owned_adapter_coalesces_payload_slices() {
         .await
         .expect("adapter route delete");
     assert!(streamer.route_diagnostics().is_empty());
+}
+
+#[tokio::test]
+async fn owned_ingress_backpressure_yields_to_its_worker_on_a_current_thread_runtime() {
+    let ingress = Arc::new(RecordingOwnedTransport::default());
+    let egress = Arc::new(prepared::Core::default());
+    let left = OwnedFrameEndpoint::from_owned("owned", "authority-a", ingress.clone());
+    let right = ZeroCopyFrameEndpoint::new(
+        "native",
+        "authority-b",
+        Arc::new(Arc::clone(&egress).into_protobuf_transport()),
+    )
+    .with_routes(&[prepared::reservation(topic(), None)])
+    .unwrap();
+    let mut streamer = UStreamer::new("async-backpressure", 1, Arc::new(EmptySubscription))
+        .await
+        .unwrap();
+    streamer
+        .add_owned_to_copy_minimized_route_ref(&left, &right)
+        .await
+        .unwrap();
+    let started = std::time::Instant::now();
+    for _ in 0..3 {
+        ingress.inject(owned_payload_frame(b"ordered")).await;
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "async admission blocked the only runtime thread"
+    );
+    prepared::wait_for(|| egress.sent_frames().len() == 3).await;
+    streamer
+        .delete_owned_to_copy_minimized_route_ref(&left, &right)
+        .await
+        .unwrap();
 }

@@ -1,14 +1,17 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Passive role readiness means registration has completed, not that polling will start.
 #![allow(dead_code)]
 
 use super::payloads::NativeContext;
 use async_trait::async_trait;
+use configurable_streamer_wire_support::prepared::{
+    PreparedEndpoint, PreparedReceived, PreparedSession,
+};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use up_rust::{
-    UCode, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UUri, UZeroCopyListener,
-    UZeroCopyRxLease, UZeroCopyTransport,
+    PreparedTransportCore, UCode, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UUri,
 };
 
 struct OwnedChannel(mpsc::UnboundedSender<UOwnedFrame>);
@@ -30,14 +33,102 @@ impl UOwnedListener for OwnedChannel {
     }
 }
 
-struct LoanChannel<Rx>(mpsc::UnboundedSender<Rx>);
-
-#[async_trait]
-impl<Rx: UZeroCopyRxLease + Send + 'static> UZeroCopyListener<Rx> for LoanChannel<Rx> {
-    async fn on_receive_zero_copy(&self, frame: Rx) {
-        super::proof::received_frame(&frame);
-        let _ = self.0.send(frame);
+pub(crate) type NativeFrame<T> =
+    PreparedReceived<<<T as PreparedEndpoint>::Core as PreparedTransportCore>::Rx>;
+pub(crate) struct NativeReception<T: PreparedEndpoint> {
+    session: Arc<PreparedSession<T>>,
+    inbox: Arc<up_rust::RegistrationInbox<<T::Core as PreparedTransportCore>::Rx>>,
+    subscription: Option<<T::Core as PreparedTransportCore>::Subscription>,
+    source: UUri,
+    sink: Option<UUri>,
+}
+impl<T: PreparedEndpoint> NativeReception<T> {
+    pub(crate) async fn receive(&mut self, timeout_ms: u64) -> Result<NativeFrame<T>, UStatus> {
+        let deadline = tokio::time::Instant::now()
+            .checked_add(Duration::from_millis(timeout_ms))
+            .ok_or_else(|| {
+                UStatus::fail_with_code(UCode::InvalidArgument, "native receive deadline overflow")
+            })?;
+        loop {
+            let raw = tokio::time::timeout_at(deadline, self.inbox.recv())
+                .await
+                .map_err(|_| {
+                    UStatus::fail_with_code(
+                        UCode::DeadlineExceeded,
+                        "registered native receive timed out",
+                    )
+                })?
+                .ok_or_else(|| {
+                    UStatus::fail_with_code(UCode::Unavailable, "registered native receiver closed")
+                })?;
+            let frame = match self.session.admit(raw) {
+                Ok(frame) => frame,
+                Err(_) => continue,
+            };
+            let header = frame.header().map_err(|error| {
+                UStatus::fail_with_code(UCode::InvalidArgument, error.to_string())
+            })?;
+            if !self.source.matches(&header.source)
+                || !match (self.sink.as_ref(), header.sink.as_ref()) {
+                    (None, None) => true,
+                    (Some(filter), Some(actual)) => filter.matches(actual),
+                    _ => false,
+                }
+            {
+                continue;
+            }
+            let frame = self.session.decode_compatibility_frame(frame)?;
+            super::proof::received_frame(&frame);
+            super::payloads::verify_received_frame(self.session.as_ref(), &frame)?;
+            return Ok(frame);
+        }
     }
+    pub(crate) async fn stop(mut self) -> Result<(), UStatus> {
+        self.inbox.close();
+        if let Some(subscription) = &mut self.subscription {
+            self.session
+                .core()
+                .detach(subscription)
+                .map_err(|error| UStatus::fail_with_code(UCode::Internal, error.to_string()))?;
+        }
+        self.subscription.take();
+        Ok(())
+    }
+}
+impl<T: PreparedEndpoint> Drop for NativeReception<T> {
+    fn drop(&mut self) {
+        self.inbox.close();
+        if let Some(subscription) = &mut self.subscription {
+            let _ = self.session.core().detach(subscription);
+        }
+    }
+}
+pub(crate) async fn register_native<T: PreparedEndpoint>(
+    session: &Arc<PreparedSession<T>>,
+    source: &UUri,
+    sink: Option<&UUri>,
+) -> Result<NativeReception<T>, UStatus> {
+    let inbox = Arc::new(
+        up_rust::RegistrationInbox::new(up_rust::RegistrationConfig {
+            capacity: 4,
+            overflow: up_rust::OverflowPolicy::Block {
+                deadline: Duration::from_secs(5),
+            },
+        })
+        .map_err(|error| UStatus::fail_with_code(UCode::FailedPrecondition, error.to_string()))?,
+    );
+    let subscription = session
+        .core()
+        .attach(source, sink, inbox.clone())
+        .await
+        .map_err(|error| UStatus::fail_with_code(UCode::FailedPrecondition, error.to_string()))?;
+    Ok(NativeReception {
+        session: Arc::clone(session),
+        inbox,
+        subscription: Some(subscription),
+        source: source.clone(),
+        sink: sink.cloned(),
+    })
 }
 
 pub(crate) async fn owned(
@@ -94,14 +185,13 @@ pub(crate) async fn owned_payload(
 }
 
 pub(crate) async fn zero_copy<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedSession<T>>,
     source: &UUri,
     sink: Option<&UUri>,
     timeout_ms: u64,
-) -> Result<T::Rx, UStatus>
+) -> Result<NativeFrame<T>, UStatus>
 where
-    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease + Send + 'static,
+    T: PreparedEndpoint,
 {
     zero_copy_with_ready(transport, source, sink, timeout_ms, || {
         println!("READY listener_registered");
@@ -112,26 +202,19 @@ where
 /// Native counterpart to [`owned_with_ready`], retaining the received lease
 /// through quiescent unregister and validating its representation before return.
 pub(crate) async fn zero_copy_with_ready<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedSession<T>>,
     source: &UUri,
     sink: Option<&UUri>,
     timeout_ms: u64,
     ready: impl FnOnce(),
-) -> Result<T::Rx, UStatus>
+) -> Result<NativeFrame<T>, UStatus>
 where
-    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease + Send + 'static,
+    T: PreparedEndpoint,
 {
-    let (sender, mut receiver) = mpsc::unbounded_channel();
-    let listener: Arc<dyn UZeroCopyListener<T::Rx>> = Arc::new(LoanChannel(sender));
-    transport
-        .register_validated_zero_copy_listener(source, sink, listener.clone())
-        .await?;
+    let mut receiver = register_native(transport, source, sink).await?;
     ready();
-    let result = receive(&mut receiver, timeout_ms).await;
-    let cleanup = transport
-        .unregister_validated_zero_copy_listener(source, sink, listener)
-        .await;
+    let result = receiver.receive(timeout_ms).await;
+    let cleanup = receiver.stop().await;
     let frame = result?;
     cleanup?;
     super::payloads::verify_received_frame(transport.as_ref(), &frame)?;
@@ -139,14 +222,13 @@ where
 }
 
 pub(crate) async fn zero_copy_payload<T>(
-    transport: &Arc<T>,
+    transport: &Arc<PreparedSession<T>>,
     source: &UUri,
     sink: Option<&UUri>,
     timeout_ms: u64,
 ) -> Result<Vec<u8>, UStatus>
 where
-    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease + Send + 'static,
+    T: PreparedEndpoint,
 {
     zero_copy(transport, source, sink, timeout_ms)
         .await

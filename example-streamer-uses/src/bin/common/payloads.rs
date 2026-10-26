@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
+// SPDX-License-Identifier: Apache-2.0
+
 #![allow(dead_code)]
 
 use std::mem::{self, MaybeUninit};
@@ -26,7 +29,7 @@ pub(crate) fn verify_received_frame(
     transport: &impl up_rust::UHasWire,
     frame: &impl up_rust::UFrameView,
 ) -> Result<(), UStatus> {
-    if let Some(profile) = transport.native_profile() {
+    if let Some(profile) = transport.native_agreement() {
         NativeContext::from_agreement(profile.clone())?.verify_view(frame)
     } else if frame.metadata().native_type_token().is_some() {
         Err(invalid_config(

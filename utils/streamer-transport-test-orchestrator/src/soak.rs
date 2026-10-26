@@ -1,3 +1,4 @@
+// Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Sustained workloads over existing prepared matrix rows and owned process execution.
 use super::*;
@@ -511,7 +512,7 @@ fn prepare(
     )?;
     wait_for_marker(
         &mut bridge,
-        READY_STREAMER,
+        READY_STREAMER_CONFIGURED,
         Duration::from_secs(10),
         cancellation,
     )?;
@@ -581,16 +582,24 @@ fn prepare(
         )
     };
     let mut sink = spawn_role(false)?;
+    let mut source = spawn_role(true)?;
     wait_for_marker(
         &mut sink,
         READY_LISTENER,
         Duration::from_secs(10),
         cancellation,
     )?;
-    let mut source = spawn_role(true)?;
     wait_for_marker(
         &mut source,
         READY_LISTENER,
+        Duration::from_secs(10),
+        cancellation,
+    )?;
+    // Workers remain behind their existing phase-control barrier; all native
+    // participants now exist before the bridge confirms matching and admission.
+    wait_for_marker(
+        &mut bridge,
+        READY_STREAMER,
         Duration::from_secs(10),
         cancellation,
     )?;

@@ -140,13 +140,18 @@ async fn main() -> Result<(), UStatus> {
         send_interval_ms: cli.send_interval_ms,
         timeout_ms: cli.timeout_ms,
         rpc_response_delay_ms: cli.rpc_response_delay_ms,
+        zenoh_wait_for_subscriber: false,
         #[cfg(feature = "sustained-workload")]
         workload_plan: None,
     };
     match (cli.mode, cli.transport) {
         #[cfg(feature = "iceoryx2-zero-copy")]
         (FlowMode::CopyMinimized, FlowTransport::Iceoryx2) => {
-            let core = up_transport_iceoryx2_rust::Iceoryx2PubSub::new();
+            let core = common::endpoint_config::prepared_iceoryx2(
+                up_transport_iceoryx2_rust::Iceoryx2PubSubConfig::default(),
+                &config,
+                &Default::default(),
+            )?;
             run_endpoint!(core, &config, run_native)
         }
         #[cfg(feature = "iceoryx2-owned-frame")]
@@ -164,11 +169,7 @@ async fn main() -> Result<(), UStatus> {
                     cli.zenoh_config
                 ))
             })?;
-            let core = up_transport_zenoh::ZenohZeroCopyCore::new(
-                physical,
-                config.local_endpoint()?.to_string(),
-            )
-            .await?;
+            let core = common::endpoint_config::prepared_zenoh(physical, &config, None).await?;
             run_endpoint!(core, &config, run_native)
         }
         #[cfg(feature = "zenoh-owned-frame")]
@@ -203,16 +204,28 @@ async fn main() -> Result<(), UStatus> {
                 max_samples: cli.lola_max_samples,
             };
             let (primary, response, channel) = options.configuration(&cli.local_authority)?;
-            let physical =
+            let physical = || {
                 up_transport_lola_rust::UTransportLola::build_with_response_channel_and_default_rx(
-                    primary, response, channel,
-                )?;
+                    primary.clone(),
+                    response.clone(),
+                    channel,
+                )
+            };
+            let _ = &physical;
             match mode {
                 FlowMode::CopyMinimized => {
-                    run_endpoint!(physical.zero_copy_core(), &config, run_native)
+                    run_endpoint!(
+                        common::endpoint_config::prepared_lola(
+                            &primary,
+                            response.as_ref(),
+                            &config
+                        )?,
+                        &config,
+                        run_native
+                    )
                 }
                 FlowMode::OwnedFrame => run_endpoint!(
-                    up_transport_lola_rust::LolaOwnedCore::new(physical.zero_copy_core()),
+                    up_transport_lola_rust::LolaOwnedCore::new(physical()?.zero_copy_core()),
                     &config,
                     run_owned
                 ),
