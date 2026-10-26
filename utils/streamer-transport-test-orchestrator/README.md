@@ -1,5 +1,11 @@
 # Streamer Transport Test Orchestrator
 
+Finite conservation deployments explicitly configure Zenoh reliable publications
+with blocking congestion control. Counted offers are separated by50ms after send
+completion; the bounded deadline and zero-loss accounting still apply. See the
+[worker guide](../../example-streamer-uses/docs/sustained-workloads.md).
+Finite inbox capacity is5 to admit the entire finite backend burst.
+
 `streamer-transport-test-orchestrator` executes the canonical endpoint-profile
 matrix through `configurable-streamer` and independent active/passive role
 processes. It preserves matrix order, records structural unsupported rows, and
@@ -453,6 +459,16 @@ deployment cards and reject this connectivity-only override. See the
 [capacity guide](../../configurable-streamer/docs/native-capacity.md).
 
 ## Representative sensor workload
+
+`--soak conservation` uses the fixed thirty mixed pub/sub/RPC rows for a finite
+correctness lane: five unique messages per source at50ms, full receiver admission
+and1000ms drain, zero rejection/loss/unaccounted and five paired RPC completions.
+One-second warm-up and inactive transition windows preserve controller ordering;
+finite sources offer only during normal and stop at five. No slow-loss allowance
+or resource-growth inference applies to this short run. Its denominator is separate
+from connectivity/direct and it does not claim notification or endurance coverage.
+Source/driver identity, actual backend readiness, raw journals and owned cleanup
+remain mandatory. Replay checks exact five-message conservation independently.
 
 Resource slope receipts use full-precision JSON float round trips, so recorded and
 replayed floating-point values compare exactly. A mismatch names the first differing

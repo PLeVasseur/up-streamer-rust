@@ -55,12 +55,34 @@ Queue/value counts are application measurements; classic
 messages do not become native loans merely because their payload representation is
 native. OS memory/process supervision belongs to the shared orchestrator. Native
 backend setup and platform support remain documented by each transport binding.
-# Large native sensor fixtures
+
+## Finite conservation and diagnostics
+
+The generic native worker frontend initializes optional tracing from `RUST_LOG`,
+so backend readiness, transport rejection and native storage diagnostics appear
+alongside the worker's structured accounting. Logging does not constitute readiness
+or alter message admission/count criteria.
+
+Finite conservation worker plans set `finite_messages: 5`, offer at20/s (50ms)
+only during the normal window and use zero processing delay. Every offer constructs
+a fresh message identity; source generation stops at five. Receivers remain admitted
+until the controller's complete window and1000ms drain end, including all RPC
+responses. This is distinct from first-delivery roles that repeat a prepared message
+or exit after the first receipt. Wrong finite count/rate/delay combinations reject.
+The finite source waits50ms after each completed send rather than catching up an
+interval delayed by discovery. Its generated Zenoh deployment explicitly selects
+reliable publications with blocking congestion control through Zenoh configuration.
+The finite deadline remains bounded and a blocked or lost message fails the run.
+The finite inbox has capacity5 so a complete five-message backend burst can be
+admitted even before the application consumer is scheduled. Sustained workers use
+their separately declared queue limits; no finite application drop is permitted.
 
 Worker metrics report admitted RX loans, transient callback-held RX loans and TX
 loans independently. Admission transitions occur after reserving queue capacity
 and before exposing the lease to the consumer. Rejected full-queue samples remain
 transient until their drop record is emitted; they cannot inflate admitted counts.
+
+## Large native sensor fixtures
 
 Build with `payload-contract-large-fixtures` to enable the existing SDK's full
 LiDAR (`lidar_hesai_at128`,4,915,328bytes) and camera

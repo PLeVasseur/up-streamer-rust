@@ -149,6 +149,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
+    let _ = tracing_subscriber::fmt::try_init();
     let mut cli = Cli::parse();
     let capacities = configurable_streamer_wire_support::capacity::Iceoryx2Capacity {
         publisher_initial_max_slice_len: cli.iceoryx2_publisher_initial_max_slice_len,

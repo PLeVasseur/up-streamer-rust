@@ -26,6 +26,9 @@ use up_rust::{UTxBuffer, UTxLoanSpec, UZeroCopyListener, UZeroCopyRxLease, UZero
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkerPlan {
+    /// Finite correctness run; receivers remain admitted through controller drain.
+    #[serde(default)]
+    pub finite_messages: Option<u32>,
     /// Explicit sensor representation; available only in a large-fixture build.
     #[cfg(feature = "payload-contract-large-fixtures")]
     #[serde(default)]
@@ -59,6 +62,16 @@ impl WorkerPlan {
     pub fn load(path: &Path) -> Result<Self, UStatus> {
         let mut plan: Self = read_json(path)?;
         streamer_soak::Reconciler::new(&plan.replay).map_err(failure)?;
+        if plan.finite_messages.is_some()
+            && (plan.finite_messages != Some(5)
+                || plan.offered_per_second != 20
+                || plan.consumer_delay_ms != 0
+                || plan.replay.queue_capacity != 5)
+        {
+            return Err(failure(
+                "finite conservation requires five messages at 50ms, no processing delay and inbox capacity five",
+            ));
+        }
         #[cfg(feature = "payload-contract-large-fixtures")]
         let maximum = if let Some(fixture) = plan.native_fixture {
             if plan.replay.role != Role::PublisherSubscriber
@@ -76,7 +89,8 @@ impl WorkerPlan {
         #[cfg(not(feature = "payload-contract-large-fixtures"))]
         let maximum = 65_536;
         if !(1..=1000).contains(&plan.offered_per_second)
-            || !(1..=1000).contains(&plan.consumer_delay_ms)
+            || !(if plan.finite_messages.is_some() { 0 } else { 1 }..=1000)
+                .contains(&plan.consumer_delay_ms)
             || !(1..=maximum).contains(&plan.maximum_payload_bytes)
             || !(1..=660).contains(&plan.deadline_seconds)
             || plan.replay.queue_capacity > 65_536
@@ -632,6 +646,9 @@ where
                 }
                 _ = offers.tick(), if source => {
                     if !listener.phase()?.offers_messages() { continue; }
+                    if let Some(limit)=plan.finite_messages {
+                        if listener.phase()? != Phase::Normal || sequence>=limit { continue; }
+                    }
                     sequence = sequence.checked_add(1).ok_or_else(|| failure("workload sequence exhausted"))?;
                     let value = message(sequence)?;
                     let metadata = listener.metadata(&value)?;
@@ -642,6 +659,9 @@ where
                             listener.emit("rejected", &value, &metadata, Some(sequence))?;
                             println!("OP_REJECTION {}", json!({"sequence": sequence, "error": error.to_string()}));
                         }
+                    }
+                    if plan.finite_messages.is_some() {
+                        offers.reset_after(Duration::from_millis(50));
                     }
                 }
                 delivery = receiver.recv(), if filters.is_some() => {

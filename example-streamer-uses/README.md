@@ -1,6 +1,11 @@
 
 # Running entities
 
+Finite worker plans can exercise full-window five-message conservation through
+the same endpoints; see [workload workers](docs/sustained-workloads.md) for unique
+identity, pacing and receiver drain behavior.
+The generic native worker frontend also honors `RUST_LOG` for backend diagnostics.
+
 The optional `payload-contract-large-fixtures` feature enables full SDK sensor
 representations in explicitly configured native pub/sub worker plans. See
 [sustained workloads](docs/sustained-workloads.md) for type, size and workload limits.

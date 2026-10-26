@@ -22,6 +22,7 @@ pub(super) enum Mode {
     Diagnostic,
     Calibration,
     Acceptance,
+    Conservation,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -73,14 +74,31 @@ impl Plan {
         anyhow::ensure!(
             self.schema == "uprotocol.sustained-workload.v1"
                 && durations
-                    == if self.mode == Mode::Diagnostic {
+                    == if self.mode == Mode::Conservation {
+                        (1, 1, 1, 1, 300)
+                    } else if self.mode == Mode::Diagnostic {
                         (3, 20, 20, 5, 180)
                     } else {
                         (20, 210, 210, 30, 600)
                     }
-                && self.offered_per_second == 10
-                && self.consumer_delay_ms == 250
-                && self.queue_capacity == 4
+                && self.offered_per_second
+                    == if self.mode == Mode::Conservation {
+                        20
+                    } else {
+                        10
+                    }
+                && self.consumer_delay_ms
+                    == if self.mode == Mode::Conservation {
+                        0
+                    } else {
+                        250
+                    }
+                && self.queue_capacity
+                    == if self.mode == Mode::Conservation {
+                        5
+                    } else {
+                        4
+                    }
                 && self.pending_limit == 4096
                 && !self.require_fifo
                 && self.maximum_payload_bytes == 8192
@@ -144,6 +162,10 @@ fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
 
 fn selected(cli: &Cli, mode: Mode) -> Result<Vec<MatrixRow>> {
     if cli.soak_lane == Lane::Representative {
+        anyhow::ensure!(
+            mode != Mode::Conservation,
+            "conservation uses the mixed ordinary cohort"
+        );
         anyhow::ensure!(cli.only.is_empty(), "representative cohort is fixed");
         return representative::rows(mode);
     }
@@ -387,6 +409,11 @@ fn prepare(
         "offered_per_second": plan.offered_per_second, "consumer_delay_ms": plan.consumer_delay_ms,
         "maximum_payload_bytes": plan.maximum_payload_bytes, "deadline_seconds": plan.maximum_seconds + 30}),
     )?;
+    if plan.mode == Mode::Conservation {
+        let mut value: serde_json::Value = read(&worker)?;
+        value["finite_messages"] = json!(5);
+        atomic_write_json(&worker, &value)?;
+    }
     if plan.lane == Lane::Representative {
         representative::configure_worker(&worker, row)?;
     }
@@ -413,6 +440,19 @@ fn prepare(
     write_zenoh_router_config(&zenoh.sink_router, ZENOH_SINK_PORT)?;
     write_zenoh_client_config(&zenoh.source_client, ZENOH_SOURCE_PORT)?;
     write_zenoh_client_config(&zenoh.sink_client, ZENOH_SINK_PORT)?;
+    if plan.mode == Mode::Conservation {
+        for path in [
+            &zenoh.source_router,
+            &zenoh.sink_router,
+            &zenoh.source_client,
+            &zenoh.sink_client,
+        ] {
+            let mut configuration: serde_json::Value = read(path)?;
+            configuration["qos"] = json!({"publication": [{"key_exprs": ["**"],
+                "config": {"congestion_control": "block", "reliability": "reliable"}}]});
+            atomic_write_json(path, &configuration)?;
+        }
+    }
     let config = row_dir.join("configurable-streamer.json");
     write_config(
         repo,
@@ -436,13 +476,29 @@ fn prepare(
         prepared::configure_workload_endpoints(&config)?;
         None
     };
-    atomic_write_json(
-        &row_dir.join("deployment-inputs.json"),
-        &json!({
-            "configuration_sha256": sha256_file(&config)?, "worker_sha256": sha256_file(&worker)?,
-            "options_sha256": sha256_file(&row_dir.join("replay-options.json"))?,
-        }),
-    )?;
+    let mut inputs = json!({
+        "configuration_sha256": sha256_file(&config)?, "worker_sha256": sha256_file(&worker)?,
+        "options_sha256": sha256_file(&row_dir.join("replay-options.json"))?,
+    });
+    if plan.mode == Mode::Conservation {
+        let mut configurations = BTreeMap::new();
+        for path in [
+            &zenoh.source_router,
+            &zenoh.sink_router,
+            &zenoh.source_client,
+            &zenoh.sink_client,
+        ] {
+            configurations.insert(
+                path.file_name()
+                    .context("missing configuration name")?
+                    .to_str()
+                    .context("invalid configuration name")?,
+                sha256_file(path)?,
+            );
+        }
+        inputs["zenoh_configuration_sha256"] = json!(configurations);
+    }
+    atomic_write_json(&row_dir.join("deployment-inputs.json"), &inputs)?;
     let mut bridge = spawn_process(
         bundle,
         "streamer",
@@ -724,6 +780,16 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
     if plan.lane == Lane::Representative {
         representative::set_limits(&mut plan);
     }
+    if mode == Mode::Conservation {
+        plan.warmup_seconds = 1;
+        plan.normal_seconds = 1;
+        plan.slow_seconds = 1;
+        plan.drain_seconds = 1;
+        plan.maximum_seconds = 300;
+        plan.offered_per_second = 20;
+        plan.consumer_delay_ms = 0;
+        plan.queue_capacity = 5;
+    }
     plan.validate()?;
     atomic_write_json(&root.join("soak-plan.json"), &plan)?;
     let plan_hash = sha256_file(&root.join("soak-plan.json"))?;
@@ -919,6 +985,9 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
             "row context mismatch"
         );
         let report = streamer_soak::replay(&directory, &options)?;
+        if plan.mode == Mode::Conservation {
+            audit_finite_inputs(&directory, &inputs)?;
+        }
         let row = if plan.lane == Lane::Representative {
             representative::rows(plan.mode)?
         } else {
@@ -995,12 +1064,27 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
         );
         for (phase, seconds) in [("normal", plan.normal_seconds), ("slow", plan.slow_seconds)] {
             let counts = &report["phases"][phase];
+            if plan.mode == Mode::Conservation && phase == "slow" && counts.is_null() {
+                continue;
+            }
             let offered = counts["offered"]
                 .as_u64()
                 .context("missing offered count")?;
-            let expected = seconds * u64::from(plan.offered_per_second);
+            let expected = if plan.mode == Mode::Conservation {
+                if phase == "normal" {
+                    5
+                } else {
+                    0
+                }
+            } else {
+                seconds * u64::from(plan.offered_per_second)
+            };
             anyhow::ensure!(
-                offered.abs_diff(expected) <= (expected / 33).max(3),
+                if plan.mode == Mode::Conservation {
+                    offered == expected
+                } else {
+                    offered.abs_diff(expected) <= (expected / 33).max(3)
+                },
                 "{id}: offered rate outside declared window"
             );
             anyhow::ensure!(counts["rejected"] == 0, "{id}: source rejection");
@@ -1011,7 +1095,13 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
                 .as_u64()
                 .context("missing processed count")?;
             anyhow::ensure!(
-                if phase == "normal" {
+                if plan.mode == Mode::Conservation {
+                    loss == 0
+                        && processed == expected
+                        && counts["accepted"] == expected
+                        && (row.role != RoleStyle::ClientServerRpc
+                            || counts["rpc_completed"] == expected)
+                } else if phase == "normal" {
                     loss == 0
                 } else {
                     loss * 100 <= offered * 70 && processed * 100 >= offered * 25
@@ -1102,8 +1192,9 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
     for (first, last, initial, final_value) in windows.values() {
         let duration = last - first;
         anyhow::ensure!(
-            duration >= 15.0
-                && (plan.lane == Lane::Representative
+            (duration >= 15.0 || plan.mode == Mode::Conservation)
+                && (plan.mode == Mode::Conservation
+                    || plan.lane == Lane::Representative
                     || (*final_value as f64 - *initial as f64) * 60.0 / duration
                         <= plan.growth_bytes_per_minute as f64),
             "incomplete resource window or excess growth"
@@ -1119,6 +1210,104 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
         "plan_sha256": hash, "rows": reports, "resource_samples": samples,
         "resources_sha256": sha256_file(&root.join("resources.jsonl"))?, "execution_sha256": sha256_file(&root.join("execution.json"))?}),
     )
+}
+
+fn audit_finite_inputs(directory: &Path, inputs: &serde_json::Value) -> Result<()> {
+    let worker: serde_json::Value = read(&directory.join("worker-plan.json"))?;
+    anyhow::ensure!(
+        worker["finite_messages"] == 5
+            && worker["replay"]["queue_capacity"] == 5
+            && worker["offered_per_second"] == 20
+            && worker["consumer_delay_ms"] == 0,
+        "finite worker configuration changed"
+    );
+    let names = [
+        "zenoh-source-router.json5",
+        "zenoh-sink-router.json5",
+        "zenoh-source-client.json5",
+        "zenoh-sink-client.json5",
+    ];
+    let hashes = inputs["zenoh_configuration_sha256"]
+        .as_object()
+        .context("missing publication configuration identities")?;
+    anyhow::ensure!(
+        hashes.len() == names.len(),
+        "incomplete publication configuration identities"
+    );
+    for name in names {
+        let path = directory.join(name);
+        anyhow::ensure!(
+            hashes.get(name).and_then(serde_json::Value::as_str)
+                == Some(sha256_file(&path)?.as_str()),
+            "publication configuration changed"
+        );
+        let value: serde_json::Value = read(&path)?;
+        anyhow::ensure!(
+            value["qos"]["publication"]
+                == json!([{"key_exprs": ["**"], "config": {"congestion_control": "block", "reliability": "reliable"}}]),
+            "finite publication QoS changed"
+        );
+    }
+    let mut offers = Vec::new();
+    let mut accepted = BTreeMap::new();
+    let mut ids = BTreeSet::new();
+    for line in BufReader::new(File::open(directory.join("active.log"))?).lines() {
+        let line = line?;
+        anyhow::ensure!(line.len() <= 65_536, "finite worker log line exceeds bound");
+        let Some(body) = line.strip_prefix("OP_EVENT ") else {
+            continue;
+        };
+        let event: serde_json::Value = serde_json::from_str(body)?;
+        let kind = event["event"]
+            .as_str()
+            .context("missing finite event kind")?;
+        if !["offer", "accepted"].contains(&kind) {
+            continue;
+        }
+        let sequence = event["sequence"]
+            .as_u64()
+            .context("missing finite sequence")?;
+        let time = event["at_unix_ns"]
+            .as_str()
+            .context("missing finite timestamp")?
+            .parse::<u128>()?;
+        anyhow::ensure!(
+            event["phase"] == "normal",
+            "finite offer outside normal window"
+        );
+        if kind == "offer" {
+            let id = event["observation"]["id"]
+                .as_str()
+                .context("missing finite message ID")?;
+            anyhow::ensure!(
+                sequence == offers.len() as u64 + 1 && ids.insert(id.to_owned()),
+                "duplicate or reordered finite generation"
+            );
+            offers.push((sequence, time));
+        } else {
+            anyhow::ensure!(
+                accepted.insert(sequence, time).is_none(),
+                "duplicate finite acceptance"
+            );
+        }
+    }
+    anyhow::ensure!(
+        offers.len() == 5 && accepted.len() == 5,
+        "finite generation count changed"
+    );
+    for pair in offers.windows(2) {
+        let previous = accepted
+            .get(&pair[0].0)
+            .context("missing finite acceptance")?;
+        anyhow::ensure!(
+            pair[1]
+                .1
+                .checked_sub(*previous)
+                .is_some_and(|n| n >= 50_000_000),
+            "finite generation caught up instead of pacing"
+        );
+    }
+    Ok(())
 }
 
 pub(super) fn audit(root: &Path) -> Result<serde_json::Value> {

@@ -5716,45 +5716,23 @@ fn write_lola_manifest(
 }
 
 fn write_zenoh_router_config(path: &Path, port: u16) -> Result<()> {
-    let config = format!(
-        r#"{{
-  mode: "router",
-  listen: {{
-    endpoints: ["tcp/0.0.0.0:{port}"],
-  }},
-  scouting: {{
-    multicast: {{
-      enabled: false,
-    }},
-    gossip: {{
-      enabled: false,
-    }},
-  }},
-}}
-"#
-    );
-    fs::write(path, config).with_context(|| format!("unable to write {}", path.display()))
+    atomic_write_json(
+        path,
+        &json!({
+            "mode": "router", "listen": {"endpoints": [format!("tcp/0.0.0.0:{port}")]},
+            "scouting": {"multicast": {"enabled": false}, "gossip": {"enabled": false}}
+        }),
+    )
 }
 
 fn write_zenoh_client_config(path: &Path, port: u16) -> Result<()> {
-    let config = format!(
-        r#"{{
-  mode: "client",
-  connect: {{
-    endpoints: ["tcp/127.0.0.1:{port}"],
-  }},
-  scouting: {{
-    multicast: {{
-      enabled: false,
-    }},
-    gossip: {{
-      enabled: false,
-    }},
-  }},
-}}
-"#
-    );
-    fs::write(path, config).with_context(|| format!("unable to write {}", path.display()))
+    atomic_write_json(
+        path,
+        &json!({
+            "mode": "client", "connect": {"endpoints": [format!("tcp/127.0.0.1:{port}")]},
+            "scouting": {"multicast": {"enabled": false}, "gossip": {"enabled": false}}
+        }),
+    )
 }
 
 fn push_lola_manifest_entry(
