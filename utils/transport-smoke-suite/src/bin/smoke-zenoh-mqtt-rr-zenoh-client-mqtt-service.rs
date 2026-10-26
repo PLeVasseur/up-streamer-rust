@@ -11,6 +11,8 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Run the Zenoh-client to MQTT-service request/response smoke scenario.
+
 use clap::Parser;
 use std::process::ExitCode;
 use transport_smoke_suite::scenario::{run_scenario, ScenarioCliArgs};

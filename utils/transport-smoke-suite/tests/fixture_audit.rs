@@ -11,6 +11,8 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Validate file-backed smoke claims against retained passing and failing fixture logs.
+
 use std::path::PathBuf;
 use transport_smoke_suite::claims::{evaluate_claims, load_claims_for_scenario, Thresholds};
 use transport_smoke_suite::env;

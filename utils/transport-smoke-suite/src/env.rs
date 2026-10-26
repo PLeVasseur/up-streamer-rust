@@ -13,30 +13,49 @@
 
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{env as std_env, fs};
 use tokio::process::Command;
 
+const LOLA_BRIDGE_LIBRARY_NAME: &str = "libup_lola_bridge.so";
+
+/// Default finite message count for an active smoke sender.
 pub const DEFAULT_SEND_COUNT: u64 = 12;
+/// Default interval between sends, in milliseconds.
 pub const DEFAULT_SEND_INTERVAL_MS: u64 = 1000;
 
+/// Default required endpoint communication observations.
 pub const DEFAULT_ENDPOINT_CLAIM_MIN_COUNT: usize = 4;
+/// Default required attempted egress sends.
 pub const DEFAULT_EGRESS_SEND_ATTEMPT_MIN_COUNT: usize = 2;
+/// Default required successful egress sends.
 pub const DEFAULT_EGRESS_SEND_OK_MIN_COUNT: usize = 2;
+/// Default required worker creation/reuse observations.
 pub const DEFAULT_EGRESS_WORKER_MIN_COUNT: usize = 1;
 
+/// Broker readiness deadline, in seconds.
 pub const BROKER_READY_TIMEOUT_SECS: u64 = 30;
+/// Streamer initialization deadline, in seconds.
 pub const STREAMER_READY_TIMEOUT_SECS: u64 = 60;
+/// Passive endpoint readiness deadline, in seconds.
 pub const PASSIVE_READY_TIMEOUT_SECS: u64 = 30;
+/// Default MQTT scenario time budget, in seconds.
 pub const MQTT_HARD_TIMEOUT_SECS: u64 = 120;
+/// Default SOME/IP scenario time budget, in seconds.
 pub const SOMEIP_HARD_TIMEOUT_SECS: u64 = 180;
+/// Shutdown grace after SIGINT, in seconds.
 pub const SIGINT_GRACE_SECS: u64 = 5;
+/// Shutdown grace after SIGTERM, in seconds.
 pub const SIGTERM_GRACE_SECS: u64 = 5;
+/// Readiness-log polling interval, in milliseconds.
 pub const LOG_POLL_INTERVAL_MS: u64 = 100;
 
+/// Exact line emitted when Streamer initialization is complete.
 pub const READY_STREAMER_INITIALIZED: &str = "READY streamer_initialized";
+/// Exact line emitted when the passive listener has registered.
 pub const READY_LISTENER_REGISTERED: &str = "READY listener_registered";
 
+/// Resolves the workspace root from this crate's compile-time manifest location.
 pub fn repo_root() -> Result<PathBuf> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
@@ -51,10 +70,12 @@ pub fn repo_root() -> Result<PathBuf> {
         })
 }
 
+/// Uses the supplied artifact root or the workspace's `target/transport-smoke` directory.
 pub fn resolve_artifacts_root(repo_root: &Path, artifacts_root: Option<PathBuf>) -> PathBuf {
     artifacts_root.unwrap_or_else(|| repo_root.join("target").join("transport-smoke"))
 }
 
+/// Prefers an explicit branch guard, then a nonempty `SMOKE_EXPECTED_BRANCH` value.
 pub fn resolve_expected_branch(expected_branch: Option<String>) -> Option<String> {
     expected_branch.or_else(|| {
         std::env::var("SMOKE_EXPECTED_BRANCH")
@@ -64,10 +85,12 @@ pub fn resolve_expected_branch(expected_branch: Option<String>) -> Option<String
     })
 }
 
+/// Formats the current UTC time as a compact second-resolution artifact label.
 pub fn scenario_timestamp() -> String {
     Utc::now().format("%Y%m%dT%H%M%SZ").to_string()
 }
 
+/// Checks the current Git branch when an expected branch is supplied.
 pub async fn enforce_expected_branch(
     repo_root: &Path,
     expected_branch: Option<&str>,
@@ -104,6 +127,7 @@ pub async fn enforce_expected_branch(
     Ok(())
 }
 
+/// Requires every listed path to exist relative to the repository root.
 pub fn ensure_paths_exist(repo_root: &Path, required_paths: &[&str]) -> Result<()> {
     for relative_path in required_paths {
         let candidate = repo_root.join(relative_path);
@@ -117,7 +141,23 @@ pub fn ensure_paths_exist(repo_root: &Path, required_paths: &[&str]) -> Result<(
     Ok(())
 }
 
+/// Locates a vSomeIP library directory from the install environment, loader path or bundled output.
 pub fn detect_vsomeip_runtime_lib(repo_root: &Path) -> Result<PathBuf> {
+    if let Ok(install_path) = std_env::var("VSOMEIP_INSTALL_PATH") {
+        let lib_dir = PathBuf::from(install_path.trim()).join("lib");
+        if lib_dir.exists() {
+            return Ok(lib_dir);
+        }
+    }
+
+    if let Ok(ld_library_path) = std_env::var("LD_LIBRARY_PATH") {
+        for path in std_env::split_paths(&ld_library_path) {
+            if path.join("libvsomeip3.so").exists() || path.join("libvsomeip3.so.3").exists() {
+                return Ok(path);
+            }
+        }
+    }
+
     let build_dir = repo_root.join("target").join("debug").join("build");
     if !build_dir.exists() {
         return Err(anyhow!(
@@ -166,4 +206,94 @@ pub fn detect_vsomeip_runtime_lib(repo_root: &Path) -> Result<PathBuf> {
                 "unable to locate bundled vsomeip runtime under target/debug/build/vsomeip-sys-*/out/vsomeip/vsomeip-install/lib"
             )
         })
+}
+
+/// Requires a real LoLa bridge library from the explicit environment or recorded build link paths.
+pub fn detect_lola_bridge_lib_dir(repo_root: &Path) -> Result<PathBuf> {
+    if let Ok(lib_dir) = std::env::var("LOLA_BRIDGE_LIB_DIR") {
+        let lib_dir = lib_dir.trim();
+        if !lib_dir.is_empty() {
+            return validate_lola_bridge_lib_dir(PathBuf::from(lib_dir), "LOLA_BRIDGE_LIB_DIR");
+        }
+    }
+
+    let build_dir = repo_root.join("target").join("debug").join("build");
+    if !build_dir.exists() {
+        return Err(anyhow!(
+            "missing build output directory for LoLa bridge lookup: {}",
+            build_dir.display()
+        ));
+    }
+
+    let mut candidates = Vec::new();
+    for entry in fs::read_dir(&build_dir)
+        .with_context(|| format!("unable to read build directory {}", build_dir.display()))?
+    {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let file_name = file_name.to_string_lossy();
+        if !file_name.starts_with("up-transport-lola-rust-") {
+            continue;
+        }
+
+        let output_path = entry.path().join("output");
+        if !output_path.is_file() {
+            continue;
+        }
+
+        let output = fs::read_to_string(&output_path)
+            .with_context(|| format!("unable to read {}", output_path.display()))?;
+        for line in output.lines() {
+            let Some(candidate) = parse_lola_bridge_link_search(line) else {
+                continue;
+            };
+            let candidate = if candidate.is_absolute() {
+                candidate
+            } else {
+                repo_root.join(candidate)
+            };
+            let bridge_library = candidate.join(LOLA_BRIDGE_LIBRARY_NAME);
+            if !bridge_library.is_file() {
+                continue;
+            }
+            let modified = fs::metadata(&bridge_library)
+                .and_then(|metadata| metadata.modified())
+                .with_context(|| {
+                    format!(
+                        "unable to inspect modified time for {}",
+                        bridge_library.display()
+                    )
+                })?;
+            candidates.push((modified, candidate));
+        }
+    }
+
+    candidates.sort_by_key(|(modified, _)| *modified);
+    candidates.pop().map(|(_, path)| path).ok_or_else(|| {
+        anyhow!(
+            "unable to locate {} from target/debug/build/up-transport-lola-rust-*/output; build configurable-streamer with LoLa features first or set LOLA_BRIDGE_LIB_DIR",
+            LOLA_BRIDGE_LIBRARY_NAME
+        )
+    })
+}
+
+fn parse_lola_bridge_link_search(line: &str) -> Option<PathBuf> {
+    line.strip_prefix("cargo:rustc-link-search=native=")
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn validate_lola_bridge_lib_dir(lib_dir: PathBuf, source: &str) -> Result<PathBuf> {
+    let bridge_library = lib_dir.join(LOLA_BRIDGE_LIBRARY_NAME);
+    if bridge_library.is_file() {
+        return Ok(lib_dir);
+    }
+
+    Err(anyhow!(
+        "{} does not contain {}: {}",
+        source,
+        LOLA_BRIDGE_LIBRARY_NAME,
+        bridge_library.display()
+    ))
 }

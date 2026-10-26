@@ -11,6 +11,8 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Check smoke scenario identifiers, templates and native-environment configuration contracts.
+
 use transport_smoke_suite::claims::{
     default_claims_file_path, load_claims_for_scenario, ClaimCategory, Thresholds,
 };
@@ -21,6 +23,15 @@ use transport_smoke_suite::scenario;
 fn scenario_registry_contains_exactly_eight_ids() {
     let scenario_ids = scenario::scenario_ids();
     assert_eq!(scenario_ids.len(), 8);
+}
+
+#[test]
+fn matrix_registry_contains_zero_copy_selected_wire_rows() {
+    let scenario_ids = scenario::matrix_scenario_ids();
+    assert_eq!(scenario_ids.len(), 15);
+    assert!(scenario_ids.contains(&"smoke-zc-zenoh-shm-to-iceoryx2"));
+    assert!(scenario_ids.contains(&"smoke-zc-lola-bundled-to-zenoh-shm"));
+    assert!(scenario_ids.contains(&"smoke-zc-all-transports-bundled"));
 }
 
 #[test]

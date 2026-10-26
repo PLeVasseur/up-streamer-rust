@@ -17,6 +17,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+/// Polls for a complete readiness-marker line until the deadline, reporting a diagnostic tail on timeout.
 pub async fn wait_for_exact_marker(
     log_path: &Path,
     marker: &str,
@@ -44,6 +45,7 @@ pub async fn wait_for_exact_marker(
     }
 }
 
+/// Counts complete marker lines, returning zero when the log does not yet exist.
 pub fn count_exact_marker(log_path: &Path, marker: &str) -> Result<usize> {
     if !log_path.exists() {
         return Ok(0);
@@ -58,10 +60,12 @@ pub fn count_exact_marker(log_path: &Path, marker: &str) -> Result<usize> {
         .count())
 }
 
+/// Reports whether the log contains at least one complete marker line.
 pub fn has_exact_marker(log_path: &Path, marker: &str) -> Result<bool> {
     Ok(count_exact_marker(log_path, marker)? > 0)
 }
 
+/// Returns the last `max_lines` lines for a positive limit; missing logs yield an empty vector.
 pub fn tail_lines(log_path: &Path, max_lines: usize) -> Result<Vec<String>> {
     if !log_path.exists() {
         return Ok(Vec::new());

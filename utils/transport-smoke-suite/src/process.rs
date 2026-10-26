@@ -20,37 +20,60 @@ use std::time::Duration;
 use tokio::process::{Child, Command};
 
 #[derive(Debug)]
+/// Captured output and exit status of a completed shell command.
 pub struct CommandOutcome {
+    /// Actual shell command, including optional environment bootstrap.
     pub command: String,
+    /// Numeric exit code, or `None` if termination did not produce one.
     pub status_code: Option<i32>,
+    /// Standard output decoded with replacement for invalid UTF-8.
     pub stdout: String,
+    /// Standard error decoded with replacement for invalid UTF-8.
     pub stderr: String,
 }
 
 #[derive(Debug, Clone)]
+/// Launch parameters for one execution-owned scenario process.
 pub struct ProcessSpec {
+    /// Human-readable process/role label.
     pub name: String,
+    /// Child working directory.
     pub workdir: PathBuf,
+    /// Executable to invoke after optional bootstrap.
     pub executable: PathBuf,
+    /// Individual executable arguments, escaped when rendering the shell command.
     pub args: Vec<String>,
+    /// Environment names and values exported for the child.
     pub env: Vec<(String, String)>,
+    /// Combined output log name under the scenario artifact directory.
     pub log_file_name: String,
 }
 
 #[derive(Debug)]
+/// Owned child handle and process-group metadata used for explicit shutdown and reporting.
 pub struct ManagedProcess {
+    /// Human-readable process/role label.
     pub name: String,
+    /// PID returned when the child was spawned.
     pub pid: i32,
+    /// Dedicated process-group identifier established for this child.
     pub process_group_id: i32,
+    /// Rendered shell invocation used to launch the child.
     pub command_line: String,
+    /// Working directory used by the child.
     pub workdir: PathBuf,
+    /// Combined standard-output/error log path.
     pub log_path: PathBuf,
+    /// UTC timestamp recorded after spawning.
     pub started_at: DateTime<Utc>,
+    /// UTC timestamp when this handle observed process completion.
     pub ended_at: Option<DateTime<Utc>>,
+    /// Observed numeric exit code, absent before observation or on signal termination.
     pub exit_status_code: Option<i32>,
     child: Child,
 }
 
+/// Runs a shell command with optional native-environment bootstrap and captures its completed output.
 pub async fn run_shell_command(
     repo_root: &Path,
     workdir: &Path,
@@ -74,12 +97,14 @@ pub async fn run_shell_command(
     })
 }
 
+/// Quotes one literal shell word, including embedded single quotes.
 pub fn shell_escape(value: &str) -> String {
     let escaped = value.replace('\'', "'\"'\"'");
     format!("'{escaped}'")
 }
 
 impl ManagedProcess {
+    /// Starts a child in its own process group, appending both output streams to its log.
     pub async fn spawn(
         spec: ProcessSpec,
         repo_root: &Path,
@@ -114,6 +139,8 @@ impl ManagedProcess {
             .stdout(Stdio::from(stdout_file))
             .stderr(Stdio::from(stderr_file));
 
+        // SAFETY: the post-fork closure calls only async-signal-safe setpgid for
+        // the current child; error construction reads errno without user callbacks.
         unsafe {
             command.pre_exec(|| {
                 if libc::setpgid(0, 0) != 0 {
@@ -151,10 +178,12 @@ impl ManagedProcess {
         })
     }
 
+    /// Reports whether this handle has observed completion; it does not poll the child.
     pub fn has_exited(&self) -> bool {
         self.ended_at.is_some()
     }
 
+    /// Polls the child without waiting and records completion when observed.
     pub async fn refresh_exit_status(&mut self) -> Result<()> {
         if self.exit_status_code.is_some() {
             return Ok(());
@@ -173,6 +202,7 @@ impl ManagedProcess {
         Ok(())
     }
 
+    /// Waits up to the supplied interval, returning false on timeout without terminating the child.
     pub async fn wait_with_timeout(&mut self, timeout: Duration) -> Result<bool> {
         self.refresh_exit_status().await?;
         if self.exit_status_code.is_some() {
@@ -196,6 +226,10 @@ impl ManagedProcess {
         }
     }
 
+    /// Signals the owned group with SIGINT, then SIGTERM after the first grace period.
+    ///
+    /// Returns an error if both grace periods expire; the caller must handle any
+    /// remaining process rather than treating that result as successful cleanup.
     pub async fn terminate_gracefully(
         &mut self,
         sigint_grace: Duration,
@@ -231,6 +265,8 @@ impl ManagedProcess {
 
     fn signal_process_group(&self, signal: i32) -> Result<()> {
         let target_pgid = -self.process_group_id;
+        // SAFETY: kill accepts scalar process-group/signal identifiers and retains
+        // no Rust memory; this identifier belongs to the group created at spawn.
         let rc = unsafe { libc::kill(target_pgid, signal) };
         if rc == 0 {
             return Ok(());

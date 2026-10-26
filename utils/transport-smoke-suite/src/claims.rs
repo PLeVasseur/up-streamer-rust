@@ -19,50 +19,76 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Repository-relative directory containing the default per-scenario JSON claims.
 pub const DEFAULT_CLAIMS_DIRECTORY: &str = "utils/transport-smoke-suite/claims";
 
+/// Whether a claims override names one file or a directory of scenario files.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ClaimsPathKind {
+    /// A single claims file.
     File,
+    /// A directory resolved using the requested scenario identifier.
     Directory,
 }
 
+/// Required presence or complete absence of a log pattern.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaimKind {
+    /// Require at least the configured number of regex matches.
     MustMatch,
+    /// Require zero regex matches.
     MustNotMatch,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Reporting category identifying the behavior measured by a claim.
 pub enum ClaimCategory {
+    /// Evidence of communication at an endpoint.
     EndpointCommunication,
+    /// Evidence of Streamer egress activity.
     StreamerEgress,
+    /// A signature whose appearance makes the scenario fail.
     ForbiddenSignature,
+    /// A process readiness condition.
     Readiness,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Source of a claim's minimum required match count.
 pub enum ThresholdSelector {
+    /// Use the endpoint communication threshold.
     EndpointCommunication,
+    /// Use the attempted egress-send threshold.
     EgressSendAttempt,
+    /// Use the successful egress-send threshold.
     EgressSendOk,
+    /// Use the egress-worker creation/reuse threshold.
     EgressWorkerCreateOrReuse,
+    /// Use this literal count instead of a runtime threshold.
     Fixed(usize),
 }
 
 #[derive(Clone, Copy, Debug)]
+/// Static claim definition whose threshold is resolved for a run.
 pub struct ClaimTemplate {
+    /// Identifier used to correlate the definition and outcome.
     pub claim_id: &'static str,
+    /// Behavior category for reporting.
     pub category: ClaimCategory,
+    /// Required-match or forbidden-match interpretation.
     pub kind: ClaimKind,
+    /// Log path relative to the scenario artifact directory.
     pub file: &'static str,
+    /// Regular expression evaluated over the log contents.
     pub pattern: &'static str,
+    /// Selector for the required minimum count.
     pub threshold: ThresholdSelector,
 }
 
 impl ClaimTemplate {
+    /// Constructs a positive claim with the supplied threshold selector.
     pub const fn must_match(
         claim_id: &'static str,
         category: ClaimCategory,
@@ -80,6 +106,7 @@ impl ClaimTemplate {
         }
     }
 
+    /// Constructs a forbidden-pattern claim requiring zero matches.
     pub const fn must_not_match(
         claim_id: &'static str,
         category: ClaimCategory,
@@ -98,10 +125,15 @@ impl ClaimTemplate {
 }
 
 #[derive(Clone, Copy, Debug)]
+/// Runtime match-count minima used when materializing named threshold selectors.
 pub struct Thresholds {
+    /// Minimum evidence count for endpoint communication.
     pub endpoint_communication_min_count: usize,
+    /// Minimum number of attempted egress sends.
     pub egress_send_attempt_min_count: usize,
+    /// Minimum number of successful egress sends.
     pub egress_send_ok_min_count: usize,
+    /// Minimum number of worker creation/reuse observations.
     pub egress_worker_create_or_reuse_min_count: usize,
 }
 
@@ -117,33 +149,55 @@ impl Default for Thresholds {
 }
 
 #[derive(Clone, Debug)]
+/// Owned log claim with a concrete match-count threshold.
 pub struct ClaimSpec {
+    /// Identifier preserved in the evaluated result.
     pub claim_id: String,
+    /// Behavior category for reporting.
     pub category: ClaimCategory,
+    /// Positive or forbidden-match interpretation.
     pub kind: ClaimKind,
+    /// Log path relative to the artifact directory.
     pub file: String,
+    /// Regular expression evaluated over the whole log.
     pub pattern: String,
+    /// Required minimum for positive claims; zero for forbidden claims.
     pub min_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+/// Evaluation result retaining the exact claim, count and any read/regex error.
 pub struct ClaimOutcome {
+    /// Identifier of the evaluated claim.
     pub claim_id: String,
+    /// Behavior category copied from the claim.
     pub category: ClaimCategory,
+    /// Required-match or forbidden-match interpretation.
     pub kind: ClaimKind,
+    /// Evaluated log path relative to the artifact directory.
     pub file: String,
+    /// Evaluated regular expression.
     pub pattern: String,
+    /// Required positive-match count, or zero for a forbidden claim.
     pub min_count: usize,
+    /// Number of nonoverlapping regex matches observed in the whole log.
     pub observed_count: usize,
+    /// Whether the claim was evaluated without error and met its match rule.
     pub pass: bool,
+    /// Text of the first regex match, if any.
     pub first_match: Option<String>,
+    /// File-read or regex-compilation failure, if evaluation could not complete.
     pub error: Option<String>,
 }
 
 #[derive(Clone, Debug)]
+/// Validated scenario claim file with concrete runtime thresholds.
 pub struct LoadedClaims {
+    /// Resolved source file used for this run.
     pub source_path: PathBuf,
+    /// Nonempty schema-version label read from the source file.
     pub schema_version: String,
+    /// Validated claims with unique identifiers and resolved counts.
     pub claims: Vec<ClaimSpec>,
 }
 
@@ -181,6 +235,7 @@ enum ThresholdSelectorKey {
     EgressWorkerCreateOrReuse,
 }
 
+/// Resolves static threshold selectors into owned claim specifications.
 pub fn materialize_claims(
     claim_templates: &[ClaimTemplate],
     thresholds: Thresholds,
@@ -210,12 +265,14 @@ fn resolve_threshold(selector: ThresholdSelector, thresholds: Thresholds) -> usi
     }
 }
 
+/// Constructs the default JSON claim path for a scenario without checking existence.
 pub fn default_claims_file_path(repo_root: &Path, scenario_id: &str) -> PathBuf {
     repo_root
         .join(DEFAULT_CLAIMS_DIRECTORY)
         .join(format!("{scenario_id}.json"))
 }
 
+/// Resolves an override relative to the repository and requires an existing file or directory.
 pub fn claims_override_kind(repo_root: &Path, claims_path: &Path) -> Result<ClaimsPathKind> {
     let candidate = resolve_override_path(repo_root, claims_path);
     let metadata = fs::metadata(&candidate).with_context(|| {
@@ -237,6 +294,7 @@ pub fn claims_override_kind(repo_root: &Path, claims_path: &Path) -> Result<Clai
     }
 }
 
+/// Resolves the default or overridden claims location and requires an existing regular file.
 pub fn resolve_claims_file_path(
     repo_root: &Path,
     scenario_id: &str,
@@ -283,6 +341,9 @@ pub fn resolve_claims_file_path(
     Ok(candidate)
 }
 
+/// Loads a matching scenario file, rejecting invalid regexes, duplicate IDs and invalid thresholds.
+///
+/// A missing, malformed or mismatched file is an error; no fallback claims are supplied.
 pub fn load_claims_for_scenario(
     repo_root: &Path,
     scenario_id: &str,
@@ -445,6 +506,7 @@ fn resolve_override_path(repo_root: &Path, claims_path: &Path) -> PathBuf {
     }
 }
 
+/// Evaluates every claim against its complete log, retaining read/regex errors as failed outcomes.
 pub fn evaluate_claims(artifacts_dir: &Path, claims: &[ClaimSpec]) -> Vec<ClaimOutcome> {
     claims
         .iter()
@@ -518,6 +580,7 @@ fn evaluate_claim(artifacts_dir: &Path, claim: &ClaimSpec) -> ClaimOutcome {
     }
 }
 
+/// Separates positive and forbidden outcomes and returns the first failure explanation.
 pub fn split_claim_outcomes(
     outcomes: Vec<ClaimOutcome>,
 ) -> (Vec<ClaimOutcome>, Vec<ClaimOutcome>, Option<String>) {
