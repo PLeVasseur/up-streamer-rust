@@ -184,7 +184,7 @@ lola-zero-copy = ["lola-transport"]
 lola-selected-wire = ["lola-owned-frame", "lola-zero-copy"]
 vsomeip-transport = ["up-transport-vsomeip"]
 bundled-vsomeip = ["up-transport-vsomeip/bundled"]
-mqtt-transport = ["up-transport-mqtt5"]
+mqtt-transport = ["up-transport-mqtt5", "selected-wire-common", "wire-formats"]
 dds-transport = ["selected-wire-common", "wire-formats", "up-transport-dds"]
 
 [dependencies]

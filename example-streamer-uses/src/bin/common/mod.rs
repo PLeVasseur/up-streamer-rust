@@ -1,5 +1,7 @@
 pub(crate) mod classic;
 pub(crate) mod cli;
+#[cfg(all(feature = "selected-wire-common", feature = "wire-formats"))]
+pub(crate) mod encoding;
 #[cfg(any(
     feature = "iceoryx2-zero-copy",
     feature = "iceoryx2-owned-frame",
@@ -253,6 +255,10 @@ impl UListener for PublishReceiver {
         let Some(payload_bytes) = msg.payload() else {
             panic!("No bytes available");
         };
+        if msg.payload_encoding() != Some(PayloadEncoding::PROTOBUF) {
+            debug!(encoding = ?msg.payload_encoding(), bytes = payload_bytes.len(), "Received opaque non-Protobuf publication");
+            return;
+        }
         match Timer::parse_from_bytes(&payload_bytes) {
             Ok(timer_message) => {
                 debug!("timer: {timer_message:?}");

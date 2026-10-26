@@ -1,13 +1,13 @@
 {
   "expected": {
-    "pass": 1728,
-    "unsupported": 432,
+    "pass": 1848,
+    "unsupported": 312,
     "blocked": 0,
     "failed": 0
   },
   "unsupported_reason_allowlist": [
     "source and sink endpoint profiles are identical",
-    "Arrow and OMGIDL are not implemented by MQTT5 or vSomeIP classic role binaries"
+    "Arrow and OMGIDL are not implemented by vSomeIP classic role binaries"
   ],
   "retry": {
     "max_retries_lola_rows": 1,

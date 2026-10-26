@@ -14,14 +14,10 @@
 //! Publish classic uProtocol messages through a configured MQTT broker connection.
 mod common;
 
-use chrono::Local;
-use chrono::Timelike;
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use common::cli;
+use common::encoding::Encoding;
 use common::native::NativeContext;
-use common::{native_message_payload_parts, protobuf_payload, xcdrv2_message_payload_parts};
-use hello_world_protos::hello_world_topics::Timer;
-use hello_world_protos::timeofday::TimeOfDay;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::info;
@@ -34,13 +30,6 @@ const DEFAULT_UVERSION: &str = "0x1";
 const DEFAULT_RESOURCE: &str = "0x8001";
 const DEFAULT_BROKER_URI: &str = "localhost:1883";
 const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"MPUB");
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum Encoding {
-    Native,
-    Protobuf,
-    Xcdrv2,
-}
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
@@ -71,7 +60,7 @@ struct Args {
     /// Payload encoding for the classic UMessage payload.
     #[arg(long, value_enum, default_value = "protobuf")]
     encoding: Encoding,
-    /// Text payload used by native/XCDRv2 matrix rows.
+    /// Text payload used by non-Protobuf example messages.
     #[arg(long, default_value = "mqtt-publisher")]
     payload: String,
 }
@@ -109,50 +98,37 @@ async fn main() -> Result<(), UStatus> {
 
     let publisher: Arc<dyn UTransport> = Arc::new(mqtt5_transport);
 
-    let mut sent_count: u64 = 0;
-    loop {
-        if args.send_count > 0 && sent_count >= args.send_count {
-            info!("Completed bounded send run: sent_count={sent_count}");
-            break;
-        }
-
-        tokio::time::sleep(Duration::from_millis(args.send_interval_ms)).await;
-
-        let now = Local::now();
-
-        let time_of_day = TimeOfDay {
-            hours: now.hour() as i32,
-            minutes: now.minute() as i32,
-            seconds: now.second() as i32,
-            nanos: now.nanosecond() as i32,
-            ..Default::default()
-        };
-
-        // Publish messages signed with the source URI
-        let mut builder = UMessageBuilder::publish(source.clone());
-        let publish_msg = if args.encoding == Encoding::Protobuf {
-            let timer_message = Timer {
-                time: Some(time_of_day).into(),
-                ..Default::default()
+    let sent_count = common::classic::send(
+        publisher.as_ref(),
+        (args.send_count > 0).then_some(args.send_count),
+        Duration::from_millis(args.send_interval_ms),
+        |sent_count| {
+            // Publish messages signed with the source URI
+            let mut builder = UMessageBuilder::publish(source.clone());
+            let publish_msg = if args.encoding == Encoding::Protobuf {
+                builder
+                    .build_with_payload(common::classic::timer_payload(), PayloadEncoding::PROTOBUF)
+                    .unwrap()
+            } else {
+                let (payload, encoding) = selected_payload_parts(
+                    &args,
+                    sent_count.saturating_add(1).min(u64::from(u32::MAX)) as u32,
+                )?;
+                builder
+                    .build_with_payload(payload, encoding)
+                    .map_err(|error| {
+                        invalid_config(format!("failed to build publish message: {error:?}"))
+                    })?
             };
-            builder
-                .build_with_payload(protobuf_payload(&timer_message), PayloadEncoding::PROTOBUF)
-                .unwrap()
-        } else {
-            let (payload, encoding) = selected_payload_parts(&args, sent_count as u32 + 1)?;
-            builder
-                .build_with_payload(payload, encoding)
-                .map_err(|error| {
-                    invalid_config(format!("failed to build publish message: {error:?}"))
-                })?
-        };
-        info!("Sending Publish message:\n{publish_msg:?}");
+            info!("Sending Publish message:\n{publish_msg:?}");
 
-        common::proof::send(publisher.as_ref(), publish_msg).await?;
-        sent_count += 1;
-    }
+            Ok(publish_msg)
+        },
+    )
+    .await?;
 
     if args.send_count > 0 {
+        info!("Completed bounded send run: sent_count={sent_count}");
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
@@ -163,18 +139,13 @@ fn selected_payload_parts(
     args: &Args,
     sequence: u32,
 ) -> Result<(Vec<u8>, up_rust::PayloadEncoding), UStatus> {
-    match args.encoding {
-        Encoding::Native => native_message_payload_parts(
-            NATIVE_PAYLOAD_MAGIC,
-            sequence,
-            &args.payload,
-            &args.native,
-        ),
-        Encoding::Protobuf => unreachable!("protobuf is handled by the classic protobuf path"),
-        Encoding::Xcdrv2 => {
-            xcdrv2_message_payload_parts(sequence, args.uauthority.clone(), &args.payload)
-        }
-    }
+    args.encoding.payload_parts(
+        &args.native,
+        NATIVE_PAYLOAD_MAGIC,
+        sequence,
+        &args.uauthority,
+        &args.payload,
+    )
 }
 
 fn invalid_config(message: impl Into<String>) -> UStatus {

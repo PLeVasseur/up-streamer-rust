@@ -58,6 +58,17 @@ representations are validated before inspecting their payload.
 
 ## Connectivity and sustained workloads
 
+MQTT's six classic roles share send iteration, listener waits and payload factories
+while preserving explicit broker/options/connection setup. Active roles accept
+`--encoding native|protobuf|xcdrv2|arrow|omgidl`; the default remains protobuf.
+The ordinary `mqtt-transport` feature includes the selected codec dependencies,
+so this capability does not depend on workspace feature unification. Arrow uses
+the actual telemetry-table IPC encoder and OMG IDL the vehicle-status encoder;
+each message carries its matching private payload identity. Native still requires
+its deployment agreement. Passive MQTT roles preserve per-message encoding;
+non-Protobuf publications remain opaque and RPC servers echo their bytes and
+identity. Broker storage/mapping/setup remain in the MQTT binding documentation.
+
 All six Zenoh entrypoints retain their CLI/defaults, runtime, configuration and
 concrete backend/wire constructors while sharing actual message flow:
 

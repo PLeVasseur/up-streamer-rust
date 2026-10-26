@@ -8,6 +8,11 @@ connectivity semantics and the boundary with sustained workloads.
 All six Zenoh roles also share classic/selected-wire send, receive and RPC flow;
 their local configuration, defaults and wire constructors stay visible in the
 entrypoints. The role guide describes timing, readiness and cleanup semantics.
+MQTT classic roles additionally support Arrow and OMG IDL payloads with the
+ordinary `mqtt-transport` feature. Their existing flags and defaults remain;
+`--encoding` adds `arrow` and `omgidl`. See the role guide for encoding and opaque
+receive/RPC behavior and the [MQTT binding](https://github.com/eclipse-uprotocol/up-transport-mqtt5-rust#readme)
+for broker configuration and physical mapping.
 
 ## Running a UStreamer
 

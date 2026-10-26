@@ -4168,8 +4168,7 @@ fn derived_criteria(rows: &[MatrixRow]) -> MatrixCriteria {
         },
         unsupported_reason_allowlist: vec![
             "source and sink endpoint profiles are identical".to_string(),
-            "Arrow and OMGIDL are not implemented by MQTT5 or vSomeIP classic role binaries"
-                .to_string(),
+            "Arrow and OMGIDL are not implemented by vSomeIP classic role binaries".to_string(),
         ],
         retry: RetryCriteria {
             max_retries_lola_rows: LOLA_ROW_RETRIES,
@@ -4303,14 +4302,11 @@ fn support_status(row: &MatrixRow) -> SupportStatus {
     if matches!(row.encoding, WireEncoding::Arrow | WireEncoding::Omgidl)
         && [row.source, row.sink].into_iter().any(|profile| {
             profile.kind == EndpointKind::Classic
-                && matches!(
-                    profile.physical,
-                    PhysicalTransport::Mqtt5 | PhysicalTransport::Vsomeip
-                )
+                && matches!(profile.physical, PhysicalTransport::Vsomeip)
         })
     {
         return unsupported(
-            "Arrow and OMGIDL are not implemented by MQTT5 or vSomeIP classic role binaries",
+            "Arrow and OMGIDL are not implemented by vSomeIP classic role binaries",
         );
     }
     if row.source.kind == EndpointKind::Classic || row.sink.kind == EndpointKind::Classic {
@@ -9915,7 +9911,7 @@ mod tests {
             rows.iter()
                 .filter(|row| support_status(row).classification == RowClassification::Pass)
                 .count(),
-            459
+            477 // MQTT's two added encodings across three roles and three native sinks.
         );
         assert!(rows
             .iter()
@@ -9923,7 +9919,7 @@ mod tests {
     }
 
     #[test]
-    fn dds_encoded_owned_delta_preserves_every_row_classification() {
+    fn dds_encoded_owned_correspondence_keeps_every_row() {
         let rows = matrix_rows();
         let changed: Vec<_> = rows
             .iter()
@@ -9939,14 +9935,14 @@ mod tests {
                 .iter()
                 .filter(|row| support_status(row).classification == RowClassification::Pass)
                 .count(),
-            306
+            318
         );
         assert_eq!(
             changed
                 .iter()
                 .filter(|row| support_status(row).classification == RowClassification::Unsupported)
                 .count(),
-            39
+            27
         );
         assert_eq!(
             changed
@@ -10036,8 +10032,8 @@ mod tests {
     fn full_matrix_plan_derives_r11_profile_wire_compatibility_counts() {
         let plan = plan_rows(&matrix_rows(), 1, None, 0);
         assert_eq!(plan.slot_count, 2160);
-        assert_eq!(plan.runnable.len(), 1728);
-        assert_eq!(plan.completed.len(), 432);
+        assert_eq!(plan.runnable.len(), 1848);
+        assert_eq!(plan.completed.len(), 312);
         assert!(plan
             .completed
             .iter()
@@ -10126,14 +10122,14 @@ mod tests {
                 .iter()
                 .map(|manifest| manifest.expected_counts.pass)
                 .sum::<usize>(),
-            1728
+            1848
         );
         assert_eq!(
             manifests
                 .iter()
                 .map(|manifest| manifest.expected_counts.unsupported)
                 .sum::<usize>(),
-            432
+            312
         );
         let keys: BTreeSet<_> = manifests
             .iter()
@@ -10600,7 +10596,7 @@ mod tests {
                 summary.blocked_count,
                 summary.failed_count,
             ),
-            (2160, 1728, 432, 0, 0)
+            (2160, 1848, 312, 0, 0)
         );
         assert!(validate_criteria(&summary, &criteria).is_empty());
     }
@@ -10631,18 +10627,18 @@ mod tests {
     #[test]
     fn derived_criteria_matches_actual_profiles_and_compatibility() {
         let criteria = derived_criteria(&matrix_rows());
-        assert_eq!(criteria.expected.pass, 1728);
-        assert_eq!(criteria.expected.unsupported, 432);
+        assert_eq!(criteria.expected.pass, 1848);
+        assert_eq!(criteria.expected.unsupported, 312);
         assert_eq!(criteria.expected.blocked, 0);
         assert_eq!(criteria.expected.failed, 0);
     }
 
     #[test]
-    fn arrow_and_omgidl_classic_legacy_limit_has_exact_reason() {
+    fn arrow_and_omgidl_vsomeip_limit_has_exact_reason() {
         let row = matrix_rows()
             .into_iter()
             .find(|row| {
-                row.source.id == "mqtt5-classic"
+                row.source.id == "vsomeip-classic"
                     && row.sink.id == "dds-encoded-owned"
                     && row.encoding == WireEncoding::Arrow
             })
@@ -10651,8 +10647,25 @@ mod tests {
         assert_eq!(status.classification, RowClassification::Unsupported);
         assert_eq!(
             status.reason,
-            "Arrow and OMGIDL are not implemented by MQTT5 or vSomeIP classic role binaries"
+            "Arrow and OMGIDL are not implemented by vSomeIP classic role binaries"
         );
+    }
+
+    #[test]
+    fn mqtt_serialized_rows_are_runnable_except_remaining_vsomeip_gap() {
+        let rows: Vec<_> = matrix_rows()
+            .into_iter()
+            .filter(|row| {
+                row.source.id != row.sink.id
+                    && matches!(row.encoding, WireEncoding::Arrow | WireEncoding::Omgidl)
+                    && row.uses_mqtt5()
+                    && !row.uses_vsomeip()
+            })
+            .collect();
+        assert_eq!(rows.len(), 120);
+        assert!(rows
+            .iter()
+            .all(|row| support_status(row).classification == RowClassification::Pass));
     }
 
     #[test]

@@ -18,7 +18,6 @@ use clap::Parser;
 use common::cli;
 use common::PublishReceiver;
 use std::sync::Arc;
-use std::thread;
 use tracing::info;
 use up_rust::{UListener, UStatus, UTransport};
 use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions, MqttClientOptions};
@@ -95,11 +94,11 @@ async fn main() -> Result<(), UStatus> {
 
     let listener: Arc<dyn UListener> =
         common::native::listener(&args.native, Arc::new(PublishReceiver));
-    notifyee
-        .register_listener(&source_filter, Some(&local_uuri), listener)
-        .await?;
-    println!("READY listener_registered");
-    loop {
-        thread::park();
-    }
+    common::classic::listen(
+        notifyee.as_ref(),
+        &source_filter,
+        Some(&local_uuri),
+        listener,
+    )
+    .await
 }

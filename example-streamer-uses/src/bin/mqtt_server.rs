@@ -18,7 +18,6 @@ use clap::Parser;
 use common::cli;
 use common::ServiceRequestResponder;
 use std::sync::Arc;
-use std::thread;
 use tracing::info;
 use up_rust::{UListener, UStatus, UTransport, UUri};
 use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions, MqttClientOptions};
@@ -85,17 +84,11 @@ async fn main() -> Result<(), UStatus> {
 
     let service_request_responder: Arc<dyn UListener> =
         Arc::new(ServiceRequestResponder::new(service.clone()));
-    service
-        .register_listener(
-            &source_filter,
-            Some(&sink_filter),
-            common::native::listener(&args.native, service_request_responder.clone()),
-        )
-        .await?;
-
-    println!("READY listener_registered");
-
-    loop {
-        thread::park();
-    }
+    common::classic::listen(
+        service.as_ref(),
+        &source_filter,
+        Some(&sink_filter),
+        common::native::listener(&args.native, service_request_responder),
+    )
+    .await
 }
