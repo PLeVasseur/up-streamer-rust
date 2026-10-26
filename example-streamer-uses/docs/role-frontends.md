@@ -1,6 +1,6 @@
 # Role entrypoints and shared flow
 
-The six `iceoryx2_*` entrypoints each contain their command-line fields and
+The six `iceoryx2_*` and six `lola_*` entrypoints each contain their command-line fields and
 defaults, Tokio runtime, physical backend construction and concrete selected-wire
 constructors. The local `run_endpoint!` macro shows the five wire choices for
 both owned-frame and copy-minimized APIs. Native selection requires the supplied
@@ -11,6 +11,14 @@ configured transports. Payload generation, native identity checks, flow evidence
 passive registration/readiness and sustained worker execution use the existing
 common modules. `endpoint_config.rs` validates reusable backend options; actual
 backend constructors remain in the entrypoint.
+
+LoLa roles retain their explicit primary/optional RPC-response channel settings.
+Reusable option validation requires a canonical complete MW COM manifest shared
+by both channels; each role constructs `UTransportLola` and chooses its native or
+owned endpoint locally. Hidden compatibility transport/role selectors and existing
+defaults remain available. See the
+[LoLa binding documentation](https://github.com/PLeVasseur/up-transport-lola-rust#readme)
+for physical sample configuration, setup and storage lifecycle requirements.
 
 ## DDS entrypoints
 
@@ -29,7 +37,7 @@ reliable-reader acknowledgement waits within `--timeout-ms`. For physical storag
 discovery and QoS behavior, consult the
 [DDS binding documentation](https://github.com/PLeVasseur/up-transport-dds-rust#readme).
 
-## iceoryx2 compatibility and addressing
+## iceoryx2 and LoLa compatibility and addressing
 
 Binary names, CLI defaults and feature requirements are retained. The hidden
 transport and role selectors remain available for controller-provisioned uses.
@@ -50,7 +58,7 @@ representations are validated before inspecting their payload.
 
 ## Connectivity and sustained workloads
 
-The finite iceoryx2 connectivity role repeats one message identity for `--send-count`
+The finite iceoryx2/LoLa connectivity role repeats one message identity for `--send-count`
 (with zero retaining the existing minimum of one send). Passive connectivity
 roles finish after the first delivery. RPC clients finish after the first matching
 payload response and cancel/reap their repeated-send task. These controls are
