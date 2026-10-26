@@ -50,3 +50,30 @@ frame and borrows its payload; it does not manufacture native backing or a typed
 agreement. This diagnostic conversion is separate from in-place admission and
 the typed native allocation path. All receiver registration happens before a
 role reports READY or publishes a request needing a correlated response.
+
+## Receiver-only catalogs
+
+Shared setup preserves each declared address's transmit flag when reserving
+native resources. Iceoryx receive-only entries create a service without a
+publisher/data segment; Zenoh receive-only catalogs borrow the remote SHM pool
+without an unused local provider. The bindings still own static physical sample
+sizes, pool geometry and all subscriber/borrow/history/loan limits. TX addresses
+retain their eager setup reservation; no hot-path lazy publisher is introduced.
+
+## Receiver-first attachment
+
+The Iceoryx binding owns each reserved native service for the core lifetime,
+including receive-only addresses. Shared setup can attach a receiver before its
+peer publisher exists, without adding a local transmit arena. The eventual
+publisher owns its original configured payload pool. Connection readiness still
+follows the binding's explicit setup checks before traffic is released.
+
+## Bounded LoLa peer discovery
+
+The LoLa binding completes native proxy discovery during prepared attachment.
+A peer may finish offering its reserved transmitting events after attachment
+starts, including both directions of an RPC deployment. The binding uses its
+bounded setup discovery interval; this does not extend role/scenario deadlines,
+retry traffic or change catalog geometry, borrowing credit or native pools.
+Cancellation and expiry release the uncommitted registration slot and partial
+proxies. Retained payload samples preserve their native owners through detach.

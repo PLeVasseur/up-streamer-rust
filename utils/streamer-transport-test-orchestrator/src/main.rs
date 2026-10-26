@@ -54,6 +54,8 @@ const METHOD_RESOURCE_ID: u16 = 0x1000;
 const ZENOH_ENDPOINT: &str = "tcp/127.0.0.1:7447";
 const ZENOH_SOURCE_PORT: u16 = 7447;
 const ZENOH_SINK_PORT: u16 = 7448;
+// Shared with the existing configuration/passive readiness gates: no larger window.
+const ROLE_READINESS_TIMEOUT_MS: u64 = 10_000;
 const READY_STREAMER: &str = "READY streamer_initialized";
 const READY_STREAMER_CONFIGURED: &str = "READY streamer_configured";
 const READY_SOURCE_WAITING: &str = "READY source_waiting";
@@ -83,6 +85,7 @@ const DDS_PORT_MODULUS: i32 = 65_536;
 const SUMMARY_SCHEMA_VERSION: &str = "6.0";
 const CHECKPOINT_SCHEMA_VERSION: &str = "1.0";
 mod allocation;
+mod cloudevents;
 mod direct;
 mod lane;
 mod native_controls;
@@ -117,6 +120,11 @@ static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     about = "Endpoint-profile matrix orchestrator for configurable-streamer plus role binaries"
 )]
 struct Cli {
+    /// Exercise protobuf CloudEvents conversion at every source/sink boundary.
+    /// Payload encodings and the original transport-profile universe are unchanged.
+    #[arg(long, conflicts_with_all = ["soak", "single_type_controls", "direct_pairs"])]
+    #[serde(default)]
+    cloud_events: bool,
     /// Run same-profile direct peers without a Streamer, with a separate denominator.
     #[arg(long)]
     direct_pairs: bool,
@@ -4678,7 +4686,7 @@ fn run_row_attempt(
         let readiness = wait_for_marker(
             &mut streamer,
             READY_STREAMER_CONFIGURED,
-            Duration::from_secs(10),
+            Duration::from_millis(ROLE_READINESS_TIMEOUT_MS),
             cancellation,
         );
         let readiness = readiness?;
@@ -4686,7 +4694,7 @@ fn run_row_attempt(
             phase: "streamer_configuration",
             contract: "configuration_before_native_peer_setup",
             target: READY_STREAMER_CONFIGURED.to_string(),
-            timeout_ms: Some(10_000),
+            timeout_ms: Some(ROLE_READINESS_TIMEOUT_MS),
             checks: readiness.checks,
             configured_stabilization_ms: 0,
             duration_us: readiness.duration_us,
@@ -4743,7 +4751,7 @@ fn run_row_attempt(
         let readiness = wait_for_marker(
             &mut passive,
             passive_marker,
-            Duration::from_secs(10),
+            Duration::from_millis(ROLE_READINESS_TIMEOUT_MS),
             cancellation,
         );
         timings.passive_readiness_us = duration_us(passive_started.elapsed());
@@ -4752,7 +4760,7 @@ fn run_row_attempt(
             phase: "passive_readiness",
             contract: passive_contract,
             target: passive_marker.to_string(),
-            timeout_ms: Some(10_000),
+            timeout_ms: Some(ROLE_READINESS_TIMEOUT_MS),
             checks: readiness.checks,
             configured_stabilization_ms: 0,
             duration_us: readiness.duration_us,
@@ -4913,7 +4921,15 @@ fn run_row_attempt(
         .saturating_add(duration_us(teardown_started.elapsed()));
     let result = result
         .and(cleanup_result)
-        .and_then(|()| flow_oracle::verify(row, &row_dir, bundle));
+        .and_then(|()| flow_oracle::verify(row, &row_dir, bundle))
+        .and_then(|()| {
+            // Classic passive roles may still append shutdown output until
+            // teardown. Verify all operations and seal hashes of final logs.
+            if cli.cloud_events {
+                cloudevents::verify(row, &row_dir)?;
+            }
+            Ok(())
+        });
     if row.uses_lola() && result.is_ok() {
         timings.cooldown.push(CooldownEvidence {
             phase: "post_success_quiescence",
@@ -5776,7 +5792,11 @@ fn write_zenoh_client_config(path: &Path, port: u16) -> Result<()> {
     atomic_write_json(
         path,
         &json!({
-            "mode": "client", "connect": {"endpoints": [format!("tcp/127.0.0.1:{port}")]},
+            "mode": "client", "connect": {
+                "endpoints": [format!("tcp/127.0.0.1:{port}")],
+                "timeout_ms": ROLE_READINESS_TIMEOUT_MS,
+                "exit_on_failure": true
+            },
             "scouting": {"multicast": {"enabled": false}, "gossip": {"enabled": false}}
         }),
     )

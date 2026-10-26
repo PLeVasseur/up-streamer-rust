@@ -30,6 +30,8 @@ impl NativeContext {
         #[cfg(not(feature = "selected-wire-common"))]
         let profile = None;
         let context = Self { profile };
+        #[cfg(all(feature = "flow-evidence", feature = "selected-wire-common"))]
+        super::cloudevents::install_native(context.profile.as_ref())?;
         if context.profile.is_some() {
             context.identity()?;
         }

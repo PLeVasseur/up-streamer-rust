@@ -548,7 +548,11 @@ pub(super) fn audit(
         let source = mappings.get("source").context("missing source pool")?;
         let bridge = mappings.get("bridge").context("missing bridge pools")?;
         let sink = mappings.get("sink").context("missing sink pool")?;
-        anyhow::ensure!(source.len() == 1, "ambiguous source pool");
+        // A publisher and a real local fanout reader can map the same backing
+        // more than once. Keep every raw alias/probe above; count unique physical
+        // objects by device/inode/offset/extent for geometry below.
+        let source_objects: BTreeSet<_> = source.iter().map(|m| backing(m)).collect();
+        anyhow::ensure!(source_objects.len() == 1, "ambiguous physical source pool");
         let arena = source[0];
         let reservation = geometry["sample_slice_bytes"]
             .as_u64()
@@ -571,12 +575,13 @@ pub(super) fn audit(
             "source pool capacity/residency/backing proof failed for {}",
             row.row
         );
-        let providers: Vec<_> = bridge
+        let providers: BTreeMap<_, _> = bridge
             .iter()
             .filter(|m| backing(m) != backing(arena))
+            .map(|m| (backing(m), *m))
             .collect();
-        anyhow::ensure!(providers.len() == 1, "ambiguous egress provider");
-        let provider = providers[0];
+        anyhow::ensure!(providers.len() == 1, "ambiguous physical egress provider");
+        let provider = providers.values().next().expect("one physical provider");
         let configured = geometry["zenoh_pool_bytes"]
             .as_u64()
             .context("provider size")?;
@@ -594,7 +599,7 @@ pub(super) fn audit(
             "egress provider capacity/residency/backing proof failed for {}",
             row.row
         );
-        reports.push(json!({"row":row.row,"source_pool_bytes":arena.size,"source_backing_resident_bytes":arena.size,"source_vma_rss":arena.rss,"provider_bytes":provider.size,"provider_backing_resident_bytes":provider.size,"provider_vma_rss":provider.rss,"provider_locked_vma":true,"raw_snapshots":row.actors.len()}));
+        reports.push(json!({"row":row.row,"source_mapping_aliases":source.len(),"bridge_mapping_aliases":bridge.len(),"physical_source_objects":source_objects.len(),"physical_egress_objects":providers.len(),"source_pool_bytes":arena.size,"source_backing_resident_bytes":arena.size,"source_vma_rss":arena.rss,"provider_bytes":provider.size,"provider_backing_resident_bytes":provider.size,"provider_vma_rss":provider.rss,"provider_locked_vma":true,"raw_snapshots":row.actors.len()}));
     }
     Ok(
         json!({"sha256":sha256_file(&path)?,"elapsed":census.elapsed,"physical_backing_fully_resident":true,"rows":reports}),

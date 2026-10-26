@@ -523,3 +523,15 @@ bounded at 1/2 MiB per minute respectively. Controller and launcher PSS are repo
 separately, with complete inclusive sums retained. Missing samples or threshold
 breaches fail; the diagnostic's short windows report slopes without qualifying
 those 90 s limits. Fixed aggregate memory/FD/thread safety bounds remain in force.
+
+Physical pool checks retain every VMA and native backing probe, then deduplicate device/inode/offset/extent when counting arenas. See [Physical objects and aliases](docs/pool-pages.md#physical-objects-and-aliases).
+
+Use `--cloud-events` for a separate matrix pass through the same transport profiles, roles and five payload encodings. Each passed row requires actual protobuf event conversion evidence on every observed source/sink operation. See [CloudEvents matrix](docs/cloudevents.md).
+
+Mixed-backend startup bounds generated Zenoh connection setup by the existing role readiness window. See [Mixed-backend connection readiness](docs/cloudevents.md#mixed-backend-connection-readiness).
+
+CloudEvents operation coverage and raw-log hashes are checked after row process
+teardown. Classic receivers can append middleware shutdown output after their
+first observed message; the recorded hashes therefore bind the complete final
+logs, including shutdown, rather than an earlier live prefix. Every conversion
+and frame witness in those final logs remains subject to the same checks.

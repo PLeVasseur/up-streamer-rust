@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use streamer_soak::control::{Phase, PhaseCommand, PhaseTracker};
 use streamer_soak::{inbox, ReplayOptions, Role};
@@ -341,7 +341,22 @@ impl Listener {
     }
 }
 
+// FrameSink::push is synchronous even when the middleware enters a Tokio
+// runtime on its RX thread. This gate covers the complete bounded push, never
+// crosses an await and drains before the application inbox is closed. This
+// adapter does not expose a user callback that could unregister itself.
+struct NativeReceiveGate(Mutex<bool>);
+impl NativeReceiveGate {
+    fn close(&self) {
+        *self
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = false;
+    }
+}
+
 struct NativeListener<T: PreparedEndpoint> {
+    gate: Arc<NativeReceiveGate>,
     listener: Arc<Listener>,
     session: Arc<PreparedSession<T>>,
     source: UUri,
@@ -351,9 +366,14 @@ impl<T: PreparedEndpoint> up_rust::FrameSink<<T::Core as PreparedTransportCore>:
     for NativeListener<T>
 {
     fn push(&self, raw: <T::Core as PreparedTransportCore>::Rx) {
-        let Some(_callback) = self.listener.admission.enter_native_callback() else {
+        let open = self
+            .gate
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !*open {
             return;
-        };
+        }
         let guard = LoanGuard::new(self.listener.loans.clone(), false);
         let admitted = match self.session.admit(raw) {
             Ok(frame) => frame,
@@ -391,6 +411,7 @@ impl<T: PreparedEndpoint> up_rust::FrameSink<<T::Core as PreparedTransportCore>:
         self.listener.report_error(result);
     }
     fn close(&self) {
+        self.gate.close();
         self.listener.admission.cancel();
     }
 }
@@ -456,13 +477,139 @@ struct NativeEndpoint<T: PreparedEndpoint> {
     loans: Arc<Loans>,
     wait_matching: bool,
 }
+// A rendezvous for one existing transient native loan, not an additional
+// admitted inbox. Each supported native registration serializes its pushes.
+// The callback waits for application admission to finish before returning,
+// so its successor cannot accumulate behind this worker. Every resource is
+// created at registration; no task, channel node or payload copy is made per push.
+struct NativeHandoffState<R> {
+    closed: bool,
+    pending: Option<R>,
+    active: bool,
+    failed: bool,
+}
+struct NativeHandoff<R> {
+    state: Mutex<NativeHandoffState<R>>,
+    ready: Condvar,
+    completed: Condvar,
+}
+impl<R: Send + 'static> NativeHandoff<R> {
+    fn start(
+        mut consume: impl FnMut(R) + Send + 'static,
+    ) -> Result<(Arc<Self>, std::thread::JoinHandle<()>), UStatus> {
+        let shared = Arc::new(Self {
+            state: Mutex::new(NativeHandoffState {
+                closed: false,
+                pending: None,
+                active: false,
+                failed: false,
+            }),
+            ready: Condvar::new(),
+            completed: Condvar::new(),
+        });
+        let worker_shared = Arc::clone(&shared);
+        let worker = std::thread::Builder::new()
+            .name("native-workload-rx".into())
+            .spawn(move || loop {
+                let mut state = worker_shared
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                while state.pending.is_none() && !state.closed {
+                    state = worker_shared
+                        .ready
+                        .wait(state)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                }
+                let Some(raw) = state.pending.take() else {
+                    break;
+                };
+                state.active = true;
+                drop(state);
+                let outcome =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| consume(raw)));
+                let mut state = worker_shared
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.active = false;
+                if outcome.is_err() {
+                    state.failed = true;
+                    state.closed = true;
+                }
+                worker_shared.completed.notify_all();
+                if state.failed {
+                    break;
+                }
+            })
+            .map_err(failure)?;
+        Ok((shared, worker))
+    }
+    fn close(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.closed = true;
+        self.ready.notify_all();
+        self.completed.notify_all();
+    }
+    fn failed(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .failed
+    }
+}
+impl<R: up_rust::Frame> up_rust::FrameSink<R> for NativeHandoff<R> {
+    fn push(&self, raw: R) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while (state.pending.is_some() || state.active) && !state.closed {
+            state = self
+                .completed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        if state.closed {
+            return;
+        }
+        state.pending = Some(raw);
+        self.ready.notify_one();
+        while (state.pending.is_some() || state.active) && !state.failed {
+            state = self
+                .completed
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+    fn close(&self) {
+        NativeHandoff::close(self);
+    }
+}
+
 struct NativeRegistration<T: PreparedEndpoint> {
+    handoff: Arc<NativeHandoff<<T::Core as PreparedTransportCore>::Rx>>,
+    worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    gate: Arc<NativeReceiveGate>,
     transport: Arc<PreparedSession<T>>,
     subscription: Mutex<Option<<T::Core as PreparedTransportCore>::Subscription>>,
     listener: Arc<Listener>,
 }
 impl<T: PreparedEndpoint> Drop for NativeRegistration<T> {
     fn drop(&mut self) {
+        self.handoff.close();
+        if let Some(worker) = self
+            .worker
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = worker.join();
+        }
+        self.gate.close();
         self.listener.admission.cancel();
         if let Some(handle) = self
             .subscription
@@ -480,6 +627,14 @@ where
     T: PreparedEndpoint,
 {
     async fn close(&self) -> Result<(), UStatus> {
+        self.handoff.close();
+        let worker = self.worker.lock().map_err(failure)?.take();
+        if let Some(worker) = worker {
+            worker
+                .join()
+                .map_err(|_| failure("native callback worker panicked"))?;
+        }
+        self.gate.close();
         self.listener.admission.cancel();
         {
             let mut subscription = self.subscription.lock().map_err(failure)?;
@@ -494,6 +649,9 @@ where
                 .quiesce(tokio::time::Instant::now() + Duration::from_secs(5))
                 .await
                 .map_err(failure)?;
+        }
+        if self.handoff.failed() {
+            return Err(failure("native callback worker failed"));
         }
         Ok(())
     }
@@ -531,19 +689,34 @@ where
         source: UUri,
         sink: Option<UUri>,
     ) -> Result<Box<dyn Registration>, UStatus> {
+        let gate = Arc::new(NativeReceiveGate(Mutex::new(true)));
         let native = Arc::new(NativeListener {
+            gate: Arc::clone(&gate),
             listener: Arc::clone(&listener),
             session: Arc::clone(&self.transport),
             source: source.clone(),
             sink: sink.clone(),
         });
+        let (handoff, worker) = NativeHandoff::start(move |raw| {
+            up_rust::FrameSink::push(native.as_ref(), raw);
+        })?;
         let subscription = self
             .transport
             .core()
-            .attach(&source, sink.as_ref(), native)
-            .await
-            .map_err(failure)?;
+            .attach(&source, sink.as_ref(), handoff.clone())
+            .await;
+        let subscription = match subscription {
+            Ok(subscription) => subscription,
+            Err(error) => {
+                handoff.close();
+                let _ = worker.join();
+                return Err(failure(error));
+            }
+        };
         Ok(Box::new(NativeRegistration {
+            handoff,
+            worker: Mutex::new(Some(worker)),
+            gate,
             transport: self.transport.clone(),
             subscription: Mutex::new(Some(subscription)),
             listener,
@@ -577,6 +750,57 @@ where
     .await
 }
 
+// The approved sensor source has two real native readers: the bridge and a
+// source-side fanout witness. This reader borrows and releases each actual frame;
+// it never forwards a duplicate, copies a payload, or adds an application inbox.
+#[cfg(feature = "payload-contract-large-fixtures")]
+struct SensorFanout<T: PreparedEndpoint> {
+    session: Arc<PreparedSession<T>>,
+    source: UUri,
+    received: AtomicU64,
+    errors: AtomicU64,
+}
+
+#[cfg(feature = "payload-contract-large-fixtures")]
+impl<T: PreparedEndpoint> up_rust::FrameSink<<T::Core as PreparedTransportCore>::Rx>
+    for SensorFanout<T>
+{
+    fn push(&self, raw: <T::Core as PreparedTransportCore>::Rx) {
+        let result = (|| {
+            let frame = self.session.admit(raw).map_err(failure)?;
+            let header = frame.header().map_err(failure)?;
+            if header.source != self.source || header.sink.is_some() {
+                return Err(failure("sensor fanout address differs"));
+            }
+            let record = streamer_flow_evidence::Observation::header(
+                "fanout_receive",
+                Some("sensor-source-native-fanout"),
+                &header,
+                frame.payload().map(|payload| payload.bytes()),
+            )
+            .map_err(failure)?
+            .ok_or_else(|| failure("sensor fanout evidence disabled"))?;
+            println!(
+                "NATIVE_FANOUT_OBSERVATION {}",
+                serde_json::to_string(&record).map_err(failure)?
+            );
+            self.received.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        })();
+        if let Err(error) = result {
+            self.errors.fetch_add(1, Ordering::SeqCst);
+            println!(
+                "NATIVE_FANOUT_ERROR {}",
+                json!({"error": error.to_string()})
+            );
+        }
+    }
+    fn close(&self) {}
+}
+
+/// Drive the existing native role, retaining both real sensor registrations
+/// through drain and the end census. The source-side witness is detached after
+/// the controller's Stop; its hashing/formatting costs stay in process totals.
 pub async fn native<T, F>(
     transport: Arc<PreparedSession<T>>,
     native: NativeContext,
@@ -584,13 +808,39 @@ pub async fn native<T, F>(
     source: bool,
     filters: Option<(UUri, Option<UUri>)>,
     wait_matching: bool,
-    message: F,
+    mut message: F,
 ) -> Result<(), UStatus>
 where
     T: PreparedEndpoint,
     T::Core: NativeSetupReady,
     F: FnMut(u32) -> Result<UMessage, UStatus>,
 {
+    #[cfg(feature = "payload-contract-large-fixtures")]
+    let fanout = if source && native.fixture().is_some() {
+        let metadata = native.project_classic(&message(0)?)?;
+        let witness = Arc::new(SensorFanout {
+            session: Arc::clone(&transport),
+            source: metadata.source().clone(),
+            received: AtomicU64::new(0),
+            errors: AtomicU64::new(0),
+        });
+        let subscription = transport
+            .core()
+            .attach(metadata.source(), None, witness.clone())
+            .await
+            .map_err(failure)?;
+        println!(
+            "NATIVE_FANOUT_REGISTERED {}",
+            json!({"source": metadata.source().to_uri(false),
+            "registration": "source-native-fanout-witness", "application_inbox_capacity": 0,
+            "payload_copies": 0})
+        );
+        Some((Arc::clone(&transport), subscription, witness))
+    } else {
+        None
+    };
+    #[cfg(not(feature = "payload-contract-large-fixtures"))]
+    let _ = &mut message;
     let loans = Arc::new(Loans::default());
     let endpoint = NativeEndpoint {
         transport,
@@ -598,7 +848,7 @@ where
         loans: loans.clone(),
         wait_matching,
     };
-    drive(
+    let outcome = drive(
         Box::new(endpoint),
         native,
         plan,
@@ -608,7 +858,22 @@ where
         || Ok(()),
         loans,
     )
-    .await
+    .await;
+    #[cfg(feature = "payload-contract-large-fixtures")]
+    if let Some((session, mut subscription, witness)) = fanout {
+        session.core().detach(&mut subscription).map_err(failure)?;
+        let received = witness.received.load(Ordering::SeqCst);
+        let errors = witness.errors.load(Ordering::SeqCst);
+        println!(
+            "NATIVE_FANOUT_FINISH {}",
+            json!({"received": received, "errors": errors,
+            "success": outcome.is_ok() && received > 0 && errors == 0})
+        );
+        if outcome.is_ok() && (received == 0 || errors != 0) {
+            return Err(failure("sensor native fanout witness failed"));
+        }
+    }
+    outcome
 }
 
 /// Runs application traffic over the role's existing classic SDK endpoint.

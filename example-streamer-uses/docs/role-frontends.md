@@ -181,3 +181,106 @@ The optional sustained workload follows its controller-provisioned plan through
 the same configured native endpoint. See [sustained workloads](sustained-workloads.md)
 for supported roles, accounting, queue bounds and lifecycle requirements. Physical
 storage, discovery and readiness guarantees remain documented by each binding.
+
+## Fixed sensor reservations
+
+Large native pub/sub workers select their declared sensor representation and
+reserve the actual encoded publication header before native core creation. The
+source address and native identity are the same ones used by their real messages;
+UUID values have fixed width. These fixed messages use no access token or
+traceparent. Their catalog therefore reserves no token or traceparent allowance.
+Ordinary role catalogs retain their existing generic metadata bounds.
+
+The physical sample remains the encoded header extent plus payload alignment
+slack and the exact LiDAR/camera payload. Publisher slots, RX/transient/TX credits,
+registrations, buffers, borrowing, history, pacing and shared-memory pool sizes
+remain binding-owned and unchanged. A too-small configured sample still fails
+before traffic; the role never grows a fixed sample to fit a generic allowance.
+
+### Real native sensor fanout
+
+The approved two-registration geometry is realized by the bridge's native reader
+and a source-side native fanout witness, both attached before publisher readiness.
+The witness admits actual frames, checks the exact source address and hashes the
+borrowed payload in `NATIVE_FANOUT_OBSERVATION` records. It adds no application
+inbox, payload copy, typed reference or duplicate bridge publication. It remains
+attached through drain and the end physical census, then detaches at Stop and
+reports its actual received/error counts. The existing two native subscriber
+slots, buffer/borrow limits and nine publisher samples are unchanged. All witness
+hashing, formatting and callback costs remain in the source process measurements.
+Ordinary finite/fast roles create no witness.
+
+### Synchronous native callbacks
+
+A synchronous FrameSink callback may run on a middleware thread entered into
+Tokio. The shared native workload adapter therefore uses a synchronous admission
+guard around its complete bounded receive operation, rather than calling the
+SDK's native-thread-only blocking admission API. One setup-owned guard is shared
+by that receiver and its registration. Closing it waits for an already entered
+receive to finish and rejects subsequent pushes before the application inbox is
+closed. The guarded operation performs no await or user callback and cannot
+unregister itself. Classic async listeners keep the SDK async admission path.
+This adds no receive queue or per-frame task/allocation for admission; payload
+loans remain independently owned and all evidence costs remain measured.
+
+### Native application handoff
+
+Native middleware callbacks perform a synchronous rendezvous with one worker
+created at registration. The callback moves its existing transient loan to the
+worker and waits until application admission finishes before returning. The
+supported bindings serialize each registration's callbacks, so a successor
+cannot queue behind that loan. The handoff adds no admitted application capacity,
+payload copy, per-message task or channel-node allocation. The existing bounded
+application inbox and RX/transient/TX credits remain unchanged.
+
+Application compatibility decoding, fixture checks and evidence formatting run
+on this worker rather than on the middleware's runtime thread. This also keeps
+application observation costs outside the binding's scoped counter naturally;
+whole-process/all-thread counters still include every worker and observation
+cost. Native loan release and other binding operations retain their original
+binding scope. No allocation counter is masked, reset or subtracted. Closing
+the registration closes admission, completes the outstanding handoff and joins
+the worker before the application inbox is closed. Worker panic becomes a
+registration cleanup error and cannot silently qualify a run.
+
+### CloudEvents conversion control
+
+With `flow-evidence`, the matrix controller can explicitly enable
+`UPROTOCOL_CLOUDEVENTS_PROOF=protobuf-roundtrip-v1`. Shared classic, owned and
+prepared send paths serialize each actual message as a protobuf CloudEvent,
+parse it and use the converted metadata/payload for the transport operation.
+The receive boundary serializes and checks each actual delivered message before
+application validation. Binary payload bytes, presence, encoding, UUID/correlation,
+URIs, priority, positive TTL, status, token and trace context must survive.
+
+Native frames project only through the immutable agreement already admitted by
+that worker, then restore and compare the original complete native metadata.
+A missing/wrong native token or agreement is an error; the control does not infer
+identity from payload bytes. This tests the SDK converter through real forwarding;
+it does not change a backend's on-wire envelope or invent a CloudEvents payload ID.
+
+This is an allocating application interoperability control. Its serialization,
+copying and evidence costs stay in measured process totals. It is separate from
+the unchanged native zero-allocation lanes and binding owner gates. Normal runs
+omit the variable and perform no CloudEvents conversion. Once per participating
+process, local admission controls reject empty/nonempty legacy text/proto data and
+missing formats, and preserve absent/present-empty opaque data with IDs zero,
+0xFFFE and received 0xFFFF. Those setup controls offer no messages to a transport.
+Actual operation records retain full serialized event bytes and their hashes.
+
+CloudEvents uses classic-message semantics: absent priority becomes CS1,
+success status may become absent, and zero TTL becomes absent. The native
+application adapter checks these explicit default equivalences plus every other
+classic field and the admitted native token, then retains the original immutable
+frame metadata witness. Native optional-field presence is preserved, with no
+identity inferred from payload bytes. Raw event records include before/after
+semantic attributes and native frame-witness records; payload presence, encoding
+and bytes must remain exactly equal. A positive sub-millisecond native TTL or
+other unrepresentable field still fails the existing checked projection.
+
+The opt-in CloudEvents frame adapter installs the already admitted worker
+agreement at flow setup, before registering either an owned or prepared
+receiver. Receive-only and RPC-server roles therefore validate their first
+incoming native frame before any outbound message is built. Encoding lookup
+does not initialize this context. This application control does not infer an
+agreement from incoming bytes or change native transport admission.

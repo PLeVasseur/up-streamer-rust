@@ -284,3 +284,6 @@ pub mod dds;
 pub mod endpoint;
 
 pub mod backend;
+
+#[cfg(all(feature = "flow-evidence", feature = "selected-wire-common"))]
+pub mod cloudevents;

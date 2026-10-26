@@ -31,3 +31,14 @@ Earlier plans that omit the new requirement retain their declared evidence scope
 Their fixture hashes and working-set measurements do not become a whole-pool
 census retroactively. Calibration and acceptance must use matching source,
 executables, provider configuration and this new declared requirement.
+
+## Physical objects and aliases
+
+Each raw process mapping and fincore probe remains in both live censuses. A
+publisher and a real fanout reader may map the same backing more than once.
+Physical source/provider counts therefore use device, inode, offset and extent;
+they do not require one VMA per pool or add aliases as extra resident arenas.
+Complete mapping/probe hashes, owned PID/start/group identities and native
+residency checks apply to every alias. An additional distinct backing remains
+an error. Resource samples retain complete per-process/kernel proportional
+accounting, and normal/end censuses must agree on physical objects.

@@ -410,7 +410,9 @@ pub fn configure<T: PreparedEndpoint>(
 /// Creates a setup-reserved iceoryx2 core using binding-owned geometry and service mapping.
 ///
 /// The catalog determines the default fixed sample extent; optional capacities
-/// override that extent and native limits explicitly. Dynamic allocation remains
+/// override that extent and native limits explicitly. Receive-only addresses
+/// retain native service ownership through receive attachment, including
+/// receiver-first startup, without reserving unused publisher/data pools. Dynamic allocation remains
 /// invalid for prepared traffic. Namespace environment is resolved before applying
 /// explicit capacity controls, without changing native RX/borrow/slot defaults.
 #[cfg(feature = "iceoryx2-zero-copy")]
@@ -465,8 +467,15 @@ pub fn iceoryx2_core(
     config.publisher_initial_max_slice_len = required;
     config.publisher_allocation_strategy = iceoryx2::prelude::AllocationStrategy::Static;
     capacities.apply(&mut config)?;
-    up_transport_iceoryx2_rust::Iceoryx2PreparedCore::new(config, &addresses, routes, registrations)
-        .map(std::sync::Arc::new)
+    let transmit: Vec<_> = catalog.iter().map(|address| address.transmit).collect();
+    up_transport_iceoryx2_rust::Iceoryx2PreparedCore::new_with_transmit_mask(
+        config,
+        &addresses,
+        &transmit,
+        routes,
+        registrations,
+    )
+    .map(std::sync::Arc::new)
 }
 
 /// Creates a prepared Zenoh SHM core with the supplied native session configuration.
@@ -499,6 +508,8 @@ pub async fn zenoh_core(
 }
 
 /// Creates a prepared LoLa core, selecting actual request/response deployments by source kind.
+/// Native proxy discovery completes during attachment within the binding setup
+/// deadline; shared setup adds no provider or payload pool for receive-only routes.
 ///
 /// The caller supplies the binding's physical configurations and proxy credits.
 /// Response routes have a method-resource source and a destination. The SDK still

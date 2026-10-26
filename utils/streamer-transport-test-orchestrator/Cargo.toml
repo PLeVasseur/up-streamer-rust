@@ -26,7 +26,8 @@ license.workspace = true
 streamer-soak = { path = "../streamer-soak" }
 streamer-flow-evidence = { path = "../streamer-flow-evidence" }
 configurable-streamer-wire-support = { path = "../configurable-streamer-wire-support" }
-up-rust = { workspace = true }
+up-rust = { workspace = true, features = ["cloudevents"] }
+protobuf = { workspace = true }
 up-native-profile = { workspace = true }
 anyhow = { version = "1.0.98" }
 chrono = { version = "0.4.40", default-features = true, features = ["clock", "serde"] }

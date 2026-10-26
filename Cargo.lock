@@ -4782,6 +4782,7 @@ dependencies = [
  "clap",
  "configurable-streamer-wire-support",
  "libc",
+ "protobuf",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -5612,7 +5613,7 @@ dependencies = [
 [[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=417a1d0acffd07de5879952c10419c660f26a411#417a1d0acffd07de5879952c10419c660f26a411"
+source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=2d757e2a7522e2206ccf6aac33195940f960f82f#2d757e2a7522e2206ccf6aac33195940f960f82f"
 dependencies = [
  "async-trait",
  "bytes",
@@ -5630,7 +5631,7 @@ dependencies = [
 [[package]]
 name = "up-transport-lola-rust"
 version = "0.2.0"
-source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=4624c5bf4b17b4d70855e660f63b481a3d1f8ea0#4624c5bf4b17b4d70855e660f63b481a3d1f8ea0"
+source = "git+https://github.com/PLeVasseur/up-transport-lola-rust.git?rev=13b2edd3466dfc38d05b7890457e646b543d0f2c#13b2edd3466dfc38d05b7890457e646b543d0f2c"
 dependencies = [
  "async-trait",
  "tokio",
@@ -5681,7 +5682,7 @@ dependencies = [
 [[package]]
 name = "up-transport-zenoh"
 version = "0.9.1"
-source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=46f6d3f69abdd20c699f2c675ed8dc84439cfba1#46f6d3f69abdd20c699f2c675ed8dc84439cfba1"
+source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=97e53a5a25d1947364c8a4fe1fc9282eb39d5c00#97e53a5a25d1947364c8a4fe1fc9282eb39d5c00"
 dependencies = [
  "anyhow",
  "async-trait",

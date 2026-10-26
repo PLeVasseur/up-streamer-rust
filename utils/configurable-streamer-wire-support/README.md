@@ -54,3 +54,9 @@ With `payload-contract-large-fixtures`, `sensor::SensorFixture` selects the actu
 SDK LiDAR/camera representations and their checked initializer/semantic validator.
 It exposes compiled payload lengths; metadata/alignment overhead remains separate.
 See [sustained workloads](../../example-streamer-uses/docs/sustained-workloads.md).
+
+Prepared setup carries each declared TX/RX direction into native reservation. Receive-only Iceoryx and Zenoh endpoints reserve no unused TX payload pool. See [Receiver-only catalogs](docs/prepared.md#receiver-only-catalogs).
+
+Receiver-only Iceoryx setup retains its native service through core lifetime and supports attachment before a peer publisher starts. See [Receiver-first attachment](docs/prepared.md#receiver-first-attachment).
+
+LoLa prepared attachment completes bounded peer discovery before traffic, including concurrent RPC setup. See [Bounded LoLa peer discovery](docs/prepared.md#bounded-lola-peer-discovery).

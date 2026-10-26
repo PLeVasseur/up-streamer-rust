@@ -258,6 +258,10 @@ pub async fn run_owned_with_ready(
     config: &FlowConfig,
     ready: fn(),
 ) -> Result<(), UStatus> {
+    // Receive-first roles need the admitted proof agreement before the
+    // listener can observe its first frame, independently of outbound encoding.
+    #[cfg(feature = "flow-evidence")]
+    super::cloudevents::install_native(config.native.configured_agreement())?;
     if matches!(config.role, FlowRole::PubSender | FlowRole::NotifySender) {
         super::startup::wait_for_start().await?;
     }
@@ -356,6 +360,10 @@ where
     T: PreparedEndpoint,
     T::Core: NativeSetupReady,
 {
+    // Receive-first roles need the admitted proof agreement before the
+    // listener can observe its first frame, independently of outbound encoding.
+    #[cfg(feature = "flow-evidence")]
+    super::cloudevents::install_native(config.native.configured_agreement())?;
     let transport = Arc::new(PreparedSession::new(
         transport,
         &super::endpoint_config::prepared_catalog(config)?,

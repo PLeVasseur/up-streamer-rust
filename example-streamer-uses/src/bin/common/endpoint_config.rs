@@ -80,6 +80,14 @@ pub fn prepared_address(
 }
 
 /// Exact role addresses and maximum logical extents chosen before native setup.
+///
+/// Fixed sensor pub/sub uses its actual encoded header with no token or
+/// traceparent allowance, preserving the configured sample/pool geometry.
+/// Ordinary roles retain their generic bounded metadata allowance.
+///
+/// # Errors
+/// Rejects invalid plans, missing native agreement, non-pub/sub sensor contexts,
+/// or invalid fixed-header encoding.
 pub fn prepared_catalog(
     config: &super::flow::FlowConfig,
 ) -> Result<Vec<configurable_streamer_wire_support::prepared::PreparedAddress>, UStatus> {
@@ -102,7 +110,7 @@ pub fn prepared_catalog(
     };
     let local = &config.local_authority;
     let peer = &config.peer_authority;
-    Ok(match config.role {
+    let catalog = match config.role {
         FlowRole::PubSender => vec![entry(
             config.uri(local, config.topic_resource_id)?,
             None,
@@ -147,7 +155,51 @@ pub fn prepared_catalog(
                 true,
             ),
         ],
-    })
+    };
+    #[cfg(feature = "payload-contract-large-fixtures")]
+    let catalog = sensor_catalog_bounds(config, catalog)?;
+    Ok(catalog)
+}
+
+#[cfg(feature = "payload-contract-large-fixtures")]
+fn sensor_catalog_bounds(
+    config: &super::flow::FlowConfig,
+    mut catalog: Vec<configurable_streamer_wire_support::prepared::PreparedAddress>,
+) -> Result<Vec<configurable_streamer_wire_support::prepared::PreparedAddress>, UStatus> {
+    use super::flow::FlowRole;
+    use up_rust::{
+        StableContainerWire, UFrameFieldsMetadataCodec, UMessageBuilder, UWireMetadataCodec,
+        UWireMetadataContext,
+    };
+    if config.native.fixture().is_none() {
+        return Ok(catalog);
+    }
+    if !matches!(config.role, FlowRole::PubSender | FlowRole::PubReceiver) {
+        return Err(super::flow::invalid(
+            "sensor catalog requires fixed native pub/sub",
+        ));
+    }
+    // Sensor workers publish this exact header shape without tokens or
+    // traceparent. Its encoded extent matches the approved physical geometry;
+    // reserving a generic 3072-byte header would enlarge the fixed sample.
+    for entry in &mut catalog {
+        let source = up_rust::UUri::try_from(entry.source.as_str())
+            .map_err(|error| super::flow::invalid(error.to_string()))?;
+        let message = UMessageBuilder::publish(source)
+            .build_with_payload(Vec::<u8>::new(), config.native.encoding()?)
+            .map_err(|error| super::flow::invalid(error.to_string()))?;
+        let metadata = config.native.project_classic(&message)?;
+        entry.max_metadata_len = UFrameFieldsMetadataCodec
+            .encode_frame_metadata(
+                UWireMetadataContext::from_wire::<StableContainerWire, UFrameFieldsMetadataCodec>(),
+                &metadata,
+            )
+            .map_err(|error| super::flow::invalid(error.to_string()))?
+            .len();
+        entry.max_token_len = 0;
+        entry.allow_traceparent = false;
+    }
+    Ok(catalog)
 }
 
 #[cfg(any(feature = "lola-transport", feature = "lola-owned-frame"))]

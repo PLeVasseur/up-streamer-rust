@@ -243,3 +243,15 @@ evidence/lifetime contracts and integration status. Deployment and OS supervisio
 remain with the matrix orchestrator; physical transport behavior remains with bindings.
 The generic native role supports `--zenoh-wait-for-subscriber` as an explicit binding
 readiness setting; see the [sustained role guide](docs/sustained-workloads.md).
+
+Fixed sensor roles reserve their exact encoded publication header before native
+setup. They do not add the ordinary token/traceparent allowance to the approved
+LiDAR/camera sample extent. See [Fixed sensor reservations](docs/role-frontends.md#fixed-sensor-reservations).
+
+Fixed sensor sources also retain a real native fanout witness alongside the bridge reader. It borrows and releases each sample without forwarding or copying the payload; its observations and costs remain visible. See [Fixed sensor reservations](docs/role-frontends.md#fixed-sensor-reservations).
+
+The shared native workload adapter admits and drains synchronous receiver callbacks independently of whether a middleware RX thread has entered an async runtime. See [Synchronous native callbacks](docs/role-frontends.md#synchronous-native-callbacks).
+
+Native workload registrations reserve their application-admission worker at setup. A synchronous handoff uses the existing transient loan and waits for admission to finish before the next callback; decoding and evidence costs remain in whole-process measurements. See [Native application handoff](docs/role-frontends.md#native-application-handoff).
+
+The `flow-evidence` build also supports the explicit `UPROTOCOL_CLOUDEVENTS_PROOF=protobuf-roundtrip-v1` interoperability control. It serializes actual messages as protobuf CloudEvents and converts them back at send/receive boundaries. See [CloudEvents conversion control](docs/role-frontends.md#cloudevents-conversion-control).

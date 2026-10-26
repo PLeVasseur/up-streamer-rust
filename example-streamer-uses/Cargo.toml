@@ -169,7 +169,7 @@ required-features = ["mqtt-transport"]
 [features]
 payload-contract-large-fixtures = ["sustained-workload", "up-rust/payload-contract-large-fixtures", "configurable-streamer-wire-support/payload-contract-large-fixtures"]
 sustained-workload = ["flow-evidence", "selected-wire-common", "wire-formats", "up-rust/util", "dep:streamer-soak", "dep:serde_json", "dep:sha2"]
-flow-evidence = ["dep:streamer-flow-evidence"]
+flow-evidence = ["dep:streamer-flow-evidence", "up-rust/cloudevents", "dep:serde_json", "dep:sha2"]
 selected-wire-common = ["up-rust/owned-frame-transport", "up-rust/selected-wire-user-api", "dep:configurable-streamer-wire-support"]
 wire-formats = ["up-wire-arrow", "up-wire-omgidl", "up-wire-xcdrv2"]
 zenoh-transport = ["selected-wire-common", "wire-formats", "up-transport-zenoh", "up-transport-zenoh/benchmark-owned", "up-transport-zenoh/zero-copy", "zenoh", "configurable-streamer-wire-support/zenoh-zero-copy"]
@@ -207,7 +207,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 up-rust = { workspace = true }
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "4624c5bf4b17b4d70855e660f63b481a3d1f8ea0", optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "13b2edd3466dfc38d05b7890457e646b543d0f2c", optional = true }
 up-transport-zenoh = { workspace = true, optional = true }
 up-transport-vsomeip = { workspace = true, optional = true }
 up-transport-mqtt5 = { workspace = true, optional = true }

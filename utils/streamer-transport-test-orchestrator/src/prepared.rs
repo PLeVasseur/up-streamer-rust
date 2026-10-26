@@ -189,12 +189,18 @@ pub(super) fn prepare_row(
     let iceoryx2_root = row
         .uses_iceoryx2()
         .then(|| PathBuf::from(ICEORYX2_ROOT_PATH));
-    let process_env = row_env(
+    let mut process_env = row_env(
         row,
         iceoryx2_root.as_deref(),
         bundle,
         cli.tokio_worker_threads,
     );
+    if cli.cloud_events {
+        process_env.push((
+            "UPROTOCOL_CLOUDEVENTS_PROOF".into(),
+            "protobuf-roundtrip-v1".into(),
+        ));
+    }
     let native_profiles = if row.encoding == WireEncoding::Native {
         let paths = NativeProfilePaths::new(&row_dir);
         paths.write(&bundle.manifest.native_profile)?;
