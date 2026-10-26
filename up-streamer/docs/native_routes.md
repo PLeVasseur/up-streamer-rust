@@ -7,9 +7,9 @@ or native-loan. A native payload on a classic API remains a **classic hop**.
 An encoded-owned core remains an owned-frame API even when carrying native bytes.
 
 Use Table mode by default. It carries a deployment-assigned encoding as well as
-the native frame's structural token. ContractDefined explicitly binds ID0 to one
-operation and representation. Any classic hop in the complete declaration makes
-ContractDefined fail unless `allow_contract_defined_over_classic_hops` is enabled
+the native frame's structural token. SingleType explicitly binds ID0 to one
+deployment-scoped representation, without URI/operation binding. Any classic hop
+in the complete declaration makes SingleType fail unless `allow_single_type_over_classic_hops` is enabled
 for that route. This includes remote classic members outside the immediate local
 boundary. The override acknowledges lost identity evidence; it does not restore
 that evidence or bypass agreement, type, size, alignment, field validity or filters.
@@ -23,7 +23,7 @@ network handshake or remote attestation.
 
 The five classic route APIs have `_with_native_policy` variants. Supply a complete
 policy there for an explicit override; ordinary classic APIs reject native
-ContractDefined profiles by default. Successful policy-aware activation emits
+SingleType profiles by default. Successful policy-aware activation emits
 `NATIVE_ROUTE_ACTIVATED` with route, all member classes and the explicit flag.
 Nonclassic segments use the same complete-policy validation before their ordinary
 route API and record activation after it succeeds. There is no process-global flag
@@ -41,7 +41,7 @@ cargo run -p up-streamer --example native_route_identity -- export --output inve
 ```
 
 Use the `up-native-profile` tool to generate a Table (or an explicit DoorState
-operation contract), provision separate endpoint expectations, and create the
+single-type agreement), provision separate endpoint expectations, and create the
 complete deployment manifest. Its deployment guide owns the artifact commands
 and schemas. Check the distributed result with:
 
@@ -52,7 +52,7 @@ cargo run -p up-streamer --example native_route_identity -- check \
 ```
 
 The example declares owned-frame APIs by default. Repeat `--classic-hop MEMBER`
-for declared classic members. A ContractDefined profile then requires the
-explicit `--allow-contract-defined-over-classic-hops` flag. The output distinguishes
+for declared classic members. A SingleType profile then requires the
+explicit `--allow-single-type-over-classic-hops` flag. The output distinguishes
 policy checking from actual Streamer route activation; it does not claim traffic
 was forwarded. These example types are separate from the matrix's role inventory.

@@ -56,7 +56,7 @@ pub struct NativeRouteHop {
 pub struct NativeRoutePolicy {
     name: String,
     hops: Vec<NativeRouteHop>,
-    allow_contract_defined_over_classic_hops: bool,
+    allow_single_type_over_classic_hops: bool,
 }
 
 impl NativeRoutePolicy {
@@ -68,7 +68,7 @@ impl NativeRoutePolicy {
         let policy = Self {
             name: name.into(),
             hops,
-            allow_contract_defined_over_classic_hops: false,
+            allow_single_type_over_classic_hops: false,
         };
         if policy.name.is_empty() || !(2..=4096).contains(&policy.hops.len()) {
             return Err(invalid(
@@ -87,27 +87,27 @@ impl NativeRoutePolicy {
         Ok(policy)
     }
 
-    /// Explicitly acknowledges ContractDefined identity loss on this route's classic hops.
+    /// Explicitly acknowledges SingleType identity loss on this route's classic hops.
     #[must_use]
-    pub fn with_allow_contract_defined_over_classic_hops(mut self, allow: bool) -> Self {
-        self.allow_contract_defined_over_classic_hops = allow;
+    pub fn with_allow_single_type_over_classic_hops(mut self, allow: bool) -> Self {
+        self.allow_single_type_over_classic_hops = allow;
         self
     }
 
     /// Checks every declared hop, even when the local ingress and egress are nonclassic.
     pub fn validate(&self) -> Result<(), UStatus> {
-        let contract = matches!(
+        let single_type = matches!(
             self.hops[0].profile.mode(),
-            NativeProfileMode::ContractDefined(_)
+            NativeProfileMode::SingleType(_)
         );
-        if contract
+        if single_type
             && self
                 .hops
                 .iter()
                 .any(|hop| hop.api == NativeRouteApi::Classic)
-            && !self.allow_contract_defined_over_classic_hops
+            && !self.allow_single_type_over_classic_hops
         {
-            return Err(invalid(format!("native route {}: ContractDefined over a classic hop requires allow_contract_defined_over_classic_hops=true", self.name)));
+            return Err(invalid(format!("native route {}: SingleType over a classic hop requires allow_single_type_over_classic_hops=true", self.name)));
         }
         Ok(())
     }
@@ -150,7 +150,7 @@ impl NativeRoutePolicy {
             .map(|hop| (hop.name.as_str(), hop.api.as_str()))
             .collect();
         tracing::info!(event = "native_route_activation", route = %self.name,
-            allow_contract_defined_over_classic_hops = self.allow_contract_defined_over_classic_hops,
+            allow_single_type_over_classic_hops = self.allow_single_type_over_classic_hops,
             hops = ?classes, "NATIVE_ROUTE_ACTIVATED");
     }
 }
@@ -169,13 +169,11 @@ pub(crate) fn admit_classic_boundary(
             .2
             .ok_or_else(|| invalid("native route policy requires an egress profile"))?;
         policy.validate_boundary((ingress.0, ingress.1, left), (egress.0, egress.1, right))?;
-    } else if agreement.as_ref().is_some_and(|value| {
-        matches!(
-            value.profile().mode(),
-            NativeProfileMode::ContractDefined(_)
-        )
-    }) {
-        return Err(invalid("ContractDefined over a classic hop requires a complete native route policy with allow_contract_defined_over_classic_hops=true"));
+    } else if agreement
+        .as_ref()
+        .is_some_and(|value| matches!(value.profile().mode(), NativeProfileMode::SingleType(_)))
+    {
+        return Err(invalid("SingleType over a classic hop requires a complete native route policy with allow_single_type_over_classic_hops=true"));
     }
     Ok(agreement)
 }

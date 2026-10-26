@@ -37,11 +37,11 @@ fn main() -> Result<(), ProfileToolError> {
     let required = [
         TypeKey {
             name: SelectedWireNativePayload::TYPE_NAME.into(),
-            revision: SelectedWireNativePayload::VARIANT,
+            revision: SelectedWireNativePayload::REVISION,
         },
         TypeKey {
             name: NativeFlowPayload::TYPE_NAME.into(),
-            revision: NativeFlowPayload::VARIANT,
+            revision: NativeFlowPayload::REVISION,
         },
     ];
     let inventory = InventoryArtifact::from_linked(&required)?;

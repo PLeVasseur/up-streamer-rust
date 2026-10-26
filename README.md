@@ -36,6 +36,8 @@ contracts; strict Rustdoc and doctests check those interfaces with the source.
 Native payload deployments use generated, target-qualified agreements and explicit
 whole-route admission. See the [native deployment and routing guide](configurable-streamer/docs/native-deployment.md)
 for exporter, manifest, endpoint and role configuration, including DDS encoded-owned routing.
+The [migration guide](MIGRATION.md) covers explicit SingleType agreements, renamed
+classic-hop policy, checked projections and codec-owned metadata layout identity.
 
 ### Only `up-streamer`
 

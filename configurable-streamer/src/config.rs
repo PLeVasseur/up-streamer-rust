@@ -162,9 +162,7 @@ impl Config {
                     None => ingress.native_context.is_some(),
                 };
                 if !native {
-                    if !route.native_hops.is_empty()
-                        || route.allow_contract_defined_over_classic_hops
-                    {
+                    if !route.native_hops.is_empty() || route.allow_single_type_over_classic_hops {
                         return Err(invalid(
                             "native route policy requires a native deployment route",
                         ));
@@ -263,8 +261,8 @@ impl Config {
                     ),
                     hops,
                 )?
-                .with_allow_contract_defined_over_classic_hops(
-                    route.allow_contract_defined_over_classic_hops,
+                .with_allow_single_type_over_classic_hops(
+                    route.allow_single_type_over_classic_hops,
                 );
                 policy.validate_boundary(
                     (
@@ -569,9 +567,9 @@ pub struct ForwardingRouteConfig {
     /// Every provisioned native route member, including remote classic hops.
     #[serde(default)]
     pub(crate) native_hops: Vec<NativeHopConfig>,
-    /// Route-scoped acknowledgement of ContractDefined identity loss on classic hops.
+    /// Route-scoped acknowledgement of SingleType identity loss on classic hops.
     #[serde(default)]
-    pub(crate) allow_contract_defined_over_classic_hops: bool,
+    pub(crate) allow_single_type_over_classic_hops: bool,
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -800,13 +798,9 @@ mod tests {
             up_rust::NativeProfile::new(
                 "policy-test",
                 1,
-                up_rust::NativeProfileMode::ContractDefined(
-                    up_rust::NativeContract::new(
-                        "door-operation",
-                        SelectedWireNativePayload::native_representation(),
-                    )
-                    .unwrap(),
-                ),
+                up_rust::NativeProfileMode::SingleType(up_rust::NativeSingleType::new(
+                    SelectedWireNativePayload::native_representation(),
+                )),
             )
             .unwrap()
         } else {
@@ -835,7 +829,7 @@ mod tests {
             .push(ForwardingRouteConfig {
                 endpoint: "b".into(),
                 wire_format: Some("up_native".into()),
-                allow_contract_defined_over_classic_hops: allow,
+                allow_single_type_over_classic_hops: allow,
                 native_hops: [
                     (
                         "remote",
@@ -858,6 +852,17 @@ mod tests {
     }
 
     #[test]
+    fn retired_native_policy_key_is_rejected_by_name() {
+        let old = r#"{"endpoint":"right","allow_contract_defined_over_classic_hops":true}"#;
+        let error = json5::from_str::<ForwardingRouteConfig>(old).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("allow_contract_defined_over_classic_hops"));
+        let current: ForwardingRouteConfig = json5::from_str(r#"{"endpoint":"right"}"#).unwrap();
+        assert!(!current.allow_single_type_over_classic_hops);
+    }
+
+    #[test]
     fn full_configuration_rejects_remote_classic_contract_without_per_route_opt_in() {
         assert!(native_policy_config(true, false, false)
             .native_route_policies()
@@ -867,7 +872,7 @@ mod tests {
             .unwrap_err();
         assert!(error
             .to_string()
-            .contains("allow_contract_defined_over_classic_hops"));
+            .contains("allow_single_type_over_classic_hops"));
         assert!(native_policy_config(true, true, true)
             .native_route_policies()
             .is_ok());

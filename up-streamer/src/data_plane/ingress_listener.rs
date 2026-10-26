@@ -108,7 +108,9 @@ mod tests {
         let mut builder = UMessageBuilder::publish(source);
         let message = match (encoding, payload) {
             (Some(id), Some(bytes)) => builder
-                .build_with_payload(bytes.to_vec(), PayloadEncoding::from_id(id).unwrap())
+                .build_with_payload(bytes.to_vec(), PayloadEncoding::RAW)
+                .unwrap()
+                .with_declared_payload_encoding(PayloadEncoding::from_id(id).unwrap())
                 .unwrap(),
             (None, None) => builder.build().unwrap(),
             _ => unreachable!("test cases preserve payload/encoding presence equivalence"),

@@ -131,7 +131,7 @@ impl NativeGeneration {
         }
         profile
             .0
-            .require_wire::<up_rust::StableContainerWireFormat>()?;
+            .require_wire::<up_rust::StableContainerWireFormat, up_rust::NativePrefixFrameMetadataCodec>()?;
         Ok(())
     }
 

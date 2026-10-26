@@ -111,11 +111,11 @@ pub fn matrix_native_inventory() -> Result<InventoryArtifact, UStatus> {
     InventoryArtifact::from_linked(&[
         TypeKey {
             name: SelectedWireNativePayload::TYPE_NAME.into(),
-            revision: SelectedWireNativePayload::VARIANT,
+            revision: SelectedWireNativePayload::REVISION,
         },
         TypeKey {
             name: NativeFlowPayload::TYPE_NAME.into(),
-            revision: NativeFlowPayload::VARIANT,
+            revision: NativeFlowPayload::REVISION,
         },
     ])
     .map_err(|error| invalid(error.to_string()))
@@ -185,14 +185,14 @@ pub fn matrix_seed_allocations() -> Vec<SeedAllocation> {
         SeedAllocation {
             key: TypeKey {
                 name: SelectedWireNativePayload::TYPE_NAME.into(),
-                revision: SelectedWireNativePayload::VARIANT,
+                revision: SelectedWireNativePayload::REVISION,
             },
             encoding_id: MATRIX_SELECTED_NATIVE_ID as u16,
         },
         SeedAllocation {
             key: TypeKey {
                 name: NativeFlowPayload::TYPE_NAME.into(),
-                revision: NativeFlowPayload::VARIANT,
+                revision: NativeFlowPayload::REVISION,
             },
             encoding_id: MATRIX_FLOW_NATIVE_ID as u16,
         },
@@ -291,7 +291,7 @@ impl NativeDeploymentConfig {
             .artifact(&self.local_endpoint)
             .map_err(|error| invalid(error.to_string()))?;
         artifact
-            .require_wire::<up_rust::StableContainerWireFormat>()
+            .require_wire::<up_rust::StableContainerWireFormat, up_rust::NativePrefixFrameMetadataCodec>()
             .map_err(|error| invalid(error.to_string()))?;
         let agreement = loaded
             .agreement(&self.route, &self.local_endpoint, &self.peer_endpoint)
@@ -366,7 +366,7 @@ pub fn load_native_agreement_for_type_from_env<T: StablePayload>(
         Path::new("."),
         &[TypeKey {
             name: T::TYPE_NAME.into(),
-            revision: T::VARIANT,
+            revision: T::REVISION,
         }],
     )
     .map(Some)
@@ -644,7 +644,7 @@ mod tests {
                 Path::new("."),
                 &[TypeKey {
                     name: SelectedWireNativePayload::TYPE_NAME.into(),
-                    revision: SelectedWireNativePayload::VARIANT,
+                    revision: SelectedWireNativePayload::REVISION,
                 }],
             )
         }
@@ -978,14 +978,14 @@ mod tests {
         assert_ne!(selected.token(), flow.token());
     }
 
-    #[test_case(0; "no table fallback to contract-defined")]
+    #[test_case(0; "no table fallback to single type")]
     #[test_case(8; "unassigned public number")]
     #[test_case(0xF001; "XCDRv2 private reservation")]
     #[test_case(0xF002; "Arrow private reservation")]
     #[test_case(0xF003; "OMG IDL private reservation")]
     #[test_case(65536; "encoding overflow")]
     fn invalid_allocations_are_rejected(id: u32) {
-        let seeds = serde_json::json!([{"key": {"name": SelectedWireNativePayload::TYPE_NAME, "revision": SelectedWireNativePayload::VARIANT}, "encoding_id": id}]);
+        let seeds = serde_json::json!([{"key": {"name": SelectedWireNativePayload::TYPE_NAME, "revision": SelectedWireNativePayload::REVISION}, "encoding_id": id}]);
         let seeds = serde_json::from_value::<Vec<SeedAllocation>>(seeds);
         if let Ok(seeds) = seeds {
             assert!(AgreementArtifact::generate_table(
@@ -1013,7 +1013,7 @@ mod tests {
         );
         declaration.key = TypeKey {
             name: SelectedWireNativePayload::TYPE_NAME.into(),
-            revision: SelectedWireNativePayload::VARIANT,
+            revision: SelectedWireNativePayload::REVISION,
         };
         assert!(declaration.representation().is_err());
     }
@@ -1039,15 +1039,14 @@ mod tests {
     }
 
     #[test]
-    fn explicit_operation_contract_uses_zero_with_exact_representation() {
+    fn explicit_single_type_uses_zero_with_exact_representation() {
         let document = NativeProfileDocument(
-            AgreementArtifact::generate_contract(
+            AgreementArtifact::generate_single_type(
                 &matrix_native_inventory().unwrap(),
                 "operation-test".into(),
-                "event.selected.v1".into(),
                 &TypeKey {
                     name: SelectedWireNativePayload::TYPE_NAME.into(),
-                    revision: SelectedWireNativePayload::VARIANT,
+                    revision: SelectedWireNativePayload::REVISION,
                 },
                 matrix_identity_declarations(),
             )

@@ -44,7 +44,7 @@ serde_json = { workspace = true }
 up-streamer = { path = "../../up-streamer", features = ["experimental-copy-minimized-routing"] }
 up-transport-zenoh = { workspace = true, optional = true }
 up-transport-iceoryx2-rust = { workspace = true, optional = true }
-up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "e6b75c6a28be773393b405f4470306aa24ce41a0", optional = true }
+up-transport-lola-rust = { git = "https://github.com/PLeVasseur/up-transport-lola-rust.git", rev = "958ed28857e13edc27d7141327d5a791fa095b6e", optional = true }
 up-transport-dds = { workspace = true, optional = true }
 up-wire-arrow = { workspace = true, optional = true }
 up-wire-omgidl = { workspace = true, optional = true }

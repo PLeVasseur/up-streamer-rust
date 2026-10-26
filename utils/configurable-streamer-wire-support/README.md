@@ -20,5 +20,5 @@ no payload sniffing or automatic native ID0 fallback is provided.
 
 Policy-aware classic bridge helpers forward a complete `NativeRoutePolicy` to the
 core route API. The ordinary helpers retain the rejecting default for native
-ContractDefined/classic combinations. The configuration frontend checks complete
+SingleType/classic combinations. The configuration frontend checks complete
 manifest membership before constructing these helpers.

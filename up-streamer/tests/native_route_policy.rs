@@ -27,10 +27,9 @@ fn profile(contract: bool, generation: u32) -> Arc<NativeProfile> {
     ])
     .unwrap();
     let artifact = if contract {
-        AgreementArtifact::generate_contract(
+        AgreementArtifact::generate_single_type(
             &inventory,
             "route-test".into(),
-            "door-operation".into(),
             &TypeKey {
                 name: types::DoorState::TYPE_NAME.into(),
                 revision: 0,
@@ -71,7 +70,7 @@ fn policy(profile: &Arc<NativeProfile>, remote: NativeRouteApi, allow: bool) -> 
         .collect(),
     )
     .unwrap()
-    .with_allow_contract_defined_over_classic_hops(allow)
+    .with_allow_single_type_over_classic_hops(allow)
 }
 
 #[test_case(true, NativeRouteApi::OwnedFrame, false, true; "all frame contract")]
@@ -156,7 +155,7 @@ async fn direct_classic_activation_rejects_by_default_and_accepts_route_scoped_p
     let error = streamer.add_route_ref(&left, &right).await.unwrap_err();
     assert!(error
         .to_string()
-        .contains("allow_contract_defined_over_classic_hops"));
+        .contains("allow_single_type_over_classic_hops"));
     assert_eq!(registrations.load(Ordering::SeqCst), 0);
     let policy = NativeRoutePolicy::new(
         "direct",
@@ -169,7 +168,7 @@ async fn direct_classic_activation_rejects_by_default_and_accepts_route_scoped_p
             .to_vec(),
     )
     .unwrap()
-    .with_allow_contract_defined_over_classic_hops(true);
+    .with_allow_single_type_over_classic_hops(true);
     streamer
         .add_route_ref_with_native_policy(&left, &right, Some(&policy))
         .await

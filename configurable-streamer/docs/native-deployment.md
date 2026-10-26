@@ -63,8 +63,10 @@ Their typed constructors also check the actual linked representation against the
 active allocation. An absent set permits non-native opaque operation; a partial
 set is an error. `UPROTOCOL_NATIVE_PROFILE`, `UPROTOCOL_NATIVE_PEER_PROFILE`,
 `native_profile_file` and `native_peer_profile_file` are retired and rejected.
-There is no native table-to-ID0 fallback. ContractDefined artifacts must be
-generated explicitly for one operation and representation.
+There is no native table-to-ID0 fallback. SingleType artifacts must be generated
+explicitly for one deployment-scoped representation, without an operation label.
+The tool uses `single-type`; artifact mode is `single_type` and canonical tag is3.
+Old `contract_defined` artifacts are rejected by name and must be regenerated.
 
 ## Complete-route policy
 
@@ -81,7 +83,7 @@ entry per member in the provisioned manifest route:
     { "endpoint": "streamer-egress", "api": "native_loan" },
     { "endpoint": "subscriber", "api": "native_loan" }
   ],
-  "allow_contract_defined_over_classic_hops": false
+   "allow_single_type_over_classic_hops": false
 }
 ```
 
@@ -93,8 +95,8 @@ fail before transports open; a remote classic hop cannot be omitted just because
 the local Streamer boundary has two frame APIs.
 
 Table mode is the default and works across supported classes with normal checks.
-ContractDefined across **any** classic member requires explicitly setting
-`allow_contract_defined_over_classic_hops: true` on that forwarding route. The
+SingleType across **any** classic member requires explicitly setting
+`allow_single_type_over_classic_hops: true` on that forwarding route. The
 reverse route has its own flag. Opt-in acknowledges lost identity evidence; it
 does not restore that evidence or bypass profiles, types, layout or filters.
 Successful activation emits `NATIVE_ROUTE_ACTIVATED` with the complete classes and

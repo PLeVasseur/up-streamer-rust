@@ -43,7 +43,7 @@ enum Command {
         classic_hop: Vec<String>,
         /// Explicit per-route acknowledgement; no profile/type check is skipped.
         #[arg(long)]
-        allow_contract_defined_over_classic_hops: bool,
+        allow_single_type_over_classic_hops: bool,
     },
 }
 
@@ -53,11 +53,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let inventory = InventoryArtifact::from_linked(&[
                 TypeKey {
                     name: DoorState::TYPE_NAME.into(),
-                    revision: DoorState::VARIANT,
+                    revision: DoorState::REVISION,
                 },
                 TypeKey {
                     name: SeatState::TYPE_NAME.into(),
-                    revision: SeatState::VARIANT,
+                    revision: SeatState::REVISION,
                 },
             ])?;
             write_artifact(&output, &inventory)?;
@@ -70,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             local,
             peer,
             classic_hop,
-            allow_contract_defined_over_classic_hops,
+            allow_single_type_over_classic_hops,
         } => {
             let manifest: DeploymentManifest = read_artifact(&manifest)?;
             let loaded = LoadedDeployment::load(&profile_root, manifest)?;
@@ -78,7 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &local,
                 &[TypeKey {
                     name: DoorState::TYPE_NAME.into(),
-                    revision: DoorState::VARIANT,
+                    revision: DoorState::REVISION,
                 }],
             )?;
             let agreement = loaded.agreement(&route, &local, &peer)?;
@@ -106,9 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             let policy = NativeRoutePolicy::new(route, hops)
                 .map_err(|error| error.to_string())?
-                .with_allow_contract_defined_over_classic_hops(
-                    allow_contract_defined_over_classic_hops,
-                );
+                .with_allow_single_type_over_classic_hops(allow_single_type_over_classic_hops);
             policy.validate().map_err(|error| error.to_string())?;
             assert_eq!(
                 std::mem::size_of::<DoorState>(),
@@ -137,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     door.encoding().id()
                 );
             }
-            println!("NATIVE_ROUTE_POLICY_CHECKED allow_contract_defined_over_classic_hops={allow_contract_defined_over_classic_hops}");
+            println!("NATIVE_ROUTE_POLICY_CHECKED allow_single_type_over_classic_hops={allow_single_type_over_classic_hops}");
         }
     }
     Ok(())

@@ -1131,7 +1131,10 @@ where
     let metadata = try_project_umessage_to_frame_metadata(&message).expect("metadata");
     EncodedRxLease {
         encoded_metadata: NativePrefixFrameMetadataCodec
-            .encode_frame_metadata(W::metadata_context(), &metadata)
+            .encode_frame_metadata(
+                up_rust::UWireMetadataContext::from_wire::<W, NativePrefixFrameMetadataCodec>(),
+                &metadata,
+            )
             .expect("encoded metadata"),
         slices: payload_slices.iter().map(|slice| slice.to_vec()).collect(),
     }

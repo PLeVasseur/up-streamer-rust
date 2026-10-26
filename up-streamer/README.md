@@ -13,7 +13,7 @@ endpoint construction, route ownership and refresh-health observations.
 Native routes use complete deployment agreement and default to Table mode. See
 the [native route policy guide](docs/native_routes.md) and
 `examples/native_route_identity.rs` for distinct equal-sized application types,
-explicit ContractDefined/classic-hop opt-in, and unchanged validation requirements.
+explicit SingleType/classic-hop opt-in, and unchanged validation requirements.
 
 Implementation of the uProtocol's uStreamer specification in Rust.
 

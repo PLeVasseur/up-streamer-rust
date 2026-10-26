@@ -134,12 +134,33 @@ pub(crate) async fn run(role: Role) -> Result<(), UStatus> {
         RouteFamily::OwnedFrame => run_owned(role, &args).await,
         RouteFamily::EncodedOwned => match args.encoding {
             Encoding::Native => {
-                run_encoded_owned(role, &args, up_rust::StableContainerWireFormat).await
+                let profile = args.native.agreement()?.clone();
+                run_encoded_owned(role, &args, |core| {
+                    core.into_stable_container_transport(profile)
+                })
+                .await
             }
-            Encoding::Protobuf => run_encoded_owned(role, &args, up_rust::ProtobufWire).await,
-            Encoding::Xcdrv2 => run_encoded_owned(role, &args, up_wire_xcdrv2::XcdrV2Wire).await,
-            Encoding::Arrow => run_encoded_owned(role, &args, up_wire_arrow::ArrowWire).await,
-            Encoding::OmgIdl => run_encoded_owned(role, &args, up_wire_omgidl::OmgIdlWire).await,
+            Encoding::Protobuf => {
+                run_encoded_owned(role, &args, |core| core.into_protobuf_transport()).await
+            }
+            Encoding::Xcdrv2 => {
+                run_encoded_owned(role, &args, |core| {
+                    core.into_native_prefix_wire_transport(up_wire_xcdrv2::XcdrV2Wire)
+                })
+                .await
+            }
+            Encoding::Arrow => {
+                run_encoded_owned(role, &args, |core| {
+                    core.into_native_prefix_wire_transport(up_wire_arrow::ArrowWire)
+                })
+                .await
+            }
+            Encoding::OmgIdl => {
+                run_encoded_owned(role, &args, |core| {
+                    core.into_native_prefix_wire_transport(up_wire_omgidl::OmgIdlWire)
+                })
+                .await
+            }
         },
     }
 }
@@ -449,7 +470,13 @@ fn frame_from_message(message: &UMessage, args: &Args) -> Result<UOwnedFrame, US
     .map_err(|error| invalid(format!("build owned frame: {error}")))
 }
 
-async fn run_encoded_owned<W>(role: Role, args: &Args, wire: W) -> Result<(), UStatus>
+async fn run_encoded_owned<W>(
+    role: Role,
+    args: &Args,
+    configure: impl FnOnce(
+        DdsEncodedOwnedCore,
+    ) -> up_rust::UNativePrefixWireTransport<DdsEncodedOwnedCore, W>,
+) -> Result<(), UStatus>
 where
     W: up_rust::wire_implementer_api::UWire + Copy + Send + Sync + 'static,
     up_rust::wire_implementer_api::NativePrefixFrameMetadataCodec:
@@ -461,17 +488,7 @@ where
         Role::Publisher | Role::Notifier | Role::Client
     )) + 1;
     core.wait_ready(required_matches, timeout(args))?;
-    let transport = if args.encoding == Encoding::Native {
-        up_rust::UWireTransport::with_native_profile(
-            core,
-            wire,
-            up_rust::wire_implementer_api::NativePrefixFrameMetadataCodec,
-            args.native.agreement()?.clone(),
-        )
-    } else {
-        core.into_native_prefix_wire_transport(wire)
-    };
-    let transport = Arc::new(transport);
+    let transport = Arc::new(configure(core));
     if matches!(role, Role::Publisher | Role::Notifier) {
         let frame = frame_from_message(&outbound_message(role, args)?, args)?;
         let payload_len = frame.payload_bytes().len();

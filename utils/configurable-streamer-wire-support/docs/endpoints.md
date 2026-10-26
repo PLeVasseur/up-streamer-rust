@@ -13,7 +13,7 @@ payload representation is native.
 
 Route helpers require the declared wire to match both participating frame endpoints
 before delegating to the core `UStreamer` API. Classic/frame helpers validate the
-frame-side wire and preserve the default rejection of ContractDefined across a
+frame-side wire and preserve the default rejection of SingleType across a
 classic hop. The `_with_native_policy` variants accept a complete route-scoped policy;
 an explicit override still cannot bypass profile, type, layout or final filter checks.
 

@@ -727,7 +727,7 @@ impl UStreamer {
     }
 
     /// Adds a unidirectional route between ingress and egress endpoints.
-    /// Native ContractDefined profiles reject by default on this classic API;
+    /// Native SingleType profiles reject by default on this classic API;
     /// an explicit complete-route override uses [`Self::add_route_ref_with_native_policy`].
     pub async fn add_route_ref(
         &mut self,
@@ -739,7 +739,7 @@ impl UStreamer {
     }
 
     /// Adds a classic route with an optional complete native-route declaration.
-    /// ContractDefined over any declared classic hop needs the explicit per-route override.
+    /// SingleType over any declared classic hop needs the explicit per-route override.
     pub async fn add_route_ref_with_native_policy(
         &mut self,
         in_ep: &Endpoint,
@@ -1305,7 +1305,7 @@ impl UStreamer {
     /// payload encodings via the `UAttributes` identity fields) and
     /// forwarded as `UOwnedFrame`s. Unprojectable messages are dropped loudly
     /// with a warning; they are never forwarded unlabeled.
-    /// Native ContractDefined rejects unless the policy-aware variant receives
+    /// Native SingleType rejects unless the policy-aware variant receives
     /// an explicit complete-route classic-hop override.
     #[cfg(feature = "owned-frame-transport")]
     pub async fn add_classic_to_owned_route_ref(
@@ -1407,7 +1407,7 @@ impl UStreamer {
     /// encodings ride the `UAttributes` identity fields); the residual
     /// rejection cases (e.g. sub-millisecond TTL) are dropped loudly with a
     /// warning, never silently and never relabeled.
-    /// Native ContractDefined rejects unless the policy-aware variant receives
+    /// Native SingleType rejects unless the policy-aware variant receives
     /// an explicit complete-route classic-hop override.
     #[cfg(feature = "owned-frame-transport")]
     pub async fn add_owned_to_classic_route_ref(
@@ -1505,7 +1505,7 @@ impl UStreamer {
     /// SAME `copy_minimized_dispatch_loop` the owned->CM adapter uses — the
     /// loan/copy/alignment logic is reused, not restated. This is the route
     /// kind the classic<->LoLa and classic<->iceoryx2 matrix rows take.
-    /// Native ContractDefined rejects unless the policy-aware variant receives
+    /// Native SingleType rejects unless the policy-aware variant receives
     /// an explicit complete-route classic-hop override.
     #[cfg(all(
         feature = "owned-frame-transport",
@@ -1634,7 +1634,7 @@ impl UStreamer {
     /// `owned_frame_from_zero_copy` slice-copier the CM->owned adapter uses,
     /// then project to classic `UMessage`s (residual
     /// rejections such as sub-millisecond TTL are dropped loudly).
-    /// Native ContractDefined rejects unless the policy-aware variant receives
+    /// Native SingleType rejects unless the policy-aware variant receives
     /// an explicit complete-route classic-hop override.
     #[cfg(all(
         feature = "owned-frame-transport",

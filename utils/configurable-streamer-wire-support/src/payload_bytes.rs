@@ -56,6 +56,9 @@ mod tests {
         fn payload_len(&self) -> usize {
             self.declared
         }
+        fn has_payload(&self) -> bool {
+            true
+        }
         fn payload_reader(&self) -> Self::PayloadReader<'_> {
             Cursor::new(self.first.as_slice()).chain(Cursor::new(self.second.as_slice()))
         }

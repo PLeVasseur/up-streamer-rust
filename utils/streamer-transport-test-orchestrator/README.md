@@ -168,7 +168,7 @@ manifests and require startup identity receipts as well as per-message proofs.
 DDS encoded-owned is an owned API profile; native payload rows do not claim a loan.
 Generated native forwarding entries explicitly declare all four route members'
 API classes in `native_hops`. Matrix rows keep Table mode and the default disabled
-ContractDefined/classic-hop override.
+SingleType/classic-hop override.
 
 Before row dispatch the orchestrator checks CPU policy, available RAM, free
 swap reporting, process/cgroup task capacity, the FD soft limit, user namespace

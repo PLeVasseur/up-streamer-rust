@@ -110,8 +110,8 @@ One-way classic-to-frame routes declare `wire_format` on the classic ingress's
 forwarding entry; this also initializes the selected-wire egress adapter. A reverse
 route is not required or implied.
 Native forwarding entries declare every manifest member's API in `native_hops`.
-ContractDefined with any classic member is rejected unless that forwarding entry
-explicitly enables `allow_contract_defined_over_classic_hops`. The override
+SingleType with any classic member is rejected unless that forwarding entry
+explicitly enables `allow_single_type_over_classic_hops`. The override
 acknowledges identity loss and does not waive validation; see the guide's complete-route policy.
 
 Classic bridges verify the encoding/token pair before token removal and recover

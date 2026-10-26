@@ -1301,12 +1301,13 @@ fn response_metadata(
 }
 
 fn frame_metadata(cli: &Cli, message: UMessage) -> Result<UFrameMetadata, UStatus> {
-    up_rust::frame::metadata::try_project_attributes_to_frame_metadata(
-        message.attributes(),
-        Some(payload_encoding(cli)?),
-    )
-    .map_err(|error| invalid_config(format!("failed to build frame metadata: {error:?}")))
-    .and_then(|metadata| stamp_metadata(cli, metadata))
+    let encoding = payload_encoding(cli)?;
+    message
+        .attributes()
+        .try_project_to_frame_metadata()
+        .and_then(|metadata| metadata.with_payload_encoding(encoding))
+        .map_err(|error| invalid_config(format!("failed to build frame metadata: {error:?}")))
+        .and_then(|metadata| stamp_metadata(cli, metadata))
 }
 
 fn stamp_metadata(cli: &Cli, metadata: UFrameMetadata) -> Result<UFrameMetadata, UStatus> {
