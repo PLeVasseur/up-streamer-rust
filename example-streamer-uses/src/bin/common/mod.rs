@@ -1,4 +1,13 @@
 pub(crate) mod cli;
+#[cfg(any(
+    feature = "iceoryx2-zero-copy",
+    feature = "iceoryx2-owned-frame",
+    feature = "lola-transport",
+    feature = "lola-owned-frame"
+))]
+pub(crate) mod endpoint_config;
+#[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
+pub(crate) mod flow;
 pub(crate) mod native;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
 pub(crate) mod payloads;

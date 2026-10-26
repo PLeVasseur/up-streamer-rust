@@ -1,6 +1,11 @@
 
 # Running entities
 
+The `iceoryx2_*` examples keep CLI/defaults, runtime, backend and wire setup in
+each role file while sharing message flow, native validation and evidence. See
+[role entrypoints and shared flow](docs/role-frontends.md) for addressing,
+connectivity semantics and the boundary with sustained workloads.
+
 ## Running a UStreamer
 
 To run one of the examples below and see two entities communicate, you'll need to run one of the two example implementations of the UStreamer to bridge between the transports in a terminal. Check out the `example-streamer-implementation` README for details.
