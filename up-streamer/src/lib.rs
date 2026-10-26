@@ -86,7 +86,7 @@
 //! `refresh_subscriptions()` returns `SubscriptionSyncHealth` only. Canonical subscription
 //! listings/counts/deltas remain the responsibility of the uSubscription service.
 //!
-//! Note for this migration phase: required streamer binaries expose `live_usubscription` as a
+//! Streamer binaries expose `live_usubscription` as a
 //! reserved mode and fail fast with an explicit deferred-integration message.
 //!
 //! Route lifecycle APIs are `add_route` / `delete_route`.

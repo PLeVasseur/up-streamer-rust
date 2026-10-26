@@ -447,6 +447,11 @@ deployment cards and reject this connectivity-only override. See the
 
 ## Representative sensor workload
 
+Resource slope receipts use full-precision JSON float round trips, so recorded and
+replayed floating-point values compare exactly. A mismatch names the first differing
+JSON field. No approximate-equality allowance bypasses resource thresholds or
+journal/source identity checks.
+
 Representative worker/backend builds retain the isolated `matrix` output/profile
 and explicit current compiler, but use opt-level3 for full-sized initialization,
 semantic checks and evidence hashing. The ordinary connectivity/fast build policy
@@ -472,7 +477,7 @@ requires both native subscribers; no extra monitoring subscriber is attached. Ze
 providers are48MiB per LiDAR and96MiB per camera stream. Each registration receives
 its own iceoryx2 Sample; native fan-out retains shared chunks without a local
 sample-sharing box. A retained receive lease also keeps its native port alive after
-logical unregister. The previous one-port topology is superseded, not a passing run.
+logical unregister.
 
 Resource samples include PID/start-time/group identity. The final90s of normal and
 delayed phases use per source/sink/bridge process-group PSS least-squares slopes,

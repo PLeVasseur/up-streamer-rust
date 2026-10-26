@@ -1137,7 +1137,57 @@ pub(super) fn audit(root: &Path) -> Result<serde_json::Value> {
     let saved: serde_json::Value = read(&root.join("soak-audit.json"))?;
     anyhow::ensure!(
         result == saved,
-        "replayed cohort differs from recorded audit"
+        "replayed cohort differs from recorded audit: {}",
+        first_audit_difference(&result, &saved, "$")
     );
     Ok(result)
+}
+
+fn first_audit_difference(
+    actual: &serde_json::Value,
+    saved: &serde_json::Value,
+    path: &str,
+) -> String {
+    if actual == saved {
+        return String::new();
+    }
+    match (actual, saved) {
+        (serde_json::Value::Object(a), serde_json::Value::Object(b)) if a.keys().eq(b.keys()) => {
+            for (key, value) in a {
+                let difference = first_audit_difference(value, &b[key], &format!("{path}.{key}"));
+                if !difference.is_empty() {
+                    return difference;
+                }
+            }
+        }
+        (serde_json::Value::Array(a), serde_json::Value::Array(b)) if a.len() == b.len() => {
+            for (index, (a, b)) in a.iter().zip(b).enumerate() {
+                let difference = first_audit_difference(a, b, &format!("{path}[{index}]"));
+                if !difference.is_empty() {
+                    return difference;
+                }
+            }
+        }
+        (serde_json::Value::Number(a), serde_json::Value::Number(b)) => {
+            return format!("{path}: actual={a}, saved={b}")
+        }
+        _ => return format!("{path}: value or structure differs"),
+    }
+    format!("{path}: difference unavailable")
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+
+    #[test]
+    fn pss_slope_json_round_trip_is_exact() {
+        let actual = json!({"bytes_per_minute": -20226.821187469406_f64});
+        let encoded = serde_json::to_vec(&actual).unwrap();
+        let saved: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        assert_eq!(actual, saved);
+        let changed = json!({"bytes_per_minute": -20226.82118746941_f64});
+        assert_ne!(actual, changed);
+        assert!(first_audit_difference(&actual, &changed, "$").starts_with("$.bytes_per_minute:"));
+    }
 }
