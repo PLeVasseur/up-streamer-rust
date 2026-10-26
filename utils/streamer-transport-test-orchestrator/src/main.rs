@@ -80,6 +80,7 @@ const DDS_MIN_UNPRIVILEGED_PORT: i32 = 1_024;
 const DDS_PORT_MODULUS: i32 = 65_536;
 const SUMMARY_SCHEMA_VERSION: &str = "6.0";
 const CHECKPOINT_SCHEMA_VERSION: &str = "1.0";
+mod direct;
 mod native_controls;
 mod native_generation;
 mod prepared;
@@ -112,6 +113,9 @@ static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     about = "Endpoint-profile matrix orchestrator for configurable-streamer plus role binaries"
 )]
 struct Cli {
+    /// Run same-profile direct peers without a Streamer, with a separate denominator.
+    #[arg(long)]
+    direct_pairs: bool,
     /// Execute SingleType admission controls through real role processes.
     #[arg(long)]
     single_type_controls: bool,
@@ -1407,6 +1411,9 @@ impl ResourcePeaks {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.direct_pairs {
+        return direct::run(&cli);
+    }
     if cli.single_type_controls {
         return native_controls::run(&cli);
     }

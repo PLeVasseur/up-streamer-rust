@@ -431,6 +431,9 @@ Do not use `--skip-build`, selected rows, reduced criteria, or increased
 timeouts as complete matrix acceptance evidence.
 # Connectivity capacity overrides
 
+The [direct-peer guide](docs/direct-peers.md) describes `--direct-pairs`, its separate
+180candidate denominator and actual same-backend deployments without a Streamer.
+
 For explicit Table/SingleType generation and the real-process admission-control
 suite, see [native agreement modes](docs/native-modes.md). The suite uses the same
 configuration, exporter, role binaries and supervision as ordinary connectivity.

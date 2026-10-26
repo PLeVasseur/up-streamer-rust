@@ -118,3 +118,65 @@ pub(super) fn verify(row: &MatrixRow, row_dir: &Path, bundle: &RunBundle) -> Res
         }),
     )
 }
+
+pub(super) fn verify_direct(row: &MatrixRow, directory: &Path, bundle: &RunBundle) -> Result<()> {
+    let run = format!("{}::{}", bundle.root.display(), row.id);
+    let active = records(&directory.join("active.log"), &run, "active")?;
+    let passive = records(&directory.join("passive.log"), &run, "passive")?;
+    let pick = |values: &[Observation], stage: &str| {
+        values
+            .iter()
+            .filter(|r| r.stage == stage)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    let sent = pick(&active, "tx");
+    let received = pick(&passive, "rx");
+    let preserve = row.source.physical != PhysicalTransport::Vsomeip;
+    let leg = |sent: &[Observation], received: &[Observation]| -> Result<()> {
+        anyhow::ensure!(
+            !sent.is_empty() && !received.is_empty(),
+            "direct peer has no actual sends/receipts"
+        );
+        for record in received {
+            let submitted = sent
+                .iter()
+                .filter(|r| equivalent(r, record, preserve))
+                .count();
+            let observed = received
+                .iter()
+                .filter(|r| equivalent(r, record, preserve))
+                .count();
+            anyhow::ensure!(
+                submitted > 0 && observed <= submitted,
+                "direct delivery differs from submitted payload/metadata or exceeds multiplicity"
+            );
+        }
+        Ok(())
+    };
+    leg(&sent, &received)?;
+    let replies = pick(&passive, "tx");
+    let responses = pick(&active, "rx");
+    if row.role == RoleStyle::ClientServerRpc {
+        leg(&replies, &responses)?;
+        anyhow::ensure!(
+            replies
+                .iter()
+                .all(|r| received.iter().any(|q| r.reqid.as_ref() == Some(&q.id)))
+                && responses
+                    .iter()
+                    .all(|r| sent.iter().any(|q| r.reqid.as_ref() == Some(&q.id))),
+            "direct RPC correlation failed"
+        );
+    }
+    anyhow::ensure!(
+        !directory.join("streamer.log").exists()
+            && !directory.join("streamer.launch.json").exists(),
+        "direct pair started a bridge"
+    );
+    atomic_write_json(
+        &directory.join("direct-flow-verification.json"),
+        &json!({"schema":1,"verified":true,"streamer_started":false,
+        "source_tx":sent,"sink_rx":received,"sink_tx":replies,"source_rx":responses,"preserve_ids":preserve,"first_delivery_only":true}),
+    )
+}
