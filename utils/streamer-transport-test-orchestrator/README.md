@@ -1,8 +1,8 @@
 # Streamer Transport Test Orchestrator
 
-Finite conservation deployments explicitly configure Zenoh reliable publications
-with blocking congestion control. Counted offers are separated by50ms after send
-completion; the bounded deadline and zero-loss accounting still apply. See the
+Maintained workload deployments explicitly configure Zenoh reliable publications
+with blocking congestion control. Finite counted offers are separated by50ms after
+send completion; each workload retains its declared deadline and loss criteria. See the
 [worker guide](../../example-streamer-uses/docs/sustained-workloads.md).
 Finite inbox capacity is5 to admit the entire finite backend burst.
 

@@ -72,6 +72,8 @@ or exit after the first receipt. Wrong finite count/rate/delay combinations reje
 The finite source waits50ms after each completed send rather than catching up an
 interval delayed by discovery. Its generated Zenoh deployment explicitly selects
 reliable publications with blocking congestion control through Zenoh configuration.
+The sustained workload controller uses the same explicit publication policy and
+binds all generated Zenoh configuration bytes into its deployment evidence.
 The finite deadline remains bounded and a blocked or lost message fails the run.
 The finite inbox has capacity5 so a complete five-message backend burst can be
 admitted even before the application consumer is scheduled. Sustained workers use

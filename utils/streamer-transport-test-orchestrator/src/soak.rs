@@ -440,18 +440,16 @@ fn prepare(
     write_zenoh_router_config(&zenoh.sink_router, ZENOH_SINK_PORT)?;
     write_zenoh_client_config(&zenoh.source_client, ZENOH_SOURCE_PORT)?;
     write_zenoh_client_config(&zenoh.sink_client, ZENOH_SINK_PORT)?;
-    if plan.mode == Mode::Conservation {
-        for path in [
-            &zenoh.source_router,
-            &zenoh.sink_router,
-            &zenoh.source_client,
-            &zenoh.sink_client,
-        ] {
-            let mut configuration: serde_json::Value = read(path)?;
-            configuration["qos"] = json!({"publication": [{"key_exprs": ["**"],
-                "config": {"congestion_control": "block", "reliability": "reliable"}}]});
-            atomic_write_json(path, &configuration)?;
-        }
+    for path in [
+        &zenoh.source_router,
+        &zenoh.sink_router,
+        &zenoh.source_client,
+        &zenoh.sink_client,
+    ] {
+        let mut configuration: serde_json::Value = read(path)?;
+        configuration["qos"] = json!({"publication": [{"key_exprs": ["**"],
+            "config": {"congestion_control": "block", "reliability": "reliable"}}]});
+        atomic_write_json(path, &configuration)?;
     }
     let config = row_dir.join("configurable-streamer.json");
     write_config(
@@ -480,24 +478,22 @@ fn prepare(
         "configuration_sha256": sha256_file(&config)?, "worker_sha256": sha256_file(&worker)?,
         "options_sha256": sha256_file(&row_dir.join("replay-options.json"))?,
     });
-    if plan.mode == Mode::Conservation {
-        let mut configurations = BTreeMap::new();
-        for path in [
-            &zenoh.source_router,
-            &zenoh.sink_router,
-            &zenoh.source_client,
-            &zenoh.sink_client,
-        ] {
-            configurations.insert(
-                path.file_name()
-                    .context("missing configuration name")?
-                    .to_str()
-                    .context("invalid configuration name")?,
-                sha256_file(path)?,
-            );
-        }
-        inputs["zenoh_configuration_sha256"] = json!(configurations);
+    let mut configurations = BTreeMap::new();
+    for path in [
+        &zenoh.source_router,
+        &zenoh.sink_router,
+        &zenoh.source_client,
+        &zenoh.sink_client,
+    ] {
+        configurations.insert(
+            path.file_name()
+                .context("missing configuration name")?
+                .to_str()
+                .context("invalid configuration name")?,
+            sha256_file(path)?,
+        );
     }
+    inputs["zenoh_configuration_sha256"] = json!(configurations);
     atomic_write_json(&row_dir.join("deployment-inputs.json"), &inputs)?;
     let mut bridge = spawn_process(
         bundle,
@@ -985,6 +981,7 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
             "row context mismatch"
         );
         let report = streamer_soak::replay(&directory, &options)?;
+        audit_publication_inputs(&directory, &inputs)?;
         if plan.mode == Mode::Conservation {
             audit_finite_inputs(&directory, &inputs)?;
         }
@@ -1221,33 +1218,7 @@ fn audit_finite_inputs(directory: &Path, inputs: &serde_json::Value) -> Result<(
             && worker["consumer_delay_ms"] == 0,
         "finite worker configuration changed"
     );
-    let names = [
-        "zenoh-source-router.json5",
-        "zenoh-sink-router.json5",
-        "zenoh-source-client.json5",
-        "zenoh-sink-client.json5",
-    ];
-    let hashes = inputs["zenoh_configuration_sha256"]
-        .as_object()
-        .context("missing publication configuration identities")?;
-    anyhow::ensure!(
-        hashes.len() == names.len(),
-        "incomplete publication configuration identities"
-    );
-    for name in names {
-        let path = directory.join(name);
-        anyhow::ensure!(
-            hashes.get(name).and_then(serde_json::Value::as_str)
-                == Some(sha256_file(&path)?.as_str()),
-            "publication configuration changed"
-        );
-        let value: serde_json::Value = read(&path)?;
-        anyhow::ensure!(
-            value["qos"]["publication"]
-                == json!([{"key_exprs": ["**"], "config": {"congestion_control": "block", "reliability": "reliable"}}]),
-            "finite publication QoS changed"
-        );
-    }
+    audit_publication_inputs(directory, inputs)?;
     let mut offers = Vec::new();
     let mut accepted = BTreeMap::new();
     let mut ids = BTreeSet::new();
@@ -1305,6 +1276,37 @@ fn audit_finite_inputs(directory: &Path, inputs: &serde_json::Value) -> Result<(
                 .checked_sub(*previous)
                 .is_some_and(|n| n >= 50_000_000),
             "finite generation caught up instead of pacing"
+        );
+    }
+    Ok(())
+}
+
+fn audit_publication_inputs(directory: &Path, inputs: &serde_json::Value) -> Result<()> {
+    let names = [
+        "zenoh-source-router.json5",
+        "zenoh-sink-router.json5",
+        "zenoh-source-client.json5",
+        "zenoh-sink-client.json5",
+    ];
+    let hashes = inputs["zenoh_configuration_sha256"]
+        .as_object()
+        .context("missing publication configuration identities")?;
+    anyhow::ensure!(
+        hashes.len() == names.len(),
+        "incomplete publication configuration identities"
+    );
+    for name in names {
+        let path = directory.join(name);
+        anyhow::ensure!(
+            hashes.get(name).and_then(serde_json::Value::as_str)
+                == Some(sha256_file(&path)?.as_str()),
+            "publication configuration changed"
+        );
+        let value: serde_json::Value = read(&path)?;
+        anyhow::ensure!(
+            value["qos"]["publication"]
+                == json!([{"key_exprs": ["**"], "config": {"congestion_control": "block", "reliability": "reliable"}}]),
+            "workload publication QoS changed"
         );
     }
     Ok(())
