@@ -1,7 +1,7 @@
 
 # Running entities
 
-The `iceoryx2_*` examples keep CLI/defaults, runtime, backend and wire setup in
+The `iceoryx2_*` and `dds_*` examples keep CLI/defaults, runtime, backend and wire setup in
 each role file while sharing message flow, native validation and evidence. See
 [role entrypoints and shared flow](docs/role-frontends.md) for addressing,
 connectivity semantics and the boundary with sustained workloads.
