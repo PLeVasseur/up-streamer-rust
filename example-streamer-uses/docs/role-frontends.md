@@ -69,6 +69,16 @@ its deployment agreement. Passive MQTT roles preserve per-message encoding;
 non-Protobuf publications remain opaque and RPC servers echo their bytes and
 identity. Broker storage/mapping/setup remain in the MQTT binding documentation.
 
+SOME/IP's six roles use the same codec-backed payload selection and shared classic
+flow with the ordinary `vsomeip-transport` feature. Each entrypoint keeps its native
+application config, URI validation, runtime and explicit
+`TransportConfig::new(payload_encoding)` setup. Its `--encoding` convention must
+agree at both endpoints and supports native/protobuf/xcdrv2/arrow/omgidl, defaulting
+to protobuf. Serialized modes need no native agreement. Existing configuration
+defaults remain relative to the owning Cargo manifest directory. Physical mapping,
+native setup and the request/session/client-ID reconstruction boundary belong to
+the [SOME/IP binding](https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust#readme).
+
 All six Zenoh entrypoints retain their CLI/defaults, runtime, configuration and
 concrete backend/wire constructors while sharing actual message flow:
 

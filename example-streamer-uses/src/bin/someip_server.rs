@@ -14,11 +14,11 @@
 //! Answer classic uProtocol RPC requests using a configured native SOME/IP application.
 mod common;
 
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use common::cli;
-use common::{xcdrv2_message_payload_parts, ServiceRequestResponder};
+use common::encoding::Encoding;
+use common::ServiceRequestResponder;
 use std::sync::Arc;
-use std::thread;
 use tracing::{info, trace, warn};
 use up_rust::{PayloadEncoding, UListener, UStatus, UTransport, UUri};
 use up_transport_vsomeip::{TransportConfig, UPTransportVsomeip};
@@ -33,13 +33,6 @@ const DEFAULT_VSOMEIP_CONFIG: &str = concat!(
     "/vsomeip-configs/someip_server.json"
 );
 const DEFAULT_UENTITY_NUM: u32 = 0x4321;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-enum Encoding {
-    Native,
-    Protobuf,
-    Xcdrv2,
-}
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]
@@ -115,26 +108,15 @@ async fn main() -> Result<(), UStatus> {
     let sink_filter = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
     let service_request_responder: Arc<dyn UListener> =
         Arc::new(ServiceRequestResponder::new(service.clone()));
-    service
-        .register_listener(
-            &source_filter,
-            Some(&sink_filter),
-            common::native::listener(&args.native, service_request_responder.clone()),
-        )
-        .await?;
-
-    println!("READY listener_registered");
-
-    loop {
-        thread::park();
-    }
+    common::classic::listen(
+        service.as_ref(),
+        &source_filter,
+        Some(&sink_filter),
+        common::native::listener(&args.native, service_request_responder),
+    )
+    .await
 }
 
 fn payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
-    match args.encoding {
-        Encoding::Native => args.native.encoding(),
-        Encoding::Protobuf => Ok(PayloadEncoding::PROTOBUF),
-        Encoding::Xcdrv2 => xcdrv2_message_payload_parts(0, args.uauthority.clone(), "")
-            .map(|(_, encoding)| encoding),
-    }
+    args.encoding.identity(&args.native)
 }

@@ -1,13 +1,12 @@
 {
   "expected": {
-    "pass": 1848,
-    "unsupported": 312,
+    "pass": 1980,
+    "unsupported": 180,
     "blocked": 0,
     "failed": 0
   },
   "unsupported_reason_allowlist": [
-    "source and sink endpoint profiles are identical",
-    "Arrow and OMGIDL are not implemented by vSomeIP classic role binaries"
+    "source and sink endpoint profiles are identical"
   ],
   "retry": {
     "max_retries_lola_rows": 1,

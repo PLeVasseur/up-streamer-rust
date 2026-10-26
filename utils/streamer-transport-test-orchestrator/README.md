@@ -142,18 +142,14 @@ owned-frame, and DDS encoded-owned. The three role styles are
 publisher/subscriber, notifier/notifyee, and client/server RPC. The five wire
 encodings are native, protobuf, XCDRv2, Arrow, and OMG IDL.
 
-Every generated row remains in the denominator. The unsupported classification
-currently contains two distinct categories:
+Every generated row remains in the denominator. A row is structurally unsupported
+only when source and sink endpoint profiles are identical, so no bridge boundary
+is under test.
 
-- source and sink endpoint profiles are identical, so no bridge boundary is
-  under test; or
-- Arrow and OMG IDL are not implemented by vSomeIP classic role binaries; this is
-  a role-wiring gap, not a structural restriction.
-
-MQTT roles produce actual Arrow IPC and OMG IDL payloads, carry their declared
-identities and echo opaque RPC bytes. Its120 formerly excluded rows are runnable.
-The checked criteria require `1848` supported and `312` unsupported rows
-(`180` structural plus `132` vSomeIP wiring gaps), with no blocked or failed rows.
+MQTT and SOME/IP roles produce actual Arrow IPC and OMG IDL payloads, carry their
+declared identities and echo opaque RPC bytes. Both classic backend features
+include their codec dependencies. The checked criteria require `1980` supported
+and `180` structural unsupported rows, with no blocked or failed rows.
 These criteria describe required coverage; only an actual completed run establishes
 acceptance. Canonical generation and
 criteria validation together reject a missing row, an unknown row, an

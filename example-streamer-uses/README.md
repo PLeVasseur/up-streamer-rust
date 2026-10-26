@@ -13,6 +13,9 @@ ordinary `mqtt-transport` feature. Their existing flags and defaults remain;
 `--encoding` adds `arrow` and `omgidl`. See the role guide for encoding and opaque
 receive/RPC behavior and the [MQTT binding](https://github.com/eclipse-uprotocol/up-transport-mqtt5-rust#readme)
 for broker configuration and physical mapping.
+SOME/IP roles support those same five payload choices through `vsomeip-transport`;
+the explicit payload convention must match across the configured native endpoints.
+Their application configuration defaults and native setup remain in each role.
 
 ## Running a UStreamer
 
