@@ -21,6 +21,22 @@ Reference the README.md there for more details.
 
 ## Building
 
+The [transport matrix orchestrator](utils/streamer-transport-test-orchestrator/README.md)
+owns reproducible integration execution and shared Unix process supervision.
+[Bounded workload evidence](utils/streamer-soak/README.md) supplies OS-independent
+journals and replay through that same runner. See the
+[portability guide](utils/streamer-transport-test-orchestrator/docs/portability.md)
+for Linux/macOS boundaries and the distinction between shared tooling support and
+actual native-backend qualification.
+
+Public handwritten APIs, examples and test helpers use `missing_docs = "deny"`.
+The owning library and utility guides explain routing, deployment and observation
+contracts; strict Rustdoc and doctests check those interfaces with the source.
+
+Native payload deployments use generated, target-qualified agreements and explicit
+whole-route admission. See the [native deployment and routing guide](configurable-streamer/docs/native-deployment.md)
+for exporter, manifest, endpoint and role configuration, including DDS encoded-owned routing.
+
 ### Only `up-streamer`
 
 If you only want to compile the library itself, you can as normal:
@@ -109,6 +125,22 @@ Matrix custom claims directory example:
 ```bash
 cargo run -p transport-smoke-suite --bin transport-smoke-matrix -- --all --claims-path utils/transport-smoke-suite/claims
 ```
+
+LoLa zero-copy matrix rows need Bazel or Bazelisk to build the bundled native bridge. The smoke runner resolves it in this order:
+
+- `BAZEL` if explicitly set
+- the repo-local cache at `.cache/tools/bazelisk-v1.29.0-linux-amd64`
+- `scripts/ensure-lola-bazelisk.sh`, unless `--no-bootstrap` is passed
+
+To bootstrap the pinned Bazelisk manually:
+
+```bash
+scripts/ensure-lola-bazelisk.sh --print
+```
+
+The helper verifies the checksum in `tools/bazelisk-linux-amd64.sha256` and does not use `/tmp/opencode`.
+
+MQTT smoke rows use `--mqtt-broker-mode docker-compose` by default. Use `--mqtt-broker-mode external` when a broker is already reachable at `--mqtt-broker-uri localhost:1883`, or `--mqtt-broker-mode native` to start a local `mosquitto` process from `PATH`. Zero-copy rows whose selected configurable-streamer config has `mqtt.endpoints: []` do not start Docker Compose or require an MQTT broker.
 
 Scenario binaries:
 

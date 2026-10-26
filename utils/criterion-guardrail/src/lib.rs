@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Compare named Criterion samples against explicit regression thresholds.
 use chrono::Utc;
 use serde::Serialize;
 use std::collections::HashMap;
@@ -18,6 +19,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// Six benchmark identities that must exist in both named sample sets.
 pub const REQUIRED_BENCHMARK_IDS: [&str; 6] = [
     "routing_lookup/exact_authority",
     "routing_lookup/wildcard_authority",
@@ -37,27 +39,42 @@ const ALLOC_PROXY_BENCHMARK_IDS: [&str; 2] = [
 const REQUIRED_HEADER_COLUMNS: [&str; 2] = ["sample_measured_value", "iteration_count"];
 
 #[derive(Clone, Debug)]
+/// Named sample sets and percentage limits used for one guardrail comparison.
 pub struct GuardrailInput {
+    /// Directory containing Criterion benchmark outputs.
     pub criterion_root: PathBuf,
+    /// Baseline sample-set name.
     pub baseline: String,
+    /// Candidate sample-set name.
     pub candidate: String,
+    /// Maximum allowed percentage decrease in operations per second.
     pub throughput_threshold_pct: f64,
+    /// Maximum allowed percentage increase in nanoseconds per iteration.
     pub latency_threshold_pct: f64,
+    /// Maximum allowed timing regression for allocation-sensitive proxy benchmarks.
     pub alloc_proxy_threshold_pct: f64,
 }
 
 #[derive(Clone, Debug, Serialize)]
+/// Percentage limits retained in the serialized comparison report.
 pub struct ThresholdConfig {
+    /// Allowed operations-per-second decrease.
     pub throughput_threshold_pct: f64,
+    /// Allowed nanoseconds-per-iteration increase.
     pub latency_threshold_pct: f64,
+    /// Allowed timing regression for allocation-sensitive proxies; not an allocation count.
     pub alloc_proxy_threshold_pct: f64,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
+/// Interpretation of the median timing samples for threshold comparison.
 pub enum MetricKind {
+    /// Relative decrease in derived operations per second.
     Throughput,
+    /// Relative increase in nanoseconds per iteration.
     Latency,
+    /// Timing proxy for allocation-sensitive work, without counting allocations.
     AllocProxy,
 }
 
@@ -72,28 +89,49 @@ impl MetricKind {
 }
 
 #[derive(Clone, Debug, Serialize)]
+/// One benchmark's measured medians, interpreted regression and threshold outcome.
 pub struct BenchmarkResult {
+    /// Canonical benchmark identity.
     pub benchmark_id: String,
+    /// Interpretation used for the relative change.
     pub metric_kind: MetricKind,
+    /// Baseline median nanoseconds per iteration.
     pub baseline_ns_per_iter: f64,
+    /// Candidate median nanoseconds per iteration.
     pub candidate_ns_per_iter: f64,
+    /// Interpreted regression percentage; negative values indicate improvement.
     pub delta_pct: f64,
+    /// Maximum allowed regression percentage.
     pub threshold_pct: f64,
+    /// Whether the measured regression is within the supplied threshold.
     pub pass: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
+/// Complete comparison result with reproducible sample identities and thresholds.
 pub struct GuardrailReport {
+    /// UTC evaluation timestamp formatted as RFC3339.
     pub timestamp_utc: String,
+    /// Criterion output directory used for input discovery.
     pub criterion_root: String,
+    /// Baseline sample-set name.
     pub baseline: String,
+    /// Candidate sample-set name.
     pub candidate: String,
+    /// Threshold values used for this comparison.
     pub thresholds: ThresholdConfig,
+    /// Whether every required benchmark met its threshold.
     pub pass: bool,
+    /// Explanations for threshold failures.
     pub failures: Vec<String>,
+    /// Results for each required benchmark.
     pub results: Vec<BenchmarkResult>,
 }
 
+/// Loads both named CSV sample sets and evaluates every required benchmark.
+///
+/// Missing samples or unsupported/malformed data return an error rather than a
+/// passing partial report. Allocation proxies measure timing, not allocator activity.
 pub fn evaluate_guardrail(input: &GuardrailInput) -> Result<GuardrailReport, String> {
     let baseline_map = discover_named_raw_csvs(&input.criterion_root, &input.baseline)?;
     let candidate_map = discover_named_raw_csvs(&input.criterion_root, &input.candidate)?;
@@ -179,6 +217,7 @@ pub fn evaluate_guardrail(input: &GuardrailInput) -> Result<GuardrailReport, Str
     })
 }
 
+/// Writes a pretty-printed JSON report, creating its parent directories if needed.
 pub fn write_report(report: &GuardrailReport, report_path: &Path) -> Result<(), String> {
     if let Some(parent) = report_path.parent() {
         fs::create_dir_all(parent).map_err(|err| {
@@ -199,6 +238,7 @@ pub fn write_report(report: &GuardrailReport, report_path: &Path) -> Result<(), 
     })
 }
 
+/// Renders benchmark medians, deltas, thresholds and outcomes as a text table.
 pub fn render_summary_table(report: &GuardrailReport) -> String {
     let mut lines = Vec::with_capacity(report.results.len() + 4);
     lines.push(format!(

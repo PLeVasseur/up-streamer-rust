@@ -1,6 +1,8 @@
 # up-linux-streamer-plugin
 
-_Note_: Currently not usable. Must be updated to use tokio instead of async-std.
+The plugin owns a Tokio runtime for its configured classic Streamer bridge.
+Public handwritten APIs use `missing_docs = "deny"`; see the
+[plugin lifecycle guide](docs/lifecycle.md) for configuration and ownership.
 
 ## The Concept
 
@@ -48,7 +50,7 @@ LinuxStreamerZenohPlugin ..> ZenohRouter: loaded by
 ### Build the plugin
 
 ```bash
-LD_LIBRARY_PATH=<path/to/where/to/install/vsomeip/lib> VSOMEIP_INSTALL_PATH=<path/to/where/to/install/vsomeip/lib> cargo build
+LD_LIBRARY_PATH=<vsomeip-install>/lib VSOMEIP_INSTALL_PATH=<vsomeip-install> cargo build
 ```
 
 ### Bundled vsomeip or bring your own

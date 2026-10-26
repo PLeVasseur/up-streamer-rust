@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Zenoh plugin entry point for a configured classic uProtocol Streamer bridge.
 #![recursion_limit = "256"]
 
 // TODO: Consider if we're ever likely to want to use this _not_ as a Zenoh plugin, in which
@@ -20,6 +21,7 @@
 mod config;
 
 #[cfg(all(feature = "zenoh-transport", feature = "vsomeip-transport"))]
+/// Zenoh plugin lifecycle integration for the configured transport bridge.
 pub mod plugin {
 
     const THREAD_NUM: usize = 10;
@@ -49,7 +51,7 @@ pub mod plugin {
         let _ = tracing_subscriber::fmt::try_init();
     }
 
-    // The struct implementing the ZenohPlugin and ZenohPlugin traits
+    /// Zenoh plugin factory that starts the configured Streamer runtime and routes.
     pub struct UpLinuxStreamerPlugin {}
 
     // declaration of the plugin's VTable for zenohd to find the plugin's functions to be called
@@ -186,14 +188,13 @@ pub mod plugin {
         trace!("streamer_uuri: {streamer_uuri:#?}");
         let host_transport: Arc<dyn UTransport> = Arc::new(match config.host_config.transport {
             HostTransport::Zenoh => {
-                let zenoh_session = zenoh::session::init(runtime.clone()).await.map_err(|err| {
-                    zerror!("Unable to initialize Zenoh session from runtime: {}", err)
-                })?;
-                UPTransportZenoh::builder(config.streamer_uuri.authority.clone())
-                    .map_err(|err| zerror!("Unable to create Zenoh transport builder: {}", err))?
-                    .with_session(zenoh_session)
-                    .build()
-                    .map_err(|err| zerror!("Unable to initialize Zenoh UTransport: {}", err))?
+                let _ = runtime;
+                UPTransportZenoh::new(
+                    up_transport_zenoh::zenoh_config::Config::default(),
+                    streamer_uuri.to_string(),
+                )
+                .await
+                .map_err(|err| zerror!("Unable to initialize Zenoh UTransport: {}", err))?
             } // other host transports can be added here as they become available
         });
 

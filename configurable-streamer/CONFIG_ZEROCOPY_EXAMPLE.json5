@@ -1,0 +1,70 @@
+{
+  up_streamer_config: {
+    message_queue_size: 32,
+  },
+  streamer_uuri: {
+    authority: "authority-streamer",
+    ue_id: 78,
+    ue_version_major: 1,
+  },
+  usubscription_config: {
+    mode: "static_file",
+    file_path: "subscription_data.json",
+  },
+  transports: {
+    zenoh: {
+      config_file: "ZENOH_CONFIG.json5",
+      endpoints: [
+        {
+          authority: "authority-a",
+          endpoint: "zenoh-zc",
+          routing_mode: "copy_minimized",
+          copy_minimized_payload_alignment: 8,
+          forwarding_routes: [
+            { endpoint: "iceoryx2-zc", wire_format: "protobuf" },
+            { endpoint: "lola-zc", wire_format: "protobuf" },
+          ],
+        },
+      ],
+    },
+    mqtt: {
+      config_file: "MQTT_CONFIG.json5",
+      endpoints: [],
+    },
+    iceoryx2: {
+      endpoints: [
+        {
+          authority: "authority-b",
+          endpoint: "iceoryx2-zc",
+          routing_mode: "copy_minimized",
+          copy_minimized_payload_alignment: 8,
+          forwarding_routes: [
+            { endpoint: "zenoh-zc", wire_format: "protobuf" },
+            { endpoint: "lola-zc", wire_format: "protobuf" },
+          ],
+        },
+      ],
+    },
+    lola: {
+      endpoints: [
+        {
+          authority: "authority-c",
+          endpoint: "lola-zc",
+          routing_mode: "copy_minimized",
+          copy_minimized_payload_alignment: 8,
+          lola_instance_specifier: "uprotocol/transport",
+          lola_service_type: "/uprotocol/Transport",
+          lola_event_name: "frame",
+          lola_sample_size: 65536,
+          lola_sample_alignment: 8,
+          lola_max_samples: 16,
+          lola_mw_com_config_file: "MW_COM_CONFIG_LOLA.json",
+          forwarding_routes: [
+            { endpoint: "zenoh-zc", wire_format: "protobuf" },
+            { endpoint: "iceoryx2-zc", wire_format: "protobuf" },
+          ],
+        },
+      ],
+    },
+  },
+}

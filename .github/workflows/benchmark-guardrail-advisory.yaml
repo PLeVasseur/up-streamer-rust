@@ -11,7 +11,7 @@
 #  SPDX-License-Identifier: Apache-2.0
 # *******************************************************************************/
 
-name: Benchmark Guardrail Advisory
+name: Benchmark regression report
 
 on:
   pull_request:
@@ -24,7 +24,7 @@ on:
 
 jobs:
   criterion_guardrail_advisory:
-    name: Criterion Guardrail Advisory
+    name: Criterion threshold report
     runs-on: ubuntu-22.04
 
     steps:
@@ -43,7 +43,7 @@ jobs:
           scripts/bench_streamer_criterion.sh baseline
           scripts/bench_streamer_criterion.sh candidate ci_candidate
 
-      - name: Run criterion-guardrail (advisory)
+      - name: Check benchmark thresholds
         continue-on-error: true
         run: |
           scripts/bench_streamer_criterion.sh guardrail ci_candidate "$GITHUB_WORKSPACE/target/criterion/ci-guardrail.json"
@@ -55,7 +55,7 @@ jobs:
           export OPENCODE_CONFIG_DIR="$GITHUB_WORKSPACE/target/criterion-artifacts"
           scripts/bench_streamer_criterion.sh export
 
-      - name: Upload criterion guardrail artifacts
+      - name: Upload benchmark comparison artifacts
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:

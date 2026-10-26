@@ -1,0 +1,16 @@
+[package]
+name = "streamer-native-types"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Native application representations used by Streamer examples and validation"
+readme = "README.md"
+
+[dependencies]
+up-rust = { workspace = true, features = ["native-inventory"] }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"

@@ -1,0 +1,19 @@
+[package]
+name = "streamer-native-inventory"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Actual-target exporter for Streamer native application types"
+readme = "README.md"
+
+[dependencies]
+clap = { workspace = true, features = ["derive"] }
+streamer-native-types = { path = "../streamer-native-types", version = "=0.1.0" }
+up-native-profile = { workspace = true }
+up-rust = { workspace = true, features = ["native-inventory"] }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"

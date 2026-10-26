@@ -12,11 +12,20 @@
 [workspace]
 resolver = "2"
 members = [
-    "up-streamer",
+    "example-streamer-uses",
     "utils/hello-world-protos",
     "utils/integration-test-utils",
-    "utils/usubscription-static-file",
+    "example-streamer-implementations",
+    "utils/criterion-guardrail",
+    "utils/configurable-streamer-wire-support",
+    "utils/streamer-native-types",
+    "utils/streamer-native-inventory",
     "utils/streamer-flow-evidence",
+    "utils/streamer-soak",
+    "configurable-streamer",
+    "up-linux-streamer-plugin",
+    "up-streamer",
+    "utils/usubscription-static-file",
 ]
 
 [workspace.package]

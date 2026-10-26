@@ -1,0 +1,56 @@
+{
+  "serviceTypes": [
+    {
+      "serviceTypeName": "/uprotocol/TransportR004D2NativeZ2L",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "bindings": [
+        {
+          "binding": "SHM",
+          "serviceId": 7364,
+          "events": [
+            {
+              "eventName": "frameNativeZ2L",
+              "eventId": 1
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "serviceInstances": [
+    {
+      "instanceSpecifier": "uprotocol/transportNativeZ2L",
+      "serviceTypeName": "/uprotocol/TransportR004D2NativeZ2L",
+      "version": {
+        "major": 1,
+        "minor": 0
+      },
+      "instances": [
+        {
+          "instanceId": 1,
+          "asil-level": "QM",
+          "binding": "SHM",
+          "events": [
+            {
+              "eventName": "frameNativeZ2L",
+              "numberOfSampleSlots": 16,
+              "maxSubscribers": 8,
+              "numberOfIpcTracingSlots": 0
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "global": {
+    "asil-level": "QM",
+    "queue-size": {
+      "QM-receiver": 16,
+      "QM-sender": 16
+    },
+    "shm-size-calc-mode": "SIMULATION"
+  }
+}

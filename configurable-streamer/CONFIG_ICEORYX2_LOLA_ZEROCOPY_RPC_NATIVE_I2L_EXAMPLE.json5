@@ -1,0 +1,62 @@
+{
+  up_streamer_config: {
+    message_queue_size: 32,
+  },
+  streamer_uuri: {
+    authority: "authority-streamer",
+    ue_id: 78,
+    ue_version_major: 1,
+  },
+  usubscription_config: {
+    mode: "static_file",
+    file_path: "subscription_data.json",
+  },
+  transports: {
+    zenoh: {
+      config_file: "ZENOH_CONFIG.json5",
+      endpoints: [],
+    },
+    mqtt: {
+      config_file: "MQTT_CONFIG.json5",
+      endpoints: [],
+    },
+    iceoryx2: {
+      endpoints: [
+        {
+          authority: "authority-a",
+          endpoint: "iceoryx2-zc",
+          routing_mode: "copy_minimized",
+          copy_minimized_payload_alignment: 8,
+          forwarding_routes: [
+            { endpoint: "lola-zc", wire_format: "up_native" },
+          ],
+        },
+      ],
+    },
+    lola: {
+      endpoints: [
+        {
+          authority: "authority-b",
+          endpoint: "lola-zc",
+          routing_mode: "copy_minimized",
+          copy_minimized_payload_alignment: 8,
+          lola_instance_specifier: "uprotocol/transportNativeIoxZcRpcI2LRequest",
+          lola_service_type: "/uprotocol/TransportR004D2NativeIoxZcRpcI2LRequest",
+          lola_event_name: "frameNativeIoxZcRpcI2LRequest",
+          lola_response_instance_specifier: "uprotocol/transportNativeIoxZcRpcI2LResponse",
+          lola_response_service_type: "/uprotocol/TransportR004D2NativeIoxZcRpcI2LResponse",
+          lola_response_event_name: "frameNativeIoxZcRpcI2LResponse",
+          lola_default_rx_channel: "response",
+          lola_sample_size: 65536,
+          lola_sample_alignment: 8,
+          lola_max_samples: 16,
+          lola_mw_com_config_file: "MW_COM_CONFIG_LOLA_NATIVE_IOX.json",
+          lola_response_mw_com_config_file: "MW_COM_CONFIG_LOLA_NATIVE_IOX.json",
+          forwarding_routes: [
+            { endpoint: "iceoryx2-zc", wire_format: "up_native" },
+          ],
+        },
+      ],
+    },
+  },
+}

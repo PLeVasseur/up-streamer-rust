@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Command-line comparison of named Criterion sample sets with explicit regression thresholds.
 use clap::Parser;
 use criterion_guardrail::{evaluate_guardrail, render_summary_table, write_report, GuardrailInput};
 use std::path::PathBuf;

@@ -1,5 +1,9 @@
 # up-linux-streamer
 
+Handwritten entry points use `missing_docs = "deny"`. See the
+[reference bridge guide](docs/reference-bridges.md) for configuration and the
+relationship to the role examples and configurable Streamer.
+
 These are reference implementations of a uStreamer.
 We implement the Streamers so that they forward between two components, either between Zenoh and MQTT or between Zenoh and SOME/IP.
 A component running with Zenoh could be a component running in an ECU, one running with MQTT could be a component running in some sort of cloud and one running SOME/IP could be a mechatronics component.
@@ -29,7 +33,7 @@ For a single setup you can choose either:
 ### Publish-Subscribe Setups
 
 This setup is more straight forward and consists of one publisher broadcasting messages to a topic and a subscriber who listens to the topic.
-Messages that the publisher sends contain a "topic" that the message will be available on. There is no response expected so publish messages do not contain the publishers URI.
+A publish message carries its topic URI as the source and has no sink. No response is expected.
 The subscriber listens to one or multiple topics via a filter.
 
 For this setup you can also choose:
@@ -40,7 +44,9 @@ For this setup you can also choose:
 
 ### Notification setups
 
-There are currently no example entities for notification type messages. These do not exist for SOME/IP but do exist for Zenoh and MQTT. It should be relatively straight forward to implement the yourself if your system needs them!
+The role examples include notifier/notifyee pairs for the supported bindings.
+They use explicit source and sink URIs; consult `example-streamer-uses/README.md`
+and the configurable Streamer guide for the corresponding route configuration.
 
 ## Understanding the Configuration Files
 

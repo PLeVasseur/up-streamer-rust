@@ -11,6 +11,8 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! End-to-end guardrail checks using deterministic Criterion CSV fixture trees.
+
 use criterion_guardrail::{evaluate_guardrail, GuardrailInput, REQUIRED_BENCHMARK_IDS};
 use std::path::PathBuf;
 
