@@ -429,3 +429,18 @@ cargo run -p streamer-transport-test-orchestrator -- \
 
 Do not use `--skip-build`, selected rows, reduced criteria, or increased
 timeouts as complete matrix acceptance evidence.
+# Connectivity capacity overrides
+
+Each successfully spawned role/backend process records its executable, actual
+arguments, explicit environment, namespace-wrapper arguments and owned process
+group in `<actor>.launch.json` beside its raw log. Receipt failure tears down the
+owned process. These records support checking actual configured participants.
+
+`--iceoryx2-capacity '{"publisher_initial_max_slice_len":65536,"publisher_allocation_strategy":"static","max_subscribers":2,"publisher_max_loaned_samples":1}'`
+applies the same optional deployment limits to the generated Streamer endpoints
+and iceoryx2 role arguments. The bounded JSON is recorded in normalized run options;
+namespace isolation is retained. Unknown/zero values reject before execution;
+effective arithmetic and service compatibility are checked by the physical binding.
+Omission preserves ordinary connectivity setup. Sustained workloads use their own
+deployment cards and reject this connectivity-only override. See the
+[capacity guide](../../configurable-streamer/docs/native-capacity.md).

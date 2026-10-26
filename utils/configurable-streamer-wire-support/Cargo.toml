@@ -26,16 +26,17 @@ license.workspace = true
 default = []
 wire-formats = ["dep:up-wire-arrow", "dep:up-wire-omgidl", "dep:up-wire-xcdrv2"]
 zenoh-zero-copy = ["wire-formats", "dep:up-transport-zenoh", "up-transport-zenoh/zero-copy"]
-iceoryx2-zero-copy = ["wire-formats", "dep:up-transport-iceoryx2-rust"]
+iceoryx2-zero-copy = ["wire-formats", "dep:up-transport-iceoryx2-rust", "dep:iceoryx2"]
 lola-transport = ["wire-formats", "dep:up-transport-lola-rust"]
 dds-encoded-owned = ["wire-formats", "owned-frame-transport", "dep:up-transport-dds"]
 owned-frame-transport = ["wire-formats", "up-streamer/owned-frame-transport"]
 zenoh-owned-frame = ["owned-frame-transport", "dep:up-transport-zenoh", "up-transport-zenoh/benchmark-owned"]
-iceoryx2-owned-frame = ["owned-frame-transport", "dep:up-transport-iceoryx2-rust", "up-transport-iceoryx2-rust/benchmark-owned"]
+iceoryx2-owned-frame = ["owned-frame-transport", "dep:up-transport-iceoryx2-rust", "up-transport-iceoryx2-rust/benchmark-owned", "dep:iceoryx2"]
 lola-owned-frame = ["owned-frame-transport", "dep:up-transport-lola-rust", "up-transport-lola-rust/benchmark-owned"]
 dds-owned-frame = ["owned-frame-transport", "dep:up-transport-dds"]
 
 [dependencies]
+iceoryx2 = { version = "=0.9.2", optional = true }
 streamer-native-types = { path = "../streamer-native-types", version = "=0.1.0" }
 up-native-profile = { workspace = true }
 up-rust = { workspace = true, features = ["zero-copy-transport", "selected-wire-user-api", "native-inventory"] }

@@ -103,11 +103,12 @@ impl LolaOptions {
 pub(crate) fn iceoryx2(
     receive_capacity: Option<usize>,
     min_subscribers: usize,
+    capacities: &configurable_streamer_wire_support::capacity::Iceoryx2Capacity,
 ) -> Result<up_transport_iceoryx2_rust::Iceoryx2PubSubConfig, UStatus> {
     let mut config = up_transport_iceoryx2_rust::Iceoryx2PubSubConfig::default()
         .with_publisher_readiness(min_subscribers, std::time::Duration::from_secs(5));
-    if let Some(capacity) = receive_capacity {
-        if capacity == 0 {
+    if receive_capacity.is_some() || capacities.configured() {
+        if receive_capacity == Some(0) {
             return Err(invalid("native receive capacity must be nonzero"));
         }
         let root = std::env::var("UP_ICEORYX2_ROOT_PATH")
@@ -116,15 +117,18 @@ pub(crate) fn iceoryx2(
             invalid("native capacity override requires configured namespace prefix")
         })?;
         config = config.with_namespace(&root, &prefix)?;
-        let native = config
-            .iceoryx2_config
-            .as_mut()
-            .expect("explicit namespace configuration");
-        native.defaults.publish_subscribe.subscriber_max_buffer_size = capacity;
-        native
-            .defaults
-            .publish_subscribe
-            .subscriber_max_borrowed_samples = capacity;
+        if let Some(capacity) = receive_capacity {
+            let native = config
+                .iceoryx2_config
+                .as_mut()
+                .expect("explicit namespace configuration");
+            native.defaults.publish_subscribe.subscriber_max_buffer_size = capacity;
+            native
+                .defaults
+                .publish_subscribe
+                .subscriber_max_borrowed_samples = capacity;
+        }
     }
+    capacities.apply(&mut config)?;
     Ok(config)
 }

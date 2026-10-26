@@ -1001,8 +1001,9 @@ fn register_iceoryx2_endpoints(
                     .publish_subscribe
                     .subscriber_max_borrowed_samples = capacity;
             }
+            namespace.capacity().apply(&mut config)?;
         }
-        let transport = Iceoryx2PubSub::with_config(config);
+        let transport = Iceoryx2PubSub::try_with_config(config)?;
         if endpoint_config.routing_mode == RoutingMode::Owned {
             return Err(invalid_config(format!(
                 "iceoryx2 endpoint {} must use copy_minimized or owned_frame routing",

@@ -1,5 +1,10 @@
 # Role entrypoints and shared flow
 
+For optional iceoryx2 slice/allocation/subscriber/TX controls, see
+[native capacity configuration](../../configurable-streamer/docs/native-capacity.md).
+Those options are visible in every iceoryx2 frontend and applied to the real
+binding configuration with typed validation.
+
 The six `iceoryx2_*` and six `lola_*` entrypoints each contain their command-line fields and
 defaults, Tokio runtime, physical backend construction and concrete selected-wire
 constructors. The local `run_endpoint!` macro shows the five wire choices for

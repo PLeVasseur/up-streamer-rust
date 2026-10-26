@@ -12,6 +12,7 @@
  ********************************************************************************/
 
 //! Explicit wire-specific endpoint construction and route installation for Streamer applications.
+pub mod capacity;
 pub mod native_profile;
 pub mod payload_bytes;
 

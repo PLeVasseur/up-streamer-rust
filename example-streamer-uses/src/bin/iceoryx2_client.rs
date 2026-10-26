@@ -55,6 +55,19 @@ macro_rules! run_endpoint {
 #[derive(Parser)]
 #[command()]
 struct Cli {
+    /// Complete encoded sample capacity, including metadata and alignment slack.
+    #[arg(long)]
+    iceoryx2_publisher_initial_max_slice_len: Option<usize>,
+    /// Publisher strategy: static, best_fit or power_of_two.
+    #[arg(long)]
+    iceoryx2_publisher_allocation_strategy:
+        Option<configurable_streamer_wire_support::capacity::PublisherAllocationStrategy>,
+    /// Native subscriber ceiling per service; values above one enable fan-out.
+    #[arg(long)]
+    iceoryx2_max_subscribers: Option<usize>,
+    /// Maximum simultaneous native publisher TX loans.
+    #[arg(long)]
+    iceoryx2_publisher_max_loaned_samples: Option<usize>,
     #[arg(skip)]
     native: NativeContext,
     #[arg(long = "route-family", value_enum, default_value = "owned-frame")]
@@ -120,6 +133,18 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
     let mut cli = Cli::parse();
+    let capacities = configurable_streamer_wire_support::capacity::Iceoryx2Capacity {
+        publisher_initial_max_slice_len: cli.iceoryx2_publisher_initial_max_slice_len,
+        publisher_allocation_strategy: cli.iceoryx2_publisher_allocation_strategy,
+        max_subscribers: cli.iceoryx2_max_subscribers,
+        publisher_max_loaned_samples: cli.iceoryx2_publisher_max_loaned_samples,
+    };
+    capacities.validate()?;
+    if capacities.configured() && cli.transport != FlowTransport::Iceoryx2 {
+        return Err(flow::invalid(
+            "iceoryx2 capacity options require the iceoryx2 backend",
+        ));
+    }
     cli.native = NativeContext::from_env()?;
     if cli.wire_format == FlowWireFormat::Native {
         cli.native.identity()?;
@@ -146,12 +171,16 @@ async fn main() -> Result<(), UStatus> {
     match (cli.mode, cli.transport) {
         #[cfg(feature = "iceoryx2-zero-copy")]
         (FlowMode::CopyMinimized, FlowTransport::Iceoryx2) => {
-            let core = up_transport_iceoryx2_rust::Iceoryx2PubSub::new();
+            let core = up_transport_iceoryx2_rust::Iceoryx2PubSub::try_with_config(
+                common::endpoint_config::iceoryx2(None, 0, &capacities)?,
+            )?;
             run_endpoint!(core, &config, run_native)
         }
         #[cfg(feature = "iceoryx2-owned-frame")]
         (FlowMode::OwnedFrame, FlowTransport::Iceoryx2) => {
-            let physical = up_transport_iceoryx2_rust::Iceoryx2PubSub::new();
+            let physical = up_transport_iceoryx2_rust::Iceoryx2PubSub::try_with_config(
+                common::endpoint_config::iceoryx2(None, 0, &capacities)?,
+            )?;
             let core = up_transport_iceoryx2_rust::BenchmarkOwnedIceoryx2Core::new(physical);
             run_endpoint!(core, &config, run_owned)
         }

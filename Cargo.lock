@@ -1007,6 +1007,7 @@ dependencies = [
 name = "configurable-streamer-wire-support"
 version = "0.1.0"
 dependencies = [
+ "iceoryx2",
  "serde",
  "serde_json",
  "streamer-native-types",
@@ -6239,7 +6240,7 @@ dependencies = [
 [[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=fd5bb73938da9d3e383a7e40891e56d48df8c3a2#fd5bb73938da9d3e383a7e40891e56d48df8c3a2"
+source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=0f3dcee772e12e318ad4034a80880abe267dcc81#0f3dcee772e12e318ad4034a80880abe267dcc81"
 dependencies = [
  "async-trait",
  "bytes",

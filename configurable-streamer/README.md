@@ -256,3 +256,9 @@ The optional native Zenoh endpoint setting `zenoh_shm_segment_size` delegates po
 capacity to the binding's public builder; see [native deployment](docs/native-deployment.md).
 Native Zenoh endpoints may set `zenoh_wait_for_subscriber` for binding-owned matching
 readiness; see [native deployment](docs/native-deployment.md).
+# Native capacity controls
+
+Optional iceoryx2 slice, allocation, subscriber and TX-loan controls are described
+in [native capacity configuration](docs/native-capacity.md). Existing buffer/borrow
+and Zenoh SHM settings are reused. Omitted controls preserve defaults; fixed-budget
+deployments opt into exact binding validation and retain configurable fan-out.

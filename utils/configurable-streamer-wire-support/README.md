@@ -22,3 +22,11 @@ Policy-aware classic bridge helpers forward a complete `NativeRoutePolicy` to th
 core route API. The ordinary helpers retain the rejecting default for native
 SingleType/classic combinations. The configuration frontend checks complete
 manifest membership before constructing these helpers.
+# Capacity composition
+
+`capacity::Iceoryx2Capacity` composes optional publisher slice/allocation, subscriber
+and TX-loan limits through the owning binding API, retaining the explicit namespace.
+Omitted fields preserve defaults; invalid inputs return typed errors. See the
+[native capacity guide](../../configurable-streamer/docs/native-capacity.md) for
+configuration and ownership boundaries. Physical allocation and service checks
+remain binding-owned.

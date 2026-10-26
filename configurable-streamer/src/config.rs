@@ -441,6 +441,15 @@ pub struct Iceoryx2PublisherReadiness {
 #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Iceoryx2Namespace {
+    /// Complete encoded sample capacity; omission preserves ordinary binding growth.
+    pub(crate) publisher_initial_max_slice_len: Option<usize>,
+    /// Explicit publisher allocation policy delegated to the binding.
+    pub(crate) publisher_allocation_strategy:
+        Option<configurable_streamer_wire_support::capacity::PublisherAllocationStrategy>,
+    /// Native subscriber ceiling; values greater than one support fan-out.
+    pub(crate) max_subscribers: Option<usize>,
+    /// Maximum simultaneously held native publisher loans.
+    pub(crate) publisher_max_loaned_samples: Option<usize>,
     /// Optional native receive-buffer capacity delegated to the binding runtime.
     pub(crate) subscriber_buffer_size: Option<usize>,
     /// Optional native borrowed-sample limit, distinct from application queue occupancy.
@@ -450,7 +459,25 @@ pub struct Iceoryx2Namespace {
 }
 
 impl Iceoryx2Namespace {
+    pub(crate) fn capacity(
+        &self,
+    ) -> configurable_streamer_wire_support::capacity::Iceoryx2Capacity {
+        configurable_streamer_wire_support::capacity::Iceoryx2Capacity {
+            publisher_initial_max_slice_len: self.publisher_initial_max_slice_len,
+            publisher_allocation_strategy: self.publisher_allocation_strategy,
+            max_subscribers: self.max_subscribers,
+            publisher_max_loaned_samples: self.publisher_max_loaned_samples,
+        }
+    }
+
     fn validate(&self) -> Result<(), up_rust::UStatus> {
+        self.capacity().validate()?;
+        if [self.subscriber_buffer_size, self.max_borrowed_samples].contains(&Some(0)) {
+            return Err(up_rust::UStatus::fail_with_code(
+                up_rust::UCode::InvalidArgument,
+                "iceoryx2 buffer and borrowed sample limits must be nonzero",
+            ));
+        }
         if !std::path::Path::new(&self.root_path).is_absolute()
             || self.prefix.is_empty()
             || self.prefix.len() > 32
@@ -645,6 +672,10 @@ mod tests {
     #[test]
     fn native_namespace_rejects_relative_root_or_invalid_prefix() {
         assert!(Iceoryx2Namespace {
+            publisher_initial_max_slice_len: None,
+            publisher_allocation_strategy: None,
+            max_subscribers: None,
+            publisher_max_loaned_samples: None,
             subscriber_buffer_size: None,
             max_borrowed_samples: None,
             root_path: "relative".into(),
@@ -653,6 +684,10 @@ mod tests {
         .validate()
         .is_err());
         assert!(Iceoryx2Namespace {
+            publisher_initial_max_slice_len: None,
+            publisher_allocation_strategy: None,
+            max_subscribers: None,
+            publisher_max_loaned_samples: None,
             subscriber_buffer_size: None,
             max_borrowed_samples: None,
             root_path: "/absolute".into(),

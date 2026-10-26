@@ -1,6 +1,12 @@
 
 # Running entities
 
+The six iceoryx2 role frontends accept optional publisher slice/allocation,
+subscriber-ceiling and TX-loan settings. See the
+[native capacity guide](../configurable-streamer/docs/native-capacity.md) for exact
+flags and namespace requirements; ordinary defaults and multi-subscriber support
+are retained.
+
 The `iceoryx2_*`, `lola_*` and `dds_*` examples keep CLI/defaults, runtime, backend
 and wire setup in each role file while sharing message flow, native validation and evidence. See
 [role entrypoints and shared flow](docs/role-frontends.md) for addressing,

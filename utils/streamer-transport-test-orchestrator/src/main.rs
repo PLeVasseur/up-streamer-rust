@@ -111,6 +111,9 @@ static ATOMIC_WRITE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
     about = "Endpoint-profile matrix orchestrator for configurable-streamer plus role binaries"
 )]
 struct Cli {
+    /// Optional bounded JSON capacity overrides applied to every generated iceoryx2 participant.
+    #[arg(long, value_name = "JSON", value_parser = parse_iceoryx2_capacity)]
+    iceoryx2_capacity: Option<configurable_streamer_wire_support::capacity::Iceoryx2Capacity>,
     /// Run a sustained workload using the existing matrix deployment and workers.
     #[arg(long, value_enum)]
     soak: Option<soak::Mode>,
@@ -2623,6 +2626,9 @@ fn install_signal_handlers(cancellation: &Cancellation) -> Result<()> {
 }
 
 fn validate_cli(cli: &Cli) -> Result<()> {
+    if cli.iceoryx2_capacity.is_some() && cli.soak.is_some() {
+        return Err(anyhow!("sustained capacity comes from its workload deployment card, not connectivity overrides"));
+    }
     if cli.iterations == 0 {
         return Err(anyhow!("--iterations must be greater than zero"));
     }
@@ -4560,6 +4566,7 @@ fn run_row_attempt(
             .map(|paths| paths.streamer.as_path()),
         &lola_run_namespace,
     )?;
+    apply_iceoryx2_capacity_config(&config_path, cli.iceoryx2_capacity.as_ref())?;
     timings.config_us = duration_us(config_started.elapsed());
 
     bridge_control::verify(
@@ -5769,7 +5776,78 @@ fn role_command(
             lola_run_namespace,
         )?;
     }
+    if profile.physical == PhysicalTransport::Iceoryx2 {
+        if let Some(capacity) = &cli.iceoryx2_capacity {
+            for (flag, value) in [
+                (
+                    "--iceoryx2-publisher-initial-max-slice-len",
+                    capacity
+                        .publisher_initial_max_slice_len
+                        .map(|v| v.to_string()),
+                ),
+                (
+                    "--iceoryx2-publisher-allocation-strategy",
+                    capacity
+                        .publisher_allocation_strategy
+                        .map(|v| v.to_string()),
+                ),
+                (
+                    "--iceoryx2-max-subscribers",
+                    capacity.max_subscribers.map(|v| v.to_string()),
+                ),
+                (
+                    "--iceoryx2-publisher-max-loaned-samples",
+                    capacity.publisher_max_loaned_samples.map(|v| v.to_string()),
+                ),
+            ] {
+                if let Some(value) = value {
+                    args.extend([flag.into(), value]);
+                }
+            }
+        }
+    }
     Ok(RoleCommand { binary, args })
+}
+
+fn parse_iceoryx2_capacity(
+    value: &str,
+) -> Result<configurable_streamer_wire_support::capacity::Iceoryx2Capacity, String> {
+    if value.len() > 4096 {
+        return Err("capacity JSON exceeds 4096 bytes".into());
+    }
+    let capacity: configurable_streamer_wire_support::capacity::Iceoryx2Capacity =
+        serde_json::from_str(value).map_err(|error| error.to_string())?;
+    capacity.validate().map_err(|error| error.to_string())?;
+    Ok(capacity)
+}
+
+fn apply_iceoryx2_capacity_config(
+    path: &Path,
+    capacity: Option<&configurable_streamer_wire_support::capacity::Iceoryx2Capacity>,
+) -> Result<()> {
+    let Some(capacity) = capacity else {
+        return Ok(());
+    };
+    let mut document: serde_json::Value = serde_json::from_slice(&fs::read(path)?)?;
+    if let Some(endpoints) = document
+        .pointer_mut("/transports/iceoryx2/endpoints")
+        .and_then(|value| value.as_array_mut())
+    {
+        let fields = serde_json::to_value(capacity)?;
+        for endpoint in endpoints {
+            let namespace = endpoint
+                .get_mut("iceoryx2_namespace")
+                .and_then(|value| value.as_object_mut())
+                .ok_or_else(|| anyhow!("iceoryx2 endpoint lacks generated namespace"))?;
+            for (key, value) in fields.as_object().expect("capacity object") {
+                if !value.is_null() {
+                    namespace.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        atomic_write_json(path, &document)?;
+    }
+    Ok(())
 }
 
 fn dds_args(
@@ -6945,13 +7023,26 @@ fn spawn_process(
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     configure_matrix_environment(&mut command, env);
-    RunningProcess::spawn(&mut command, name, log_path).with_context(|| {
+    let launched = RunningProcess::spawn(&mut command, name, log_path).with_context(|| {
         format!(
             "unable to spawn {name}: {} {}",
             executable.display(),
             args.join(" ")
         )
-    })
+    })?;
+    atomic_write_json(
+        &artifact_dir.join(format!("{name}.launch.json")),
+        &json!({
+            "executable": executable,
+            "args": args,
+            "working_directory": workdir,
+            "environment": env,
+            "wrapper_executable": command.get_program().to_string_lossy(),
+            "wrapper_args": command.get_args().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>(),
+            "process_group": launched.process_group(),
+        }),
+    )?;
+    Ok(launched)
 }
 
 fn start_namespace_holder(
@@ -10828,6 +10919,37 @@ mod tests {
             .expect("scheduler test thread should not panic")
             .expect("synthetic scheduler should complete");
         assert_eq!(completed.len(), 4);
+    }
+
+    #[test]
+    fn capacity_override_is_bound_to_run_identity_and_retains_endpoint_namespace() {
+        let plain = Cli::parse_from(["test"]);
+        let configured = Cli::parse_from([
+            "test",
+            "--iceoryx2-capacity",
+            r#"{"max_subscribers":2,"publisher_max_loaned_samples":1,"publisher_initial_max_slice_len":65536,"publisher_allocation_strategy":"static"}"#,
+        ]);
+        assert_ne!(
+            normalized_options_sha256(&plain).unwrap(),
+            normalized_options_sha256(&configured).unwrap()
+        );
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config.json");
+        let document = json!({"transports":{"iceoryx2":{"endpoints":[{
+            "iceoryx2_namespace":{"root_path":"/tmp/bus", "prefix":"isolated_"}
+        }]}}});
+        atomic_write_json(&path, &document).unwrap();
+        apply_iceoryx2_capacity_config(&path, configured.iceoryx2_capacity.as_ref()).unwrap();
+        let actual: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let ns = &actual["transports"]["iceoryx2"]["endpoints"][0]["iceoryx2_namespace"];
+        assert_eq!(ns["root_path"], "/tmp/bus");
+        assert_eq!(ns["prefix"], "isolated_");
+        assert_eq!(ns["max_subscribers"], 2);
+        assert_eq!(ns["publisher_max_loaned_samples"], 1);
+        assert_eq!(ns["publisher_initial_max_slice_len"], 65536);
+        assert_eq!(ns["publisher_allocation_strategy"], "static");
+        assert!(parse_iceoryx2_capacity(r#"{"max_subscribers":0}"#).is_err());
+        assert!(parse_iceoryx2_capacity(r#"{"misspelled_limit":1}"#).is_err());
     }
 
     #[test]
