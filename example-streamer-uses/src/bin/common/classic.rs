@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Classic message flow over endpoints constructed by each role entrypoint.
-#![allow(dead_code)]
 
 use chrono::{Local, Timelike};
 use std::{sync::Arc, time::Duration};
@@ -9,7 +8,7 @@ use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
 
 /// Produce one message per iteration after the configured delay. None is an
 /// unbounded run; Some(0) sends nothing. Role frontends select their count policy.
-pub(crate) async fn send(
+pub async fn send(
     transport: &dyn UTransport,
     count: Option<u64>,
     interval: Duration,
@@ -28,7 +27,7 @@ pub(crate) async fn send(
 }
 
 /// Admit the listener before announcing readiness and wait for process shutdown.
-pub(crate) async fn listen(
+pub async fn listen(
     transport: &dyn UTransport,
     source: &UUri,
     sink: Option<&UUri>,
@@ -40,7 +39,7 @@ pub(crate) async fn listen(
 }
 
 /// Existing classic timer example payload, sampled when its send iteration runs.
-pub(crate) fn timer_payload() -> Vec<u8> {
+pub fn timer_payload() -> Vec<u8> {
     use hello_world_protos::{hello_world_topics::Timer, timeofday::TimeOfDay};
     let now = Local::now();
     super::protobuf_payload(&Timer {

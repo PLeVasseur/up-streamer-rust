@@ -1,31 +1,28 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-#![allow(dead_code)]
-
 use std::mem::{self, MaybeUninit};
 
 use up_rust::{EncodePayload, StablePayloadInit, UCode, UStatus};
 use up_wire_xcdrv2::{XcdrV2Payload, XcdrV2Type};
 
 #[cfg(feature = "payload-contract-large-fixtures")]
-pub(crate) use super::sensor_context::NativeContext;
-pub(crate) use configurable_streamer_wire_support::native_profile::{
+pub use super::sensor_context::NativeContext;
+pub use configurable_streamer_wire_support::native_profile::{
     SelectedWireNativePayload, PAYLOAD_CAPACITY as EXAMPLE_PAYLOAD_CAPACITY,
 };
 #[cfg(not(feature = "payload-contract-large-fixtures"))]
-pub(crate) type NativeContext =
-    configurable_streamer_wire_support::native_profile::NativePayloadContext<
-        SelectedWireNativePayload,
-    >;
+pub type NativeContext = configurable_streamer_wire_support::native_profile::NativePayloadContext<
+    SelectedWireNativePayload,
+>;
 
-pub(crate) type NativeLoanVerifier<Rx> = fn(&NativeContext, &Rx) -> Result<(), UStatus>;
-pub(crate) use configurable_streamer_wire_support::payload_bytes::copy_payload_bytes;
+pub type NativeLoanVerifier<Rx> = fn(&NativeContext, &Rx) -> Result<(), UStatus>;
+pub use configurable_streamer_wire_support::payload_bytes::copy_payload_bytes;
 
 /// Validate the worker's native representation using its configured adapter.
 /// Serialized routes remain opaque. No payload bytes or expected type fabricate
 /// the carried encoding/token pair.
-pub(crate) fn verify_received_frame(
+pub fn verify_received_frame(
     transport: &impl up_rust::UHasWire,
     frame: &impl up_rust::UFrameView,
 ) -> Result<(), UStatus> {
@@ -42,18 +39,14 @@ pub(crate) fn verify_received_frame(
 
 #[derive(Clone, Debug, PartialEq, XcdrV2Type)]
 #[xcdr_v2(type_name = "org.eclipse.uprotocol.examples.SelectedWireXcdrV2PayloadV1")]
-pub(crate) struct SelectedWireXcdrV2Payload {
-    pub(crate) sequence: u32,
-    pub(crate) source_hash: u32,
-    pub(crate) values: [i32; 4],
-    pub(crate) checksum: u32,
+pub struct SelectedWireXcdrV2Payload {
+    pub sequence: u32,
+    pub source_hash: u32,
+    pub values: [i32; 4],
+    pub checksum: u32,
 }
 
-pub(crate) fn native_payload_bytes(
-    magic: u32,
-    sequence: u32,
-    payload: &str,
-) -> Result<Vec<u8>, UStatus> {
+pub fn native_payload_bytes(magic: u32, sequence: u32, payload: &str) -> Result<Vec<u8>, UStatus> {
     let payload = payload.as_bytes();
     if payload.len() > EXAMPLE_PAYLOAD_CAPACITY {
         return Err(invalid_config(format!(
@@ -78,7 +71,7 @@ pub(crate) fn native_payload_bytes(
     Ok(initialized.as_bytes().to_vec())
 }
 
-pub(crate) fn xcdrv2_payload_bytes(
+pub fn xcdrv2_payload_bytes(
     sequence: u32,
     source: String,
     payload: &str,
@@ -94,7 +87,7 @@ pub(crate) fn xcdrv2_payload_bytes(
     .map_err(|error| invalid_config(format!("failed to encode XCDRv2 payload: {error}")))
 }
 
-pub(crate) fn arrow_payload_bytes(sequence: u32, payload: &str) -> Result<Vec<u8>, UStatus> {
+pub fn arrow_payload_bytes(sequence: u32, payload: &str) -> Result<Vec<u8>, UStatus> {
     let seed = u64::from(sequence) << 32 | u64::from(payload_checksum(payload.as_bytes()));
     <up_wire_arrow::ArrowWire as EncodePayload<up_wire_arrow::TelemetryTableV1>>::encode_payload_owned(
         &up_wire_arrow::TelemetryTableV1::fixture(payload.len().max(1), seed),
@@ -103,7 +96,7 @@ pub(crate) fn arrow_payload_bytes(sequence: u32, payload: &str) -> Result<Vec<u8
     .map_err(|error| invalid_config(format!("failed to encode Arrow payload: {error}")))
 }
 
-pub(crate) fn omgidl_payload_bytes(sequence: u32, payload: &str) -> Result<Vec<u8>, UStatus> {
+pub fn omgidl_payload_bytes(sequence: u32, payload: &str) -> Result<Vec<u8>, UStatus> {
     let seed = u64::from(sequence) << 32 | u64::from(payload_checksum(payload.as_bytes()));
     <up_wire_omgidl::OmgIdlWire as EncodePayload<
         up_wire_omgidl::VehicleStatusV1,
@@ -112,11 +105,11 @@ pub(crate) fn omgidl_payload_bytes(sequence: u32, payload: &str) -> Result<Vec<u
     .map_err(|error| invalid_config(format!("failed to encode OMG IDL payload: {error}")))
 }
 
-pub(crate) fn native_payload_alignment() -> usize {
+pub fn native_payload_alignment() -> usize {
     mem::align_of::<SelectedWireNativePayload>()
 }
 
-pub(crate) fn payload_checksum(payload: &[u8]) -> u32 {
+pub fn payload_checksum(payload: &[u8]) -> u32 {
     payload.iter().fold(0x811c_9dc5, |hash, byte| {
         (hash ^ u32::from(*byte)).wrapping_mul(0x0100_0193)
     })

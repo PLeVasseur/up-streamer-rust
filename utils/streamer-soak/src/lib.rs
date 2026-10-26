@@ -131,6 +131,23 @@ impl Reconciler {
         })
     }
 
+    /// Reconcile exactly five protobuf publications through a SOME/IP sink.
+    /// SOME/IP reconstructs UUID and non-carried attributes. Raw observations
+    /// remain intact; only sink identity matching uses the unique payload digest,
+    /// source, encoding, length and publication kind. FIFO remains mandatory.
+    pub fn someip_finite(options: &ReplayOptions) -> Result<Self> {
+        ensure!(
+            options.role == Role::PublisherSubscriber
+                && options.require_fifo
+                && options.queue_capacity == 5
+                && options.pending_limit == 4096,
+            "SOME/IP reconstruction policy requires the exact finite profile"
+        );
+        let mut reconciler = Self::new(options)?;
+        reconciler.oracle.enable_someip_finite();
+        Ok(reconciler)
+    }
+
     /// Consumes one record, rejecting foreign generations, corruption or invalid accounting.
     pub fn observe(&mut self, record: JournalRecord) -> Result<()> {
         ensure!(
@@ -161,6 +178,18 @@ impl Reconciler {
 /// replay does not trust a journal to choose its own generation or acceptance limits.
 pub fn replay(directory: &Path, options: &ReplayOptions) -> Result<serde_json::Value> {
     let mut reconciler = Reconciler::new(options)?;
+    journal::replay(directory, &options.context()?, |record| {
+        reconciler.observe(JournalRecord(record))
+    })?;
+    reconciler.finish()
+}
+
+/// Replay the explicitly selected five-publication SOME/IP observable contract.
+pub fn replay_someip_finite(
+    directory: &Path,
+    options: &ReplayOptions,
+) -> Result<serde_json::Value> {
+    let mut reconciler = Reconciler::someip_finite(options)?;
     journal::replay(directory, &options.context()?, |record| {
         reconciler.observe(JournalRecord(record))
     })?;

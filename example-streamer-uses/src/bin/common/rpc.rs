@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Selected-wire RPC exchange flow with explicitly configured receive/send policy.
-#![allow(dead_code)]
 
 use super::{flow, payloads::NativeContext};
 use configurable_streamer_wire_support::prepared::{PreparedEndpoint, PreparedSession};
@@ -9,7 +8,7 @@ use std::{sync::Arc, time::Duration};
 use up_rust::{UCode, UFrameMetadata, UFrameView, UOwnedTransport, UStatus, UUri};
 
 #[derive(Clone)]
-pub(crate) struct ClientOptions {
+pub struct ClientOptions {
     pub response_source: UUri,
     pub response_sink: UUri,
     pub timeout_ms: u64,
@@ -30,7 +29,7 @@ impl ClientOptions {
     }
 }
 
-pub(crate) async fn owned(
+pub async fn owned(
     transport: &Arc<dyn UOwnedTransport>,
     options: &ClientOptions,
     request: impl Fn(u32) -> Result<(UFrameMetadata, Vec<u8>), UStatus>,
@@ -85,7 +84,7 @@ pub(crate) async fn owned(
     cleanup
 }
 
-pub(crate) async fn native<T>(
+pub async fn native<T>(
     transport: &Arc<PreparedSession<T>>,
     options: &ClientOptions,
     request: impl Fn(u32) -> Result<(UFrameMetadata, Vec<u8>), UStatus>,

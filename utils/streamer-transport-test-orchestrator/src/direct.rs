@@ -158,6 +158,15 @@ fn execute(
             .1 = prefix;
     }
     let directory = &prepared.row_dir;
+    let source_start_file = directory.join("source-start");
+    anyhow::ensure!(
+        !source_start_file.exists(),
+        "source start marker must be fresh"
+    );
+    prepared.active_env.push((
+        "UPROTOCOL_SOURCE_START_FILE".into(),
+        source_start_file.display().to_string(),
+    ));
     let zenoh = ZenohConfigPaths::new(directory);
     write_zenoh_router_config(&zenoh.sink_client, ZENOH_SINK_PORT)?;
     write_zenoh_client_config(&zenoh.source_client, ZENOH_SINK_PORT)?;
@@ -278,6 +287,14 @@ fn execute(
             Some(&namespace),
         )?;
         let started = Instant::now();
+        wait_for_marker(
+            &mut sender,
+            READY_SOURCE_WAITING,
+            Duration::from_secs(cli.scenario_timeout_secs),
+            cancellation,
+        )?;
+        allocation::snapshot(directory, "ready-before-first-send", 2)?;
+        atomic_write(&source_start_file, b"START\n")?;
         wait_for_exit(
             &mut sender,
             Duration::from_secs(cli.scenario_timeout_secs),
@@ -299,6 +316,7 @@ fn execute(
             )?;
             assert_success(&mut receiver)?;
         }
+        allocation::snapshot(directory, "completed-direct-peers", 2)?;
         terminate(&mut sender)?;
         terminate(&mut receiver)?;
         flow_oracle::verify_direct(row, directory, bundle)?;

@@ -12,7 +12,7 @@
  ********************************************************************************/
 
 //! Receive directed uProtocol notifications through a configured MQTT broker connection.
-mod common;
+use example_streamer_uses::common;
 
 use clap::Parser;
 use common::cli;
@@ -20,7 +20,7 @@ use common::PublishReceiver;
 use std::sync::Arc;
 use tracing::info;
 use up_rust::{UListener, UStatus, UTransport};
-use up_transport_mqtt5::{Mqtt5Transport, Mqtt5TransportOptions, MqttClientOptions};
+use up_transport_mqtt5::{Mqtt5TransportOptions, MqttClientOptions};
 
 const DEFAULT_UAUTHORITY: &str = "authority-b";
 const DEFAULT_UENTITY: &str = "0x5BA0";
@@ -88,8 +88,7 @@ async fn main() -> Result<(), UStatus> {
         ..Default::default()
     };
     let mqtt5_transport =
-        Mqtt5Transport::new(mqtt_transport_options, local_uuri.authority_name()).await?;
-    mqtt5_transport.connect().await?;
+        common::backend::mqtt(mqtt_transport_options, local_uuri.authority_name()).await?;
     let notifyee: Arc<dyn UTransport> = Arc::new(mqtt5_transport);
 
     let listener: Arc<dyn UListener> =

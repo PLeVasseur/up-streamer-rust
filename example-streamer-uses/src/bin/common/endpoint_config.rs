@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
-//! Reusable validation of physical configuration; role files construct the bindings.
-#![allow(dead_code)]
+//! Reusable option validation and binding-owned prepared-core setup for role endpoints.
 
 #[cfg(any(
     feature = "iceoryx2-zero-copy",
@@ -13,7 +12,7 @@ use super::flow::invalid;
 use up_rust::UStatus;
 
 #[cfg(feature = "iceoryx2-zero-copy")]
-pub(crate) fn prepared_iceoryx2(
+pub fn prepared_iceoryx2(
     physical: up_transport_iceoryx2_rust::Iceoryx2PubSubConfig,
     config: &super::flow::FlowConfig,
     capacities: &configurable_streamer_wire_support::capacity::Iceoryx2Capacity,
@@ -25,7 +24,7 @@ pub(crate) fn prepared_iceoryx2(
 }
 
 #[cfg(feature = "zenoh-transport")]
-pub(crate) async fn prepared_zenoh(
+pub async fn prepared_zenoh(
     physical: up_transport_zenoh::zenoh_config::Config,
     config: &super::flow::FlowConfig,
     segment_size: Option<usize>,
@@ -45,7 +44,7 @@ pub(crate) async fn prepared_zenoh(
 }
 
 #[cfg(feature = "lola-transport")]
-pub(crate) fn prepared_lola(
+pub fn prepared_lola(
     primary: &up_transport_lola_rust::LolaTransportConfig,
     response: Option<&up_transport_lola_rust::LolaTransportConfig>,
     config: &super::flow::FlowConfig,
@@ -61,7 +60,7 @@ pub(crate) fn prepared_lola(
 }
 
 /// Exact role addresses and maximum logical extents chosen before native setup.
-pub(crate) fn prepared_address(
+pub fn prepared_address(
     source: &up_rust::UUri,
     sink: Option<&up_rust::UUri>,
     maximum: usize,
@@ -81,7 +80,7 @@ pub(crate) fn prepared_address(
 }
 
 /// Exact role addresses and maximum logical extents chosen before native setup.
-pub(crate) fn prepared_catalog(
+pub fn prepared_catalog(
     config: &super::flow::FlowConfig,
 ) -> Result<Vec<configurable_streamer_wire_support::prepared::PreparedAddress>, UStatus> {
     use super::flow::FlowRole;
@@ -152,7 +151,7 @@ pub(crate) fn prepared_catalog(
 }
 
 #[cfg(any(feature = "lola-transport", feature = "lola-owned-frame"))]
-pub(crate) struct LolaOptions {
+pub struct LolaOptions {
     pub mw_com_config_file: Option<String>,
     pub response_mw_com_config_file: Option<String>,
     pub instance_specifier: String,
@@ -169,7 +168,7 @@ pub(crate) struct LolaOptions {
 
 #[cfg(any(feature = "lola-transport", feature = "lola-owned-frame"))]
 impl LolaOptions {
-    pub(crate) fn configuration(
+    pub fn configuration(
         &self,
         authority: &str,
     ) -> Result<
@@ -245,7 +244,7 @@ impl LolaOptions {
 }
 
 #[cfg(any(feature = "iceoryx2-zero-copy", feature = "iceoryx2-owned-frame"))]
-pub(crate) fn iceoryx2(
+pub fn iceoryx2(
     receive_capacity: Option<usize>,
     min_subscribers: usize,
     capacities: &configurable_streamer_wire_support::capacity::Iceoryx2Capacity,

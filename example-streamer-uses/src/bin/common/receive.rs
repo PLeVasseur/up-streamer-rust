@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Passive role readiness means registration has completed, not that polling will start.
-#![allow(dead_code)]
 
 use super::payloads::NativeContext;
 use async_trait::async_trait;
@@ -56,11 +55,11 @@ impl Drop for OwnedWait<'_> {
 
 struct OwnedChannel(Arc<OwnedInbox>);
 
-pub(crate) fn listener_ready() {
+pub fn listener_ready() {
     println!("READY listener_registered");
 }
 
-pub(crate) fn zenoh_listener_ready() {
+pub fn zenoh_listener_ready() {
     println!("READY zenoh_listener_registered");
     listener_ready();
 }
@@ -90,14 +89,14 @@ impl UOwnedListener for OwnedChannel {
 /// One registered owned listener, one result slot and one setup-owned lifecycle task.
 /// Dropping the reception closes admission immediately; the task finishes native
 /// unregister even when the caller cancels registration, receive or explicit stop.
-pub(crate) struct OwnedReception {
+pub struct OwnedReception {
     inbox: Arc<OwnedInbox>,
     close: Option<oneshot::Sender<()>>,
     task: Option<tokio::task::JoinHandle<Result<(), UStatus>>>,
 }
 
 impl OwnedReception {
-    pub(crate) fn expect_response(&mut self, id: &UUID) {
+    pub fn expect_response(&mut self, id: &UUID) {
         let previous = {
             let mut state = self.inbox.state.lock().unwrap();
             state.expected = Some(Expected::Response(id.clone()));
@@ -106,7 +105,7 @@ impl OwnedReception {
         drop(previous);
     }
 
-    pub(crate) async fn receive(&mut self, timeout_ms: u64) -> Result<UOwnedFrame, UStatus> {
+    pub async fn receive(&mut self, timeout_ms: u64) -> Result<UOwnedFrame, UStatus> {
         let deadline = tokio::time::Instant::now()
             .checked_add(Duration::from_millis(timeout_ms))
             .ok_or_else(|| {
@@ -115,7 +114,7 @@ impl OwnedReception {
         self.receive_until(deadline).await
     }
 
-    pub(crate) async fn receive_until(
+    pub async fn receive_until(
         &mut self,
         deadline: tokio::time::Instant,
     ) -> Result<UOwnedFrame, UStatus> {
@@ -161,7 +160,7 @@ impl OwnedReception {
         }
     }
 
-    pub(crate) async fn stop(mut self) -> Result<(), UStatus> {
+    pub async fn stop(mut self) -> Result<(), UStatus> {
         self.close();
         if let Some(task) = self.task.take() {
             task.await.map_err(|error| {
@@ -184,7 +183,7 @@ impl Drop for OwnedReception {
     }
 }
 
-pub(crate) async fn register_owned(
+pub async fn register_owned(
     transport: &Arc<dyn UOwnedTransport>,
     source: &UUri,
     sink: Option<&UUri>,
@@ -232,9 +231,9 @@ pub(crate) async fn register_owned(
     Ok(reception)
 }
 
-pub(crate) type NativeFrame<T> =
+pub type NativeFrame<T> =
     PreparedReceived<<<T as PreparedEndpoint>::Core as PreparedTransportCore>::Rx>;
-pub(crate) struct NativeReception<T: PreparedEndpoint> {
+pub struct NativeReception<T: PreparedEndpoint> {
     session: Arc<PreparedSession<T>>,
     inbox: Arc<up_rust::RegistrationInbox<<T::Core as PreparedTransportCore>::Rx>>,
     subscription: Option<<T::Core as PreparedTransportCore>::Subscription>,
@@ -242,7 +241,7 @@ pub(crate) struct NativeReception<T: PreparedEndpoint> {
     sink: Option<UUri>,
 }
 impl<T: PreparedEndpoint> NativeReception<T> {
-    pub(crate) async fn receive(&mut self, timeout_ms: u64) -> Result<NativeFrame<T>, UStatus> {
+    pub async fn receive(&mut self, timeout_ms: u64) -> Result<NativeFrame<T>, UStatus> {
         let deadline = tokio::time::Instant::now()
             .checked_add(Duration::from_millis(timeout_ms))
             .ok_or_else(|| {
@@ -250,7 +249,7 @@ impl<T: PreparedEndpoint> NativeReception<T> {
             })?;
         self.receive_until(deadline).await
     }
-    pub(crate) async fn receive_until(
+    pub async fn receive_until(
         &mut self,
         deadline: tokio::time::Instant,
     ) -> Result<NativeFrame<T>, UStatus> {
@@ -294,7 +293,7 @@ impl<T: PreparedEndpoint> NativeReception<T> {
             return Ok(frame);
         }
     }
-    pub(crate) async fn stop(mut self) -> Result<(), UStatus> {
+    pub async fn stop(mut self) -> Result<(), UStatus> {
         self.inbox.close();
         if let Some(subscription) = &mut self.subscription {
             self.session
@@ -314,7 +313,7 @@ impl<T: PreparedEndpoint> Drop for NativeReception<T> {
         }
     }
 }
-pub(crate) async fn register_native<T: PreparedEndpoint>(
+pub async fn register_native<T: PreparedEndpoint>(
     session: &Arc<PreparedSession<T>>,
     source: &UUri,
     sink: Option<&UUri>,
@@ -342,7 +341,7 @@ pub(crate) async fn register_native<T: PreparedEndpoint>(
     })
 }
 
-pub(crate) async fn owned(
+pub async fn owned(
     transport: &Arc<dyn UOwnedTransport>,
     source: &UUri,
     sink: Option<&UUri>,
@@ -357,7 +356,7 @@ pub(crate) async fn owned(
 
 /// Receive through a registered listener, announcing endpoint-specific readiness
 /// only after admission succeeds and removing the listener on receipt or timeout.
-pub(crate) async fn owned_with_ready(
+pub async fn owned_with_ready(
     transport: &Arc<dyn UOwnedTransport>,
     source: &UUri,
     sink: Option<&UUri>,
@@ -377,7 +376,7 @@ pub(crate) async fn owned_with_ready(
     Ok(frame)
 }
 
-pub(crate) async fn owned_payload(
+pub async fn owned_payload(
     transport: &Arc<dyn UOwnedTransport>,
     source: &UUri,
     sink: Option<&UUri>,
@@ -389,7 +388,7 @@ pub(crate) async fn owned_payload(
         .map(|frame| frame.payload_bytes().to_vec())
 }
 
-pub(crate) async fn zero_copy<T>(
+pub async fn zero_copy<T>(
     transport: &Arc<PreparedSession<T>>,
     source: &UUri,
     sink: Option<&UUri>,
@@ -406,7 +405,7 @@ where
 
 /// Native counterpart to [`owned_with_ready`], retaining the received lease
 /// through quiescent unregister and validating its representation before return.
-pub(crate) async fn zero_copy_with_ready<T>(
+pub async fn zero_copy_with_ready<T>(
     transport: &Arc<PreparedSession<T>>,
     source: &UUri,
     sink: Option<&UUri>,
@@ -426,7 +425,7 @@ where
     Ok(frame)
 }
 
-pub(crate) async fn zero_copy_payload<T>(
+pub async fn zero_copy_payload<T>(
     transport: &Arc<PreparedSession<T>>,
     source: &UUri,
     sink: Option<&UUri>,

@@ -12,7 +12,7 @@
  ********************************************************************************/
 
 //! Send classic uProtocol RPC requests using a configured native SOME/IP application.
-mod common;
+use example_streamer_uses::common;
 
 use clap::Parser;
 use common::cli;
@@ -23,7 +23,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, trace, warn};
 use up_rust::{PayloadEncoding, UCode, UMessageBuilder, UStatus, UTransport};
-use up_transport_vsomeip::{TransportConfig, UPTransportVsomeip};
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
 const DEFAULT_UENTITY: &str = "0x5678";
@@ -132,12 +131,11 @@ async fn main() -> Result<(), UStatus> {
     // There will be a single vsomeip_transport, as there is a connection into device and a streamer
     // TODO: Add error handling if we fail to create a UPTransportVsomeip
     let client: Arc<dyn UTransport> = Arc::new(
-        UPTransportVsomeip::new_with_config_and_transport_config(
+        common::backend::someip(
             client_uuri,
             &args.remote_authority,
             &vsomeip_config,
-            None,
-            TransportConfig::new(payload_encoding),
+            payload_encoding,
         )
         .unwrap(),
     );

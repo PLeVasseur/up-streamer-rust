@@ -2,17 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 //! DDS notifyee role binary.
 
-#[path = "common/dds.rs"]
-mod dds;
+use example_streamer_uses::common::dds;
 
 use clap::Parser;
 use dds::{Encoding, NativeContext, ReliabilityArg, Role, RouteFamily};
-use std::sync::Arc;
-use up_rust::{UStatus, UWithNativePrefixWire};
-use up_transport_dds::{
-    encoded_owned::DdsEncodedOwnedCore, owned::UPTransportDdsOwned, DdsConfig, Reliability,
-    UPTransportDds,
-};
+use up_rust::UStatus;
 
 #[derive(Debug, Parser)]
 #[command(version, about = "Dust DDS uProtocol Streamer role process")]
@@ -78,58 +72,22 @@ async fn main() -> Result<(), UStatus> {
     if args.encoding == Encoding::Native {
         args.native.identity()?;
     }
-    let mut config = DdsConfig::new(args.domain_id);
-    if let Some(origin_id) = &args.origin_id {
-        config.origin_id.clone_from(origin_id);
-    }
-    config.qos.reliability = match args.reliability {
-        ReliabilityArg::Reliable => Reliability::Reliable,
-        ReliabilityArg::BestEffort => Reliability::BestEffort,
+    let inputs = dds::DdsArgs {
+        native: args.native,
+        domain_id: args.domain_id,
+        origin_id: args.origin_id,
+        reliability: args.reliability,
+        history_depth: args.history_depth,
+        route_family: args.route_family,
+        encoding: args.encoding,
+        local_authority: args.local_authority,
+        peer_authority: args.peer_authority,
+        topic_resource_id: args.topic_resource_id,
+        method_resource_id: args.method_resource_id,
+        payload: args.payload,
+        timeout_ms: args.timeout_ms,
+        #[cfg(feature = "sustained-workload")]
+        workload_plan: args.workload_plan,
     };
-    config.qos.history_depth = args.history_depth;
-    let runtime = tokio::runtime::Handle::current();
-    match args.route_family {
-        RouteFamily::Classic => {
-            let transport = Arc::new(UPTransportDds::with_config(config, runtime)?);
-            dds::run_classic(role, &args, transport).await
-        }
-        RouteFamily::OwnedFrame => {
-            let transport = Arc::new(UPTransportDdsOwned::with_config(config, runtime)?);
-            dds::run_owned(role, &args, transport).await
-        }
-        RouteFamily::EncodedOwned => {
-            let core = DdsEncodedOwnedCore::with_config(config, runtime)?;
-            match args.encoding {
-                Encoding::Native => {
-                    let profile = args.native.agreement()?.clone();
-                    dds::run_encoded_owned(role, &args, core, |core| {
-                        core.into_stable_container_transport(profile)
-                    })
-                    .await
-                }
-                Encoding::Protobuf => {
-                    dds::run_encoded_owned(role, &args, core, |core| core.into_protobuf_transport())
-                        .await
-                }
-                Encoding::Xcdrv2 => {
-                    dds::run_encoded_owned(role, &args, core, |core| {
-                        core.into_native_prefix_wire_transport(up_wire_xcdrv2::XcdrV2Wire)
-                    })
-                    .await
-                }
-                Encoding::Arrow => {
-                    dds::run_encoded_owned(role, &args, core, |core| {
-                        core.into_native_prefix_wire_transport(up_wire_arrow::ArrowWire)
-                    })
-                    .await
-                }
-                Encoding::OmgIdl => {
-                    dds::run_encoded_owned(role, &args, core, |core| {
-                        core.into_native_prefix_wire_transport(up_wire_omgidl::OmgIdlWire)
-                    })
-                    .await
-                }
-            }
-        }
-    }
+    dds::run(role, &inputs).await
 }

@@ -608,3 +608,264 @@ async fn physical_islands_require_bridge_and_do_not_reflect(
     }
     recipient.detach(&mut receiving).unwrap();
 }
+#[path = "support/carried_allocation_observer.rs"]
+mod carried_allocation_observer;
+
+#[repr(C)]
+#[derive(up_rust::StablePayload)]
+#[stable_payload(type_name = "uprotocol.test.CarriedExpectedSingleType")]
+struct CarriedExpected {
+    first: u32,
+    second: u32,
+}
+#[repr(C)]
+#[derive(up_rust::StablePayload)]
+#[stable_payload(type_name = "uprotocol.test.CarriedForeignSingleType")]
+struct CarriedForeign {
+    first: u32,
+    second: u32,
+}
+
+async fn carried_observation_barrier(signal: &str, release: &str) {
+    if let Some(path) = std::env::var_os(signal) {
+        let release = std::env::var_os(release).expect("recorded observation release required");
+        assert!(!std::path::Path::new(&path).exists());
+        std::fs::write(path, b"READY\n").unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !std::path::Path::new(&release).is_file() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("native observation controller release deadline");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn transported_equal_size_foreign_token_id_zero_is_rejected_before_typed_payload() {
+    use up_rust::{
+        AdmissionError, NativeProfile, NativeProfileAgreement, NativeProfileMode, NativeSingleType,
+        RxAdmission, StableContainerWire, StablePayload,
+    };
+    assert_eq!(
+        std::mem::size_of::<CarriedExpected>(),
+        std::mem::size_of::<CarriedForeign>()
+    );
+    assert_eq!(
+        std::mem::align_of::<CarriedExpected>(),
+        std::mem::align_of::<CarriedForeign>()
+    );
+    let expected = CarriedExpected::native_representation();
+    let foreign = CarriedForeign::native_representation();
+    assert_ne!(expected.token(), foreign.token());
+    let profile = Arc::new(
+        NativeProfile::new(
+            "carried-control",
+            1,
+            NativeProfileMode::SingleType(NativeSingleType::new(expected.clone())),
+        )
+        .unwrap(),
+    );
+    let agreement = NativeProfileAgreement::new(profile.clone(), &profile).unwrap();
+    let typed =
+        RxAdmission::<CarriedExpected>::new(agreement.clone(), HeaderLimits::default()).unwrap();
+    let source = UUri::try_from_parts("authority-a", 0x5BA0, 1, 0x8001).unwrap();
+    let subscriber = UUri::try_from_parts("authority-b", 0x5678, 1, 0).unwrap();
+    let limits = RouteLimits {
+        max_metadata_len: 3072,
+        max_payload_len: 8,
+        payload_alignment: 4,
+    };
+    let root = std::env::var("UP_ICEORYX2_TEST_ROOT").expect("recorded native namespace required");
+    std::fs::create_dir_all(&root).unwrap();
+    let mut config = Iceoryx2PubSubConfig::static_allocation(4096)
+        .with_namespace(&root, &format!("carried{}_", std::process::id()))
+        .unwrap();
+    let native = &mut config
+        .iceoryx2_config
+        .as_mut()
+        .unwrap()
+        .defaults
+        .publish_subscribe;
+    native.max_subscribers = 2;
+    native.subscriber_max_buffer_size = 2;
+    native.subscriber_max_borrowed_samples = 2;
+    native.publisher_history_size = 0;
+    native.publisher_max_loaned_samples = 1;
+    native.enable_safe_overflow = false;
+    let ingress = Arc::new(
+        Iceoryx2PreparedCore::new(
+            config,
+            &[Iceoryx2RouteReservation {
+                source: source.clone(),
+                sink: None,
+                limits,
+            }],
+            8,
+            2,
+        )
+        .unwrap(),
+    );
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
+    drop(socket);
+    let catalog = [ZenohRouteReservation {
+        source: source.clone(),
+        sink: None,
+        limits,
+        transmit: true,
+    }];
+    let observer = carried_allocation_observer::configured().unwrap();
+    let setup = || ZenohPreparedConfig {
+        shm_segment_size: 1024 * 1024,
+        route_capacity: 8,
+        registration_capacity: 2,
+        allocation_observer: observer,
+    };
+    let output = Arc::new(
+        ZenohPreparedCore::new(
+            native_config(&endpoint, true),
+            "//bridge/4210/1/0",
+            &catalog,
+            setup(),
+        )
+        .await
+        .unwrap(),
+    );
+    let receiver = Arc::new(
+        ZenohPreparedCore::new(
+            native_config(&endpoint, false),
+            "//receiver/4210/1/0",
+            &[ZenohRouteReservation {
+                transmit: false,
+                ..catalog[0].clone()
+            }],
+            setup(),
+        )
+        .await
+        .unwrap(),
+    );
+    let inbox = Arc::new(
+        RegistrationInbox::<ZenohPreparedRx>::new(RegistrationConfig {
+            capacity: 2,
+            overflow: up_rust::OverflowPolicy::Block {
+                deadline: Duration::from_secs(5),
+            },
+        })
+        .unwrap(),
+    );
+    let mut registration = receiver.attach(&source, None, inbox.clone()).await.unwrap();
+    output
+        .wait_for_matching(&source, None, Duration::from_secs(5))
+        .await
+        .unwrap();
+    let sender = OpaqueTemplate::for_wire::<StableContainerWire>()
+        .unwrap()
+        .route(
+            ingress.clone(),
+            source.clone(),
+            None,
+            limits,
+            RouteConfig::default(),
+        )
+        .unwrap();
+    let left = ZeroCopyFrameEndpoint::new(
+        "native-in",
+        "authority-a",
+        Arc::new(
+            ingress
+                .clone()
+                .into_stable_container_transport(agreement.clone()),
+        ),
+    )
+    .with_native_profile(profile.clone())
+    .with_receive_routes(&[(source.clone(), None)])
+    .unwrap();
+    let right = ZeroCopyFrameEndpoint::new(
+        "native-out",
+        "authority-b",
+        Arc::new(output.clone().into_stable_container_transport(agreement)),
+    )
+    .with_native_profile(profile)
+    .with_routes(&[PreparedRouteReservation {
+        source: source.clone(),
+        sink: None,
+        limits,
+        config: RouteConfig::default(),
+    }])
+    .unwrap();
+    let stats = right.forwarding_stats().unwrap();
+    let mut streamer = UStreamer::new(
+        "carried-negative",
+        2,
+        Arc::new(Subscriptions(SubscriptionInfo::new(
+            source.clone(),
+            subscriber,
+            SubscriptionStatus::Subscribed,
+            None,
+            None,
+        ))),
+    )
+    .await
+    .unwrap();
+    streamer
+        .add_selected_wire_copy_minimized_route_ref(&left, &right)
+        .await
+        .unwrap();
+    carried_observation_barrier(
+        "UPROTOCOL_ALLOCATION_READY_FILE",
+        "UPROTOCOL_SOURCE_START_FILE",
+    )
+    .await;
+    let bytes = [17u32.to_ne_bytes(), 42u32.to_ne_bytes()].concat();
+    for (token, positive) in [(foreign.token(), false), (expected.token(), true)] {
+        let metadata = UFrameMetadata::publish(source.clone())
+            .with_payload_encoding(PayloadEncoding::CONTRACT_DEFINED)
+            .with_native_type_token(token)
+            .build()
+            .unwrap();
+        sender
+            .send_bytes(TxHeaderParts::from(&metadata), Some(&bytes))
+            .unwrap();
+        let raw = tokio::time::timeout(Duration::from_secs(5), inbox.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(raw.sample().payload().as_shm().is_some());
+        let admitted = HeaderAdmission::for_wire::<StableContainerWire>(HeaderLimits::default())
+            .unwrap()
+            .admit(raw)
+            .unwrap();
+        assert_eq!(admitted.header().unwrap().id, *metadata.id());
+        assert_eq!(
+            admitted.header().unwrap().payload_encoding,
+            Some(PayloadEncoding::CONTRACT_DEFINED)
+        );
+        assert_eq!(admitted.header().unwrap().native_type_token, Some(token));
+        assert_eq!(admitted.payload().unwrap().bytes(), bytes.as_slice());
+        if positive {
+            let frame = typed.admit(admitted.into_frame()).unwrap();
+            assert_eq!(frame.payload().unwrap().first, 17);
+            assert_eq!(frame.payload().unwrap().second, 42);
+        } else {
+            assert!(matches!(
+                typed.admit(admitted.into_frame()),
+                Err(AdmissionError::WrongPayloadType)
+            ));
+            println!("CARRIED_FOREIGN_TOKEN_CONTROL transported=true encoding=0 equal_size=8 typed_rejection=WrongPayloadType");
+        }
+    }
+    assert_eq!(stats.forwarded.load(Ordering::Acquire), 2);
+    assert_eq!(stats.copied_payload_bytes.load(Ordering::Acquire), 16);
+    assert_eq!(stats.failed.load(Ordering::Acquire), 0);
+    carried_observation_barrier(
+        "UPROTOCOL_ALLOCATION_COMPLETE_FILE",
+        "UPROTOCOL_SOURCE_FINISH_FILE",
+    )
+    .await;
+    streamer
+        .delete_selected_wire_copy_minimized_route_ref(&left, &right)
+        .await
+        .unwrap();
+    receiver.detach(&mut registration).unwrap();
+}

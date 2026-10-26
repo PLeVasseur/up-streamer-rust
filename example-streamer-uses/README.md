@@ -24,13 +24,15 @@ are retained.
 The `iceoryx2_publisher` readiness and receive-capacity arguments apply to both
 owned-frame and copy-minimized modes, including its controller-selected RPC role.
 
-The `iceoryx2_*`, `lola_*` and `dds_*` examples keep CLI/defaults, runtime, backend
-and wire setup in each role file while sharing message flow, native validation and evidence. See
+Role files keep their CLI definitions, defaults, runtime and role-specific configuration.
+The example-support library shares backend construction, selected-wire dispatch,
+message flow, native validation and evidence. DDS setup receives explicit `DdsArgs`
+independent of each parser. See
 [role entrypoints and shared flow](docs/role-frontends.md) for addressing,
 connectivity semantics and the boundary with sustained workloads.
-All six Zenoh roles also share classic/selected-wire send, receive and RPC flow;
-their local configuration, defaults and wire constructors stay visible in the
-entrypoints. The role guide describes timing, readiness and cleanup semantics.
+All six Zenoh roles share classic/selected-wire send, receive and RPC flow and
+backend factories. Their local configuration, defaults, URI choices and payload
+policies stay visible in the entrypoints. The role guide describes timing, readiness and cleanup semantics.
 Prepared native roles share explicit address/capacity catalogs and `PreparedSession`
 setup with the configurable frontend. Native receivers attach before READY and
 before publishing a request that needs a response. Finite compatibility controls

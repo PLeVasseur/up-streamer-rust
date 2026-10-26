@@ -1,6 +1,5 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
-#![allow(dead_code)]
 
 use up_rust::{
     NativePayloadIdentity, NativeProfileAgreement, PayloadEncoding, UCode, UFrameMetadata,
@@ -9,12 +8,22 @@ use up_rust::{
 
 /// Immutable worker-scoped configuration loaded once at startup.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct NativeContext {
+pub struct NativeContext {
     profile: Option<NativeProfileAgreement>,
 }
 
 impl NativeContext {
-    pub(crate) fn load() -> Result<Self, UStatus> {
+    /// Reuse this worker agreement in the shared workload payload context.
+    #[cfg(feature = "sustained-workload")]
+    pub fn payload_context(&self) -> Result<super::payloads::NativeContext, UStatus> {
+        self.profile
+            .as_ref()
+            .cloned()
+            .map(super::payloads::NativeContext::from_agreement)
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }
+    pub fn load() -> Result<Self, UStatus> {
         #[cfg(feature = "selected-wire-common")]
         let profile =
             configurable_streamer_wire_support::native_profile::load_native_agreement_from_env()?;
@@ -27,7 +36,7 @@ impl NativeContext {
         Ok(context)
     }
 
-    pub(crate) fn agreement(&self) -> Result<&NativeProfileAgreement, UStatus> {
+    pub fn agreement(&self) -> Result<&NativeProfileAgreement, UStatus> {
         self.profile.as_ref().ok_or_else(|| {
             UStatus::fail_with_code(
                 UCode::InvalidArgument,
@@ -36,7 +45,7 @@ impl NativeContext {
         })
     }
 
-    pub(crate) fn identity(&self) -> Result<NativePayloadIdentity, UStatus> {
+    pub fn identity(&self) -> Result<NativePayloadIdentity, UStatus> {
         #[cfg(feature = "selected-wire-common")]
         {
             type Payload =
@@ -51,23 +60,23 @@ impl NativeContext {
         ))
     }
 
-    pub(crate) fn encoding(&self) -> Result<PayloadEncoding, UStatus> {
+    pub fn encoding(&self) -> Result<PayloadEncoding, UStatus> {
         self.identity().map(NativePayloadIdentity::encoding)
     }
 
-    pub(crate) fn stamp(&self, metadata: UFrameMetadata) -> Result<UFrameMetadata, UStatus> {
+    pub fn stamp(&self, metadata: UFrameMetadata) -> Result<UFrameMetadata, UStatus> {
         metadata
             .with_native_payload_identity(self.identity()?)
             .map_err(|error| UStatus::fail_with_code(UCode::InvalidArgument, error.to_string()))
     }
 
-    pub(crate) fn verify_metadata(&self, metadata: &UFrameMetadata) -> Result<(), UStatus> {
+    pub fn verify_metadata(&self, metadata: &UFrameMetadata) -> Result<(), UStatus> {
         up_rust::payload::codec::PayloadIdentity::Native(self.identity()?)
             .verify(metadata.payload_encoding(), metadata.native_type_token())
             .map_err(UStatus::from)
     }
 
-    pub(crate) fn verify_classic(&self, message: &UMessage) -> Result<(), UStatus> {
+    pub fn verify_classic(&self, message: &UMessage) -> Result<(), UStatus> {
         #[cfg(feature = "selected-wire-common")]
         {
             super::payloads::NativeContext::from_agreement(self.agreement()?.clone())?
@@ -84,7 +93,7 @@ impl NativeContext {
     }
 }
 
-pub(crate) fn listener(
+pub fn listener(
     context: &NativeContext,
     inner: std::sync::Arc<dyn up_rust::UListener>,
 ) -> std::sync::Arc<dyn up_rust::UListener> {
@@ -98,7 +107,7 @@ pub(crate) fn listener(
 }
 
 #[cfg(feature = "selected-wire-common")]
-pub(crate) fn payload_listener(
+pub fn payload_listener(
     context: &super::payloads::NativeContext,
     inner: std::sync::Arc<dyn up_rust::UListener>,
 ) -> std::sync::Arc<dyn up_rust::UListener> {
@@ -129,7 +138,7 @@ impl up_rust::UListener for NativeListener {
 }
 
 #[cfg(feature = "selected-wire-common")]
-pub(crate) trait BindNative: Sized {
+pub trait BindNative: Sized {
     fn with_native_context(
         self,
         context: &NativeContext,

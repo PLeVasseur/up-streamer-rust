@@ -1,27 +1,27 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-pub(crate) mod classic;
-pub(crate) mod cli;
+pub mod classic;
+pub mod cli;
 #[cfg(all(feature = "selected-wire-common", feature = "wire-formats"))]
-pub(crate) mod encoding;
+pub mod encoding;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
-pub(crate) mod endpoint_config;
+pub mod endpoint_config;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
-pub(crate) mod flow;
-pub(crate) mod native;
+pub mod flow;
+pub mod native;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
-pub(crate) mod payloads;
-pub(crate) mod proof;
+pub mod payloads;
+pub mod proof;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
-pub(crate) mod receive;
+pub mod receive;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
-pub(crate) mod rpc;
+pub mod rpc;
 #[cfg(feature = "payload-contract-large-fixtures")]
-pub(crate) mod sensor_context;
-pub(crate) mod startup;
+pub mod sensor_context;
+pub mod startup;
 #[cfg(feature = "sustained-workload")]
-pub(crate) mod workload;
+pub mod workload;
 
 use async_trait::async_trait;
 use hello_world_protos::{
@@ -40,20 +40,20 @@ use tokio::sync::Notify;
 use tracing::{debug, error, info};
 use up_rust::{PayloadEncoding, UCode, UListener, UMessage, UMessageBuilder, UStatus, UTransport};
 
-pub(crate) fn protobuf_payload(message: &impl Message) -> Vec<u8> {
+pub fn protobuf_payload(message: &impl Message) -> Vec<u8> {
     message.write_to_bytes().unwrap()
 }
 
 #[allow(dead_code)]
 #[derive(Default)]
-pub(crate) struct ServiceResponseListener {
+pub struct ServiceResponseListener {
     received: AtomicUsize,
     observed: Notify,
 }
 
 impl ServiceResponseListener {
     #[allow(dead_code)]
-    pub(crate) async fn wait_for_response(&self, timeout_ms: u64) -> Result<(), UStatus> {
+    pub async fn wait_for_response(&self, timeout_ms: u64) -> Result<(), UStatus> {
         tokio::time::timeout(Duration::from_millis(timeout_ms), async {
             while self.received.load(Ordering::Acquire) == 0 {
                 self.observed.notified().await;
@@ -95,12 +95,12 @@ impl UListener for ServiceResponseListener {
 }
 
 #[allow(dead_code)]
-pub(crate) struct ServiceRequestResponder {
+pub struct ServiceRequestResponder {
     client: Arc<dyn UTransport>,
 }
 impl ServiceRequestResponder {
     #[allow(dead_code)]
-    pub(crate) fn new(client: Arc<dyn UTransport>) -> Self {
+    pub fn new(client: Arc<dyn UTransport>) -> Self {
         Self { client }
     }
 }
@@ -161,7 +161,7 @@ impl UListener for ServiceRequestResponder {
 }
 
 #[allow(dead_code)]
-pub(crate) fn native_message_payload_parts(
+pub fn native_message_payload_parts(
     magic: u32,
     sequence: u32,
     payload: &str,
@@ -199,7 +199,7 @@ fn native_message_payload_parts_impl(
 }
 
 #[allow(dead_code)]
-pub(crate) fn xcdrv2_message_payload_parts(
+pub fn xcdrv2_message_payload_parts(
     sequence: u32,
     source: String,
     payload: &str,
@@ -245,7 +245,7 @@ fn invalid_argument(message: impl Into<String>) -> UStatus {
 }
 
 #[allow(dead_code)]
-pub(crate) struct PublishReceiver;
+pub struct PublishReceiver;
 
 #[async_trait]
 impl UListener for PublishReceiver {
@@ -270,3 +270,17 @@ impl UListener for PublishReceiver {
         };
     }
 }
+
+#[cfg(feature = "dds-transport")]
+pub mod dds;
+#[cfg(any(
+    feature = "zenoh-zero-copy",
+    feature = "zenoh-owned-frame",
+    feature = "iceoryx2-zero-copy",
+    feature = "iceoryx2-owned-frame",
+    feature = "lola-transport",
+    feature = "lola-owned-frame"
+))]
+pub mod endpoint;
+
+pub mod backend;

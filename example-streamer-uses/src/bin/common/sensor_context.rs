@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Immutable, explicitly selected native worker contexts; no payload sniffing.
-#![allow(dead_code)]
 use configurable_streamer_wire_support::{
     native_profile::{NativePayloadContext, SelectedWireNativePayload},
     sensor::{CameraBayerRggb12pFrame8mpV1, LidarPointCloudHesaiAt128V1, SensorFixture},
@@ -12,7 +11,7 @@ use up_rust::{
 };
 
 #[derive(Clone, Debug)]
-pub(crate) enum NativeContext {
+pub enum NativeContext {
     Selected(NativePayloadContext<SelectedWireNativePayload>),
     Lidar(NativePayloadContext<LidarPointCloudHesaiAt128V1>),
     Camera(NativePayloadContext<CameraBayerRggb12pFrame8mpV1>),

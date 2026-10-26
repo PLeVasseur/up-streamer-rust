@@ -1,10 +1,11 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
-//! Shared DDS role flow over endpoints constructed in each role binary.
+//! Shared DDS endpoint construction and role flow from explicit inputs.
 
-use crate::Args;
 use std::sync::Arc;
 use std::time::Duration;
+use up_rust::UWithNativePrefixWire;
+use up_transport_dds::{DdsConfig, Reliability};
 
 use async_trait::async_trait;
 use clap::ValueEnum;
@@ -18,20 +19,10 @@ use up_transport_dds::encoded_owned::DdsEncodedOwnedCore;
 use up_transport_dds::owned::UPTransportDdsOwned;
 use up_transport_dds::UPTransportDds;
 
-#[path = "payloads.rs"]
-mod payloads;
-#[path = "proof.rs"]
-mod proof;
-#[cfg(feature = "payload-contract-large-fixtures")]
-#[path = "sensor_context.rs"]
-mod sensor_context;
-#[path = "startup.rs"]
-mod startup;
 #[cfg(feature = "sustained-workload")]
-#[path = "workload.rs"]
-mod workload;
-
-pub(crate) use payloads::NativeContext;
+use super::workload;
+use super::{payloads, proof, startup};
+pub use payloads::NativeContext;
 use payloads::{
     arrow_payload_bytes, native_payload_bytes, omgidl_payload_bytes, xcdrv2_payload_bytes,
 };
@@ -42,7 +33,7 @@ const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"DDSR");
 
 #[allow(dead_code)]
 #[derive(Clone, Copy)]
-pub(crate) enum Role {
+pub enum Role {
     Publisher,
     Subscriber,
     Notifier,
@@ -52,14 +43,14 @@ pub(crate) enum Role {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-pub(crate) enum RouteFamily {
+pub enum RouteFamily {
     Classic,
     OwnedFrame,
     EncodedOwned,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum Encoding {
+pub enum Encoding {
     Native,
     Protobuf,
     Xcdrv2,
@@ -69,16 +60,16 @@ pub(crate) enum Encoding {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
-pub(crate) enum ReliabilityArg {
+pub enum ReliabilityArg {
     Reliable,
     BestEffort,
 }
 
-fn timeout(args: &Args) -> Duration {
+fn timeout(args: &DdsArgs) -> Duration {
     Duration::from_millis(args.timeout_ms)
 }
 
-fn encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {
+fn encoding(args: &DdsArgs) -> Result<PayloadEncoding, UStatus> {
     Ok(match args.encoding {
         Encoding::Native => args.native.encoding()?,
         Encoding::Protobuf => up_rust::ProtobufWire::encoding(),
@@ -103,11 +94,15 @@ fn method(authority: &str, resource_id: u16) -> Result<UUri, UStatus> {
         .map_err(|error| invalid(format!("invalid method URI: {error}")))
 }
 
-fn outbound_message(role: Role, args: &Args) -> Result<UMessage, UStatus> {
+fn outbound_message(role: Role, args: &DdsArgs) -> Result<UMessage, UStatus> {
     outbound_message_sequence(role, args, 1)
 }
 
-fn outbound_message_sequence(role: Role, args: &Args, sequence: u32) -> Result<UMessage, UStatus> {
+fn outbound_message_sequence(
+    role: Role,
+    args: &DdsArgs,
+    sequence: u32,
+) -> Result<UMessage, UStatus> {
     let payload = payload_sequence(args, sequence)?;
     let result = match role {
         Role::Publisher => {
@@ -132,7 +127,7 @@ fn outbound_message_sequence(role: Role, args: &Args, sequence: u32) -> Result<U
     result.map_err(|error| invalid(format!("build outbound message: {error}")))
 }
 
-fn payload_sequence(args: &Args, sequence: u32) -> Result<Vec<u8>, UStatus> {
+fn payload_sequence(args: &DdsArgs, sequence: u32) -> Result<Vec<u8>, UStatus> {
     #[cfg(feature = "sustained-workload")]
     if args.workload_plan.is_some() && args.encoding == Encoding::Protobuf {
         use protobuf::Message;
@@ -153,7 +148,7 @@ fn payload_sequence(args: &Args, sequence: u32) -> Result<Vec<u8>, UStatus> {
     }
 }
 
-fn filters(role: Role, args: &Args) -> Result<(UUri, Option<UUri>), UStatus> {
+fn filters(role: Role, args: &DdsArgs) -> Result<(UUri, Option<UUri>), UStatus> {
     match role {
         Role::Subscriber => Ok((topic(&args.peer_authority, args.topic_resource_id)?, None)),
         Role::Notifyee => Ok((
@@ -172,7 +167,7 @@ fn filters(role: Role, args: &Args) -> Result<(UUri, Option<UUri>), UStatus> {
     }
 }
 
-fn response_metadata(request: &UFrameMetadata, args: &Args) -> Result<UFrameMetadata, UStatus> {
+fn response_metadata(request: &UFrameMetadata, args: &DdsArgs) -> Result<UFrameMetadata, UStatus> {
     let source = request
         .sink()
         .cloned()
@@ -190,7 +185,7 @@ fn response_metadata(request: &UFrameMetadata, args: &Args) -> Result<UFrameMeta
         })
 }
 
-fn response_message(request: &UMessage, args: &Args) -> Result<UMessage, UStatus> {
+fn response_message(request: &UMessage, args: &DdsArgs) -> Result<UMessage, UStatus> {
     let request_id = request.id().clone();
     let invoked_method = request
         .sink()
@@ -216,9 +211,9 @@ impl UListener for MessageListener {
     }
 }
 
-pub(crate) async fn run_classic(
+pub async fn run_classic(
     role: Role,
-    args: &Args,
+    args: &DdsArgs,
     transport: Arc<UPTransportDds>,
 ) -> Result<(), UStatus> {
     #[cfg(feature = "sustained-workload")]
@@ -303,9 +298,9 @@ impl UOwnedListener for OwnedListener {
     }
 }
 
-pub(crate) async fn run_owned(
+pub async fn run_owned(
     role: Role,
-    args: &Args,
+    args: &DdsArgs,
     transport: Arc<UPTransportDdsOwned>,
 ) -> Result<(), UStatus> {
     if matches!(role, Role::Publisher | Role::Notifier) {
@@ -356,7 +351,7 @@ pub(crate) async fn run_owned(
     Ok(())
 }
 
-fn frame_from_message(message: &UMessage, args: &Args) -> Result<UOwnedFrame, UStatus> {
+fn frame_from_message(message: &UMessage, args: &DdsArgs) -> Result<UOwnedFrame, UStatus> {
     let metadata = if args.encoding == Encoding::Native {
         args.native.project_classic(message)?
     } else {
@@ -370,9 +365,9 @@ fn frame_from_message(message: &UMessage, args: &Args) -> Result<UOwnedFrame, US
     .map_err(|error| invalid(format!("build owned frame: {error}")))
 }
 
-pub(crate) async fn run_encoded_owned<W>(
+pub async fn run_encoded_owned<W>(
     role: Role,
-    args: &Args,
+    args: &DdsArgs,
     core: DdsEncodedOwnedCore,
     configure: impl FnOnce(
         DdsEncodedOwnedCore,
@@ -473,20 +468,82 @@ fn role_name(role: Role) -> &'static str {
     }
 }
 
-pub(crate) fn invalid(detail: impl Into<String>) -> UStatus {
+pub fn invalid(detail: impl Into<String>) -> UStatus {
     UStatus::fail_with_code(UCode::InvalidArgument, detail.into())
 }
 
-#[cfg(test)]
-mod cli_tests {
-    use super::*;
-    use clap::Parser;
+/// Explicit DDS endpoint and role inputs, independent of any CLI parser.
+pub struct DdsArgs {
+    pub native: NativeContext,
+    pub domain_id: i32,
+    pub origin_id: Option<String>,
+    pub reliability: ReliabilityArg,
+    pub history_depth: u32,
+    pub route_family: RouteFamily,
+    pub encoding: Encoding,
+    pub local_authority: String,
+    pub peer_authority: String,
+    pub topic_resource_id: u16,
+    pub method_resource_id: u16,
+    pub payload: String,
+    pub timeout_ms: u64,
+    #[cfg(feature = "sustained-workload")]
+    pub workload_plan: Option<std::path::PathBuf>,
+}
 
-    #[test]
-    fn encoded_owned_replaces_the_retired_loan_cli() {
-        let args = Args::try_parse_from(["dds-role", "--route-family", "encoded-owned"]).unwrap();
-        assert!(matches!(args.route_family, RouteFamily::EncodedOwned));
-        assert!(Args::try_parse_from(["dds-role", "--route-family", "copy-minimized"]).is_err());
-        assert!(Args::try_parse_from(["dds-role", "--payload-alignment", "8"]).is_err());
+/// Construct the configured DDS family and run the selected role.
+pub async fn run(role: Role, args: &DdsArgs) -> Result<(), UStatus> {
+    let mut config = DdsConfig::new(args.domain_id);
+    if let Some(origin_id) = &args.origin_id {
+        config.origin_id.clone_from(origin_id);
+    }
+    config.qos.reliability = match args.reliability {
+        ReliabilityArg::Reliable => Reliability::Reliable,
+        ReliabilityArg::BestEffort => Reliability::BestEffort,
+    };
+    config.qos.history_depth = args.history_depth;
+    let runtime = tokio::runtime::Handle::current();
+    match args.route_family {
+        RouteFamily::Classic => {
+            let transport = Arc::new(UPTransportDds::with_config(config, runtime)?);
+            run_classic(role, args, transport).await
+        }
+        RouteFamily::OwnedFrame => {
+            let transport = Arc::new(UPTransportDdsOwned::with_config(config, runtime)?);
+            run_owned(role, args, transport).await
+        }
+        RouteFamily::EncodedOwned => {
+            let core = DdsEncodedOwnedCore::with_config(config, runtime)?;
+            match args.encoding {
+                Encoding::Native => {
+                    let profile = args.native.agreement()?.clone();
+                    run_encoded_owned(role, args, core, |core| {
+                        core.into_stable_container_transport(profile)
+                    })
+                    .await
+                }
+                Encoding::Protobuf => {
+                    run_encoded_owned(role, args, core, |core| core.into_protobuf_transport()).await
+                }
+                Encoding::Xcdrv2 => {
+                    run_encoded_owned(role, args, core, |core| {
+                        core.into_native_prefix_wire_transport(up_wire_xcdrv2::XcdrV2Wire)
+                    })
+                    .await
+                }
+                Encoding::Arrow => {
+                    run_encoded_owned(role, args, core, |core| {
+                        core.into_native_prefix_wire_transport(up_wire_arrow::ArrowWire)
+                    })
+                    .await
+                }
+                Encoding::OmgIdl => {
+                    run_encoded_owned(role, args, core, |core| {
+                        core.into_native_prefix_wire_transport(up_wire_omgidl::OmgIdlWire)
+                    })
+                    .await
+                }
+            }
+        }
     }
 }

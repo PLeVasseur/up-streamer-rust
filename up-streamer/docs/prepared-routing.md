@@ -70,3 +70,33 @@ This allows raw identity/copy/failure evidence without forcing per-message heap
 formatting into the forwarding core. Owned-to-native adapters re-admit the encoded
 metadata before opaque forwarding, so unknown/reserved incoming identifiers stay
 carriage rather than being mistaken for reserved origination.
+
+
+## Optional flow observations
+
+With `flow-evidence` and `UPROTOCOL_FLOW_EVIDENCE_RUN`, prepared native routes
+record admitted ingress and successful forwarding using the submitted borrowed
+metadata and opaque payload. Failed forwarding emits no successful egress record.
+These observations do not form typed payload references or change route geometry,
+queue credits or loss policy. Their formatting and hashing costs remain inside
+the observed process. The separate prepared forward observer can inspect actual
+initialized egress-loan bytes; `PreparedForwardStats` still counts copied bytes
+including copies followed by failed publication. Evidence disabled at setup adds
+no per-frame observation construction.
+
+Owned-to-native and classic-to-native copying adapters use the same opt-in
+ingress and successful-handoff observations. Their egress hashes describe the
+submitted owned frame; actual native-loan inspection remains separate. Labels
+are prepared at setup, and disabled evidence constructs no per-frame record.
+
+The default `with_routes` catalog also attaches an observer when flow evidence
+is configured at setup. `FLOW_PAYLOAD_COPY` hashes bytes borrowed from the actual
+initialized native egress loan before put; `FLOW_NATIVE_FORWARD_COMPLETED`
+records successful and failed publication outcomes. Copies followed by failed
+puts remain visible and charged by `PreparedForwardStats`. Correlate the copy
+and completion by run/message ID and their configured `egress` endpoint; this
+endpoint label does not claim an incoming physical route. Copy records preserve
+absent versus present-empty payloads. The observer does not retain native bytes,
+form typed references, or change reservation geometry. Explicit
+`with_observed_routes` keeps the caller's observer. With evidence disabled at
+setup, no default observer is attached and there is no per-frame record work.

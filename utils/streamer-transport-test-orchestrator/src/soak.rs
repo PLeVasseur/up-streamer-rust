@@ -7,6 +7,7 @@ use streamer_soak::control::{Phase, PhaseCommand};
 use streamer_soak::{JournalWriter, Reconciler, ReplayOptions};
 use streamer_transport_test_orchestrator::platform::{process_tree_samples, ProcessSample};
 
+mod finite_sinks;
 mod pool_pages;
 mod representative;
 
@@ -16,6 +17,7 @@ pub(super) enum Lane {
     #[default]
     Fast,
     Representative,
+    FiniteSinks,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
@@ -105,7 +107,7 @@ impl Plan {
                         4
                     }
                 && self.pending_limit == 4096
-                && !self.require_fifo
+                && self.require_fifo == (self.mode == Mode::Conservation)
                 && self.maximum_payload_bytes == 8192
                 && self.rss_max == 6 * 1024u64.pow(3)
                 && self.pss_max == 5 * 1024u64.pow(3)
@@ -117,6 +119,22 @@ impl Plan {
                 && self.allocator_arena_limit == 2,
             "workload profile was changed or is unsupported"
         );
+        if self.lane == Lane::FiniteSinks {
+            anyhow::ensure!(
+                self.mode == Mode::Conservation,
+                "finite sinks use only conservation"
+            );
+            let expected: BTreeSet<_> = finite_sinks::rows()?
+                .into_iter()
+                .map(|row| row.id)
+                .collect();
+            anyhow::ensure!(
+                self.rows.len() == 4
+                    && self.rows.iter().cloned().collect::<BTreeSet<_>>() == expected,
+                "finite sink cohort changed"
+            );
+            return Ok(());
+        }
         let canonical = matrix_rows();
         let mut ids = BTreeSet::new();
         for id in &self.rows {
@@ -166,6 +184,13 @@ fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
 }
 
 fn selected(cli: &Cli, mode: Mode) -> Result<Vec<MatrixRow>> {
+    if cli.soak_lane == Lane::FiniteSinks {
+        anyhow::ensure!(
+            mode == Mode::Conservation && cli.only.is_empty(),
+            "finite sink cohort is fixed and conservation-only"
+        );
+        return finite_sinks::rows();
+    }
     if cli.soak_lane == Lane::Representative {
         anyhow::ensure!(
             mode != Mode::Conservation,
@@ -227,8 +252,10 @@ struct LogCursor {
 struct Stream {
     directory: PathBuf,
     options: ReplayOptions,
+    reconstructed_sink: bool,
     control: PathBuf,
     namespace: RunningProcess,
+    mqtt_broker: Option<RunningProcess>,
     bridge: RunningProcess,
     source: RunningProcess,
     sink: RunningProcess,
@@ -253,6 +280,14 @@ impl Stream {
 
     fn poll(&mut self) -> Result<()> {
         for index in 0..self.logs.len() {
+            // Defer this bounded five-message sink log until all offers exist.
+            // Its raw UUIDs and metadata remain intact in the journal.
+            if self.reconstructed_sink && self.logs[index].actor == "sink" {
+                let command: PhaseCommand = read(&self.control)?;
+                if !matches!(command.phase, Phase::Drain | Phase::Stop) {
+                    continue;
+                }
+            }
             for _ in 0..4096 {
                 let cursor = &mut self.logs[index];
                 let offset = cursor.reader.stream_position()?;
@@ -285,6 +320,7 @@ impl Stream {
     }
 
     fn phase(&self, phase: Phase) -> Result<()> {
+        allocation::snapshot(&self.directory, &format!("phase-{phase:?}"), 3)?;
         atomic_write_json(
             &self.control,
             &PhaseCommand {
@@ -295,6 +331,12 @@ impl Stream {
     }
 
     fn alive(&mut self) -> Result<()> {
+        if let Some(broker) = &mut self.mqtt_broker {
+            anyhow::ensure!(
+                broker.child.try_wait()?.is_none(),
+                "MQTT broker exited during workload"
+            );
+        }
         for process in [
             &mut self.source,
             &mut self.sink,
@@ -330,6 +372,10 @@ impl Stream {
         terminate(&mut self.bridge)?;
         assert_success(&mut self.bridge)?;
         self.poll()?;
+        if let Some(broker) = &mut self.mqtt_broker {
+            terminate(broker)?;
+        }
+        allocation::snapshot(&self.directory, "completed-after-cleanup", 3)?;
         self.record("bridge", "OP_FINISH", json!({"success": true}))?;
         terminate(&mut self.namespace)?;
         let report = self.oracle.take().context("missing oracle")?.finish()?;
@@ -338,10 +384,12 @@ impl Stream {
             .context("missing journal")?
             .finish(true)?;
         atomic_write_json(&self.directory.join("live-report.json"), &report)?;
+        let mut groups = vec![&self.source, &self.sink, &self.bridge, &self.namespace];
+        groups.extend(self.mqtt_broker.iter());
         atomic_write_json(
             &self.directory.join("cleanup.json"),
             &json!({"success": true,
-            "groups": ([&self.source, &self.sink, &self.bridge, &self.namespace].iter().map(|p| json!({
+            "groups": (groups.iter().map(|p| json!({
                 "group": p.process_group(), "gone": !streamer_transport_test_orchestrator::supervision::process_group_exists(p.process_group()).unwrap_or(true)
             })).collect::<Vec<_>>())}),
         )?;
@@ -350,6 +398,9 @@ impl Stream {
 
     fn fail(&mut self) {
         let _ = self.phase(Phase::Stop);
+        if let Some(broker) = &mut self.mqtt_broker {
+            let _ = terminate(broker);
+        }
         for process in [
             &mut self.source,
             &mut self.sink,
@@ -441,6 +492,37 @@ fn prepare(
     let namespace = start_namespace_holder(bundle, &process_env, &row_dir, cancellation)?;
     let zenoh = ZenohConfigPaths::new(&row_dir);
     let vsomeip = VsomeipConfigPaths::new(&row_dir);
+    if row.uses_vsomeip() {
+        write_vsomeip_configs(row, &vsomeip)?;
+        if plan.lane == Lane::FiniteSinks {
+            // FIFO is observable only with one native callback dispatcher.
+            // The qualified binding completes each listener before returning.
+            for path in [&vsomeip.streamer, &vsomeip.source, &vsomeip.sink] {
+                let mut config: serde_json::Value = read(path)?;
+                for application in config["applications"]
+                    .as_array_mut()
+                    .context("missing native SOME/IP application configuration")?
+                {
+                    application["max_dispatchers"] = json!(0);
+                }
+                atomic_write_json(path, &config)?;
+            }
+        }
+    }
+    let mqtt_broker = if row.uses_mqtt5() {
+        let (broker, readiness) = start_mqtt_broker(
+            bundle,
+            &row_dir,
+            &process_env,
+            &namespace,
+            cli.mqtt_readiness_timeout_ms,
+            cancellation,
+        )?;
+        atomic_write_json(&row_dir.join("mqtt-readiness.json"), &readiness)?;
+        Some(broker)
+    } else {
+        None
+    };
     write_zenoh_router_config(&zenoh.source_router, ZENOH_SOURCE_PORT)?;
     write_zenoh_router_config(&zenoh.sink_router, ZENOH_SINK_PORT)?;
     write_zenoh_client_config(&zenoh.source_client, ZENOH_SOURCE_PORT)?;
@@ -499,6 +581,27 @@ fn prepare(
         );
     }
     inputs["zenoh_configuration_sha256"] = json!(configurations);
+    let mut backend_configurations = BTreeMap::new();
+    if row.uses_vsomeip() {
+        for path in [&vsomeip.streamer, &vsomeip.source, &vsomeip.sink] {
+            backend_configurations.insert(
+                path.file_name()
+                    .context("backend configuration name")?
+                    .to_str()
+                    .context("backend configuration UTF-8")?,
+                sha256_file(path)?,
+            );
+        }
+    }
+    if row.uses_mqtt5() {
+        backend_configurations.insert(
+            "mosquitto.conf",
+            sha256_file(&row_dir.join("mosquitto.conf"))?,
+        );
+    }
+    if !backend_configurations.is_empty() {
+        inputs["backend_configuration_sha256"] = json!(backend_configurations);
+    }
     atomic_write_json(&row_dir.join("deployment-inputs.json"), &inputs)?;
     let mut bridge = spawn_process(
         bundle,
@@ -529,11 +632,12 @@ fn prepare(
             );
             args.extend([
                 "--transport".into(),
-                if profile.physical == PhysicalTransport::Iceoryx2 {
-                    "iceoryx2".into()
-                } else {
-                    "zenoh".into()
-                },
+                match profile.physical {
+                    PhysicalTransport::Iceoryx2 => "iceoryx2",
+                    PhysicalTransport::Lola => "lola",
+                    _ => "zenoh",
+                }
+                .into(),
                 "--role".into(),
                 match (row.role, active) {
                     (RoleStyle::PublisherSubscriber, true) => "pub-sender",
@@ -543,6 +647,24 @@ fn prepare(
                 }
                 .into(),
             ]);
+            if profile.physical == PhysicalTransport::Lola {
+                let paths = lola_manifest_paths
+                    .as_ref()
+                    .context("LoLa role manifests missing")?;
+                add_lola_args(
+                    &mut args,
+                    row,
+                    active,
+                    if active { AUTHORITY_A } else { AUTHORITY_B },
+                    if active { "source" } else { "sink" },
+                    if active {
+                        &paths.active
+                    } else {
+                        &paths.passive
+                    },
+                    &lola_run_namespace,
+                )?;
+            }
             RoleCommand {
                 binary: "iceoryx2_publisher".into(),
                 args,
@@ -567,28 +689,94 @@ fn prepare(
                 .args
                 .extend(prepared::workload_role_configuration(profile));
         }
-        command
-            .args
-            .extend(["--workload-plan".into(), worker.display().to_string()]);
+        let mut role_env = if active {
+            active_env.clone()
+        } else {
+            passive_env.clone()
+        };
+        if !active
+            && plan.lane == Lane::FiniteSinks
+            && matches!(
+                profile.physical,
+                PhysicalTransport::Mqtt5 | PhysicalTransport::Vsomeip
+            )
+        {
+            role_env.push((
+                "UPROTOCOL_FINITE_SINK_PLAN".into(),
+                worker.display().to_string(),
+            ));
+        } else {
+            command
+                .args
+                .extend(["--workload-plan".into(), worker.display().to_string()]);
+        }
         spawn_process(
             bundle,
             if active { "active" } else { "passive" },
             &bundle.executable(&command.binary)?,
             &command.args,
             repo,
-            if active { &active_env } else { &passive_env },
+            &role_env,
             &row_dir,
             Some(&namespace),
         )
     };
-    let mut sink = spawn_role(false)?;
-    let mut source = spawn_role(true)?;
+    let (mut sink, mut source) = if plan.lane == Lane::FiniteSinks
+        && row.sink.physical == PhysicalTransport::Lola
+    {
+        // LoLa discovery requires an offered provider. The Zenoh source can
+        // connect while held behind Waiting; no publication is used as a probe.
+        let mut source = spawn_role(true)?;
+        let provider = wait_for_marker(
+            &mut bridge,
+            READY_STREAMER,
+            Duration::from_secs(10),
+            cancellation,
+        )?;
+        let matching = wait_for_marker(
+            &mut source,
+            READY_LISTENER,
+            Duration::from_secs(10),
+            cancellation,
+        )?;
+        let waiting: PhaseCommand = read(&control)?;
+        anyhow::ensure!(
+            waiting.phase == Phase::Waiting,
+            "LoLa provider setup crossed the traffic barrier"
+        );
+        atomic_write_json(
+            &row_dir.join("lola-provider-readiness.json"),
+            &json!({
+                "provider_marker": READY_STREAMER, "provider_checks": provider.checks,
+                "source_marker": READY_LISTENER, "source_checks": matching.checks,
+                "control_phase": waiting.phase, "before_receiver_launch": true,
+                "contract": "offered native provider and actual Zenoh matching while source remains held before first send"
+            }),
+        )?;
+        (spawn_role(false)?, source)
+    } else {
+        (spawn_role(false)?, spawn_role(true)?)
+    };
     wait_for_marker(
         &mut sink,
         READY_LISTENER,
         Duration::from_secs(10),
         cancellation,
     )?;
+    if row.sink.physical == PhysicalTransport::Vsomeip {
+        let mut timings = AttemptTimingSummary::default();
+        record_post_ready_gate(
+            &mut timings,
+            "vsomeip_sink_listener",
+            "awaited_subscription_acceptance",
+            cli.vsomeip_sink_stabilization_ms,
+            cancellation,
+        )?;
+        atomic_write_json(
+            &row_dir.join("sink-readiness-gates.json"),
+            &timings.readiness,
+        )?;
+    }
     wait_for_marker(
         &mut source,
         READY_LISTENER,
@@ -603,14 +791,15 @@ fn prepare(
         Duration::from_secs(10),
         cancellation,
     )?;
-    atomic_write_json(
-        &row_dir.join("owned-groups.json"),
-        &json!({
-            "source":source.process_group(), "sink":sink.process_group(),
-            "bridge":bridge.process_group(), "launcher":namespace.process_group(),
-            "controller":std::process::id(),
-        }),
-    )?;
+    let mut owned_groups = json!({
+        "source":source.process_group(), "sink":sink.process_group(),
+        "bridge":bridge.process_group(), "launcher":namespace.process_group(),
+        "controller":std::process::id(),
+    });
+    if let Some(broker) = &mqtt_broker {
+        owned_groups["mqtt-broker"] = json!(broker.process_group());
+    }
+    atomic_write_json(&row_dir.join("owned-groups.json"), &owned_groups)?;
     let logs = [(&source, "source"), (&sink, "sink"), (&bridge, "bridge")]
         .into_iter()
         .map(|(p, actor)| {
@@ -621,12 +810,14 @@ fn prepare(
         })
         .collect::<Result<_>>()?;
     let journal = Some(JournalWriter::new(&row_dir, &options, 4 * 1024 * 1024)?);
-    let oracle = Some(Reconciler::new(&options)?);
+    let oracle = Some(finite_sinks::oracle(&options, row, plan.lane)?);
     let mut stream = Stream {
         directory: row_dir,
         options,
+        reconstructed_sink: plan.lane == Lane::FiniteSinks && finite_sinks::reconstructed(row),
         control,
         namespace,
+        mqtt_broker,
         bridge,
         source,
         sink,
@@ -634,6 +825,7 @@ fn prepare(
         journal,
         oracle,
     };
+    allocation::snapshot(&stream.directory, "ready-before-warmup", 3)?;
     stream.record("bridge", "OP_START", json!({"observed_ready": true}))?;
     stream.poll()?;
     Ok(stream)
@@ -717,7 +909,10 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
     if cli.soak_lane == Lane::Representative && !cli.skip_build {
         representative::build_workers(repo, &target, rows, root)?;
     }
-    let bundle = stage_run_bundle(repo, &target, root, rows)?;
+    // Sustained workers use the existing generic native role entry point even
+    // when the cohort contains no iceoryx2 source. Freeze it explicitly.
+    let bundle =
+        stage_run_bundle_with_workers(repo, &target, root, rows, None, &["iceoryx2_publisher"])?;
     if cli.soak_lane == Lane::Representative {
         representative::require_inventory(&bundle.manifest.native_profile)?;
     }
@@ -799,6 +994,7 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
         plan.offered_per_second = 20;
         plan.consumer_delay_ms = 0;
         plan.queue_capacity = 5;
+        plan.require_fifo = true;
     }
     plan.validate()?;
     atomic_write_json(&root.join("soak-plan.json"), &plan)?;
@@ -806,6 +1002,7 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
     let start = Instant::now();
     let mut streams = Vec::new();
     let mut phases = Vec::new();
+    let mut end_census_completed_at = None;
     let mut resources = OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -835,12 +1032,20 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
             (Phase::Drain, plan.drain_seconds),
         ] {
             if phase == Phase::Normal && plan.require_pool_page_census {
-                pool_pages::capture(root, &streams, &plan_hash, start.elapsed().as_secs_f64())?;
+                pool_pages::capture(
+                    root,
+                    &streams,
+                    &plan_hash,
+                    start.elapsed().as_secs_f64(),
+                    "normal",
+                )?;
             }
+            let transition_started = start.elapsed().as_secs_f64();
             for stream in &streams {
                 stream.phase(phase)?;
             }
-            phases.push(json!({"phase": phase, "elapsed_seconds": start.elapsed().as_secs_f64(), "seconds": seconds}));
+            phases.push(json!({"phase": phase, "controller_transition_started_at_elapsed_seconds": transition_started,
+                "elapsed_seconds": start.elapsed().as_secs_f64(), "seconds": seconds}));
             let until = Instant::now() + Duration::from_secs(seconds);
             let mut next_sample = Instant::now();
             while Instant::now() < until {
@@ -853,7 +1058,7 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
                     stream.poll()?;
                     stream.alive()?;
                 }
-                if Instant::now() >= next_sample && matches!(phase, Phase::Normal | Phase::Slow) {
+                if Instant::now() >= next_sample {
                     let value = sample(&streams, start.elapsed().as_secs_f64(), phase)?;
                     serde_json::to_writer(&mut resources, &value)?;
                     resources.write_all(b"\n")?;
@@ -869,8 +1074,24 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
                     );
                     next_sample = Instant::now() + Duration::from_secs(1);
                 }
-                thread::sleep(Duration::from_millis(25));
+                thread::sleep(
+                    until
+                        .saturating_duration_since(Instant::now())
+                        .min(Duration::from_millis(25)),
+                );
             }
+            phases.last_mut().context("missing active phase")?["completed_at_elapsed_seconds"] =
+                json!(start.elapsed().as_secs_f64());
+        }
+        if plan.require_pool_page_census {
+            pool_pages::capture(
+                root,
+                &streams,
+                &plan_hash,
+                start.elapsed().as_secs_f64(),
+                "end",
+            )?;
+            end_census_completed_at = Some(start.elapsed().as_secs_f64());
         }
         for stream in &streams {
             stream.phase(Phase::Stop)?;
@@ -889,6 +1110,7 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
     atomic_write_json(
         &root.join("execution.json"),
         &json!({"success": outcome.is_ok(), "phases": phases,
+        "end_census_completed_at_elapsed_seconds": end_census_completed_at,
         "elapsed_seconds": start.elapsed().as_secs_f64(), "cleanup": process_cleanup_summary()}),
     )?;
     outcome?;
@@ -940,17 +1162,19 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
         let start = phases[index]["elapsed_seconds"]
             .as_f64()
             .context("missing phase start")?;
-        let end = if index < 3 {
-            &phases[index + 1]["elapsed_seconds"]
-        } else {
-            &execution["elapsed_seconds"]
-        };
-        let end = end.as_f64().context("missing phase end")?;
+        let end = phases[index]["completed_at_elapsed_seconds"]
+            .as_f64()
+            .context("missing actual phase end")?;
         anyhow::ensure!(
             phases[index]["phase"] == phase
                 && phases[index]["seconds"] == seconds
                 && start >= 0.0
                 && end - start >= seconds as f64
+                && end - start <= seconds as f64 * 1.02
+                && end
+                    <= execution["elapsed_seconds"]
+                        .as_f64()
+                        .context("missing execution end")?
                 && end <= plan.maximum_seconds as f64,
             "incomplete or changed phase duration"
         );
@@ -997,7 +1221,12 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
                 && options.require_fifo == plan.require_fifo,
             "row context mismatch"
         );
-        let report = streamer_soak::replay(&directory, &options)?;
+        let replay_row = matrix_rows().into_iter().find(|row| &row.id == id);
+        let report = if let Some(row) = &replay_row {
+            finite_sinks::replay(&directory, &options, row, plan.lane)?
+        } else {
+            streamer_soak::replay(&directory, &options)?
+        };
         audit_publication_inputs(&directory, &inputs)?;
         if plan.mode == Mode::Conservation {
             audit_finite_inputs(&directory, &inputs)?;
@@ -1010,6 +1239,7 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
         .into_iter()
         .find(|row| &row.id == id)
         .context("row absent")?;
+        finite_sinks::audit_backend_inputs(&directory, &inputs, &row)?;
         if row.source.kind == EndpointKind::CopyMinimized {
             anyhow::ensure!(
                 report["application_lease_peaks"]["source"][1]
@@ -1071,9 +1301,10 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
         let cleanup: serde_json::Value = read(&directory.join("cleanup.json"))?;
         anyhow::ensure!(
             cleanup["success"] == true
-                && cleanup["groups"].as_array().is_some_and(
-                    |groups| groups.len() == 4 && groups.iter().all(|g| g["gone"] == true)
-                ),
+                && cleanup["groups"]
+                    .as_array()
+                    .is_some_and(|groups| groups.len() == 4 + usize::from(row.uses_mqtt5())
+                        && groups.iter().all(|g| g["gone"] == true)),
             "incomplete row cleanup"
         );
         for (phase, seconds) in [("normal", plan.normal_seconds), ("slow", plan.slow_seconds)] {
@@ -1185,12 +1416,14 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
         samples += 1;
     }
     anyhow::ensure!(
-        windows.len() == 2 && samples > 0,
+        windows.len() == 4 && samples > 0,
         "missing resource windows"
     );
     for (name, seconds, index) in [
+        ("Warmup", plan.warmup_seconds, 0),
         ("Normal", plan.normal_seconds, 1),
         ("Slow", plan.slow_seconds, 2),
+        ("Drain", plan.drain_seconds, 3),
     ] {
         let window = windows.get(name).context("missing measured phase")?;
         let start = phases[index]["elapsed_seconds"]
@@ -1203,7 +1436,10 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
             "resource evidence does not cover the complete phase"
         );
     }
-    for (first, last, initial, final_value) in windows.values() {
+    for (name, (first, last, initial, final_value)) in &windows {
+        if name != "Normal" && name != "Slow" {
+            continue;
+        }
         let duration = last - first;
         anyhow::ensure!(
             (duration >= 15.0 || plan.mode == Mode::Conservation)
@@ -1215,7 +1451,9 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
         );
     }
     let pool_page_census = if plan.require_pool_page_census {
-        Some(pool_pages::audit(root, &plan, phases)?)
+        Some(
+            json!({"normal":pool_pages::audit(root, &plan, phases, "normal", None)?, "end":pool_pages::audit(root, &plan, phases, "end", execution["end_census_completed_at_elapsed_seconds"].as_f64())?}),
+        )
     } else {
         None
     };

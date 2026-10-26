@@ -191,6 +191,9 @@ where
     ///
     /// Ingress-only endpoints need no egress catalog. Route installation rejects a
     /// missing catalog on an egress; traffic never creates or enlarges it.
+    /// With `flow-evidence` and a run configured at setup, an optional observer
+    /// hashes actual copied egress payloads before put and records completion,
+    /// including failed puts. Observer costs stay inside the measured process.
     ///
     /// # Errors
     /// Rejects duplicate/wildcard addresses, invalid bounds or native route exhaustion.
@@ -201,7 +204,7 @@ where
         self.routes = Some(Arc::new(EgressCatalog::new::<T::Wire>(
             Arc::clone(self.transport.prepared_core()),
             routes,
-            None,
+            crate::flow_observation::prepared_copy_observer(&self.name, &self.authority),
         )?));
         self.receive_catalog = Some(
             routes

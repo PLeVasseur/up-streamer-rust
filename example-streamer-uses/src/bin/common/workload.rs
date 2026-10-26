@@ -5,7 +5,6 @@
 //! Endpoint construction, readiness and backend acknowledgements remain with the
 //! existing role's binding setup. This module has no middleware configuration,
 //! namespace management or OS-specific resource inspection.
-#![allow(dead_code)]
 use super::payloads::NativeContext;
 use async_trait::async_trait;
 use configurable_streamer_wire_support::prepared::{
@@ -29,7 +28,7 @@ use up_rust::{
 
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct WorkerPlan {
+pub struct WorkerPlan {
     /// Finite correctness run; receivers remain admitted through controller drain.
     #[serde(default)]
     pub finite_messages: Option<u32>,
@@ -552,7 +551,7 @@ where
     }
 }
 
-pub(crate) async fn classic<F, G>(
+pub async fn classic<F, G>(
     transport: Arc<dyn UTransport>,
     native: NativeContext,
     plan: WorkerPlan,
@@ -578,7 +577,7 @@ where
     .await
 }
 
-pub(crate) async fn native<T, F>(
+pub async fn native<T, F>(
     transport: Arc<PreparedSession<T>>,
     native: NativeContext,
     plan: WorkerPlan,
@@ -789,4 +788,37 @@ where
         return Err(failure("workload did not drain completely"));
     }
     Ok(())
+}
+
+/// Run the explicit controller-only finite sink plan on this existing endpoint.
+/// Ordinary role CLI behavior is unchanged when the environment is absent.
+pub async fn finite_sink(
+    transport: Arc<dyn UTransport>,
+    native: NativeContext,
+    source: UUri,
+) -> Result<bool, UStatus> {
+    let Some(path) = std::env::var_os("UPROTOCOL_FINITE_SINK_PLAN") else {
+        return Ok(false);
+    };
+    let plan = WorkerPlan::load(Path::new(&path))?;
+    if plan.finite_messages != Some(5)
+        || plan.replay.role != Role::PublisherSubscriber
+        || !plan.replay.require_fifo
+        || plan.replay.pending_limit != 4096
+    {
+        return Err(failure(
+            "finite sink requires the exact five-publication FIFO profile",
+        ));
+    }
+    classic(
+        transport,
+        native,
+        plan,
+        false,
+        Some((source, None)),
+        |_| Err(failure("passive finite sink must never originate traffic")),
+        || Ok(()),
+    )
+    .await?;
+    Ok(true)
 }

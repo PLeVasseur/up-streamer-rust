@@ -86,12 +86,27 @@ pub(crate) mod native {
     }
     pub(crate) struct NativeForward<C: PreparedTransportCore> {
         pub(crate) egress: Arc<EgressCatalog<C>>,
+        #[cfg(feature = "flow-evidence")]
+        pub(crate) label: Option<String>,
     }
     impl<C: PreparedTransportCore, F: Frame> HeaderHandler<F> for NativeForward<C> {
         async fn on_receive(&mut self, frame: HeaderLease<F>) {
             // EgressCatalog records both successful and failed copies. Unknown
             // payload identity stays opaque; no decoder or native borrow is formed.
-            let _ = self.egress.forward(&frame);
+            #[cfg(feature = "flow-evidence")]
+            let observation = self.label.as_deref().and_then(|label| {
+                crate::flow_observation::emit(crate::flow_observation::prepared(
+                    "ingress", label, &frame,
+                ));
+                crate::flow_observation::prepared("egress", label, &frame)
+            });
+            let result = self.egress.forward(&frame);
+            #[cfg(feature = "flow-evidence")]
+            if result.is_ok() {
+                crate::flow_observation::emit(observation);
+            }
+            #[cfg(not(feature = "flow-evidence"))]
+            let _ = result;
         }
     }
     pub(crate) async fn attach<T, H, M>(
@@ -490,11 +505,23 @@ pub(crate) mod owned {
     #[cfg(feature = "experimental-copy-minimized-routing")]
     pub(crate) struct NativeDestination<C: up_rust::PreparedTransportCore> {
         pub(crate) egress: Arc<crate::prepared_endpoint::EgressCatalog<C>>,
+        #[cfg(feature = "flow-evidence")]
+        pub(crate) label: Option<String>,
     }
     #[cfg(feature = "experimental-copy-minimized-routing")]
     impl<C: up_rust::PreparedTransportCore> Destination for NativeDestination<C> {
         async fn send(&mut self, frame: UOwnedFrame) -> Result<(), UStatus> {
-            self.egress.forward_owned(&frame).map_err(status)
+            #[cfg(feature = "flow-evidence")]
+            let observation = self.label.as_deref().and_then(|label| {
+                crate::flow_observation::emit(crate::flow_observation::frame(
+                    "ingress", label, &frame,
+                ));
+                crate::flow_observation::frame("egress", label, &frame)
+            });
+            self.egress.forward_owned(&frame).map_err(status)?;
+            #[cfg(feature = "flow-evidence")]
+            crate::flow_observation::emit(observation);
+            Ok(())
         }
     }
 

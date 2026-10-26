@@ -386,3 +386,104 @@ fn rejects_unbounded_or_zero_workload_settings_before_creating_a_writer() {
         assert!(crate::Reconciler::new(&options).is_err());
     }
 }
+
+fn someip_events() -> Vec<Event> {
+    let mut events = Vec::new();
+    for sequence in 1..=5 {
+        let mut message = publish(&format!("source-{sequence}"), sequence, false);
+        for (actor, kind, value) in &mut message {
+            let observation = if kind == "OP_EVENT" {
+                &mut value["observation"]
+            } else {
+                &mut *value
+            };
+            observation["encoding"] = json!(2);
+            observation["sha256"] = json!(format!("{sequence:064x}"));
+            if actor == "sink" {
+                observation["id"] = json!(format!("reconstructed-{sequence}"));
+            }
+            if actor == "sink" {
+                value["attributes_sha256"] = json!("c".repeat(64));
+            }
+        }
+        events.extend(message);
+    }
+    lifecycle(events)
+}
+
+fn someip_evaluate(events: Vec<Event>, enable: bool) -> Result<Report> {
+    let mut oracle = Oracle::new(Role::PublisherSubscriber, "fixture".into(), 32, 4096);
+    if enable {
+        oracle.enable_someip_finite();
+    }
+    for (index, (actor, kind, value)) in events.into_iter().enumerate() {
+        oracle.observe(Record {
+            ordinal: index as u64 + 1,
+            actor,
+            kind,
+            value,
+            context: Context {
+                run: "fixture".into(),
+                source_identity: "a".repeat(64),
+                plan_sha256: "b".repeat(64),
+            },
+        })?;
+    }
+    oracle.finish()
+}
+
+#[test]
+fn someip_finite_reports_original_and_reconstructed_ids() {
+    let report = someip_evaluate(someip_events(), true).unwrap();
+    assert_eq!(report.reconstructed_sink_ids.len(), 5);
+    assert_eq!(report.reconstructed_sink_ids["reconstructed-3"], "source-3");
+    assert_eq!(report.phases["normal"].processed, 5);
+    assert!(someip_evaluate(someip_events(), false).is_err());
+}
+
+#[test_case("sha256"; "payload")]
+#[test_case("source"; "source_uri")]
+#[test_case("encoding"; "encoding")]
+#[test_case("length"; "length")]
+#[test_case("id"; "duplicate_reconstructed_identity")]
+fn someip_finite_rejects_mutated_sink_observables(field: &str) {
+    let mut events = someip_events();
+    let (_, _, event) = events
+        .iter_mut()
+        .find(|(actor, _, event)| actor == "sink" && event["event"] == "receive")
+        .unwrap();
+    event["observation"][field] = if field == "length" || field == "encoding" {
+        json!(999)
+    } else {
+        json!("unmatched")
+    };
+    assert!(someip_evaluate(events, true).is_err());
+}
+
+#[test]
+fn someip_finite_rejects_disposition_attribute_mutation() {
+    let mut events = someip_events();
+    let (_, _, event) = events
+        .iter_mut()
+        .find(|(actor, _, event)| actor == "sink" && event["event"] == "processed")
+        .unwrap();
+    event["attributes_sha256"] = json!("d".repeat(64));
+    assert!(someip_evaluate(events, true).is_err());
+}
+
+#[test]
+fn someip_finite_rejects_missing_or_extra_delivery() {
+    let mut events = someip_events();
+    let index = events
+        .iter()
+        .position(|(actor, _, event)| actor == "sink" && event["event"] == "processed")
+        .unwrap();
+    let duplicate = events[index].clone();
+    events.insert(index, duplicate);
+    assert!(someip_evaluate(events, true).is_err());
+    let events = someip_events()
+        .into_iter()
+        .filter(|(actor, _, event)| !(actor == "sink" && event["event"] == "processed"))
+        .collect();
+    assert!(someip_evaluate(events, true).is_err());
+}

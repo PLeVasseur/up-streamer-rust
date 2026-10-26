@@ -171,6 +171,7 @@ fn probe_backing(
     index: usize,
     mapping: &Mapping,
     tool: &NativeTool<'_>,
+    label: &str,
 ) -> Result<BackingProbe> {
     use std::os::{fd::AsRawFd, unix::fs::MetadataExt};
     anyhow::ensure!(
@@ -216,7 +217,10 @@ fn probe_backing(
         resident == mapping.size,
         "native backing was not fully materialized before normal traffic"
     );
-    let raw_file = format!("pool-pages-{role}-{}-{index}.fincore.json", process.pid);
+    let raw_file = format!(
+        "pool-pages-{label}-{role}-{}-{index}.fincore.json",
+        process.pid
+    );
     let path = directory.join(&raw_file);
     anyhow::ensure!(!path.exists(), "native backing snapshot already exists");
     fs::write(&path, raw)?;
@@ -240,6 +244,7 @@ fn probe_backing(
     _: usize,
     _: &Mapping,
     _: &NativeTool<'_>,
+    _: &str,
 ) -> Result<BackingProbe> {
     Err(anyhow!("native backing-page measurements require Linux"))
 }
@@ -290,6 +295,7 @@ pub(super) fn capture(
     streams: &[Stream],
     plan_sha256: &str,
     elapsed: f64,
+    label: &str,
 ) -> Result<()> {
     let source: serde_json::Value = read(&root.join("source-manifest.json"))?;
     let tool = PathBuf::from(
@@ -339,7 +345,7 @@ pub(super) fn capture(
                     raw.len() <= 16 * 1024 * 1024 && process_identity(process.pid)? == identity,
                     "mapping census size or process identity changed"
                 );
-                let raw_file = format!("pool-pages-{role}-{}.smaps", process.pid);
+                let raw_file = format!("pool-pages-{label}-{role}-{}.smaps", process.pid);
                 let path = stream.directory.join(&raw_file);
                 anyhow::ensure!(!path.exists(), "mapping snapshot already exists");
                 fs::write(&path, &raw)?;
@@ -353,6 +359,7 @@ pub(super) fn capture(
                         index,
                         mapping,
                         &tool,
+                        label,
                     )?);
                 }
                 found |= !mappings.is_empty();
@@ -370,7 +377,7 @@ pub(super) fn capture(
         rows.push(Row { row, actors });
     }
     atomic_write_json(
-        &root.join("pool-page-census.json"),
+        &root.join(format!("pool-page-census-{label}.json")),
         &Census {
             schema: "uprotocol.pool-page-census.v2".into(),
             plan_sha256: plan_sha256.into(),
@@ -388,8 +395,10 @@ pub(super) fn audit(
     root: &Path,
     plan: &Plan,
     phases: &[serde_json::Value],
+    label: &str,
+    end_census_completed: Option<f64>,
 ) -> Result<serde_json::Value> {
-    let path = root.join("pool-page-census.json");
+    let path = root.join(format!("pool-page-census-{label}.json"));
     let census: Census = read(&path)?;
     anyhow::ensure!(
         census.schema == "uprotocol.pool-page-census.v2"
@@ -400,16 +409,26 @@ pub(super) fn audit(
         census.rows.iter().map(|r| &r.row).eq(plan.rows.iter()),
         "partial pool census"
     );
-    let warm = phases[0]["elapsed_seconds"]
-        .as_f64()
-        .context("warmup start")?
-        + plan.warmup_seconds as f64;
-    let normal = phases[1]["elapsed_seconds"]
-        .as_f64()
-        .context("normal start")?;
+    let (warm, normal) = match label {
+        "normal" => (
+            phases[0]["completed_at_elapsed_seconds"]
+                .as_f64()
+                .context("warmup end")?,
+            phases[1]["elapsed_seconds"]
+                .as_f64()
+                .context("normal start")?,
+        ),
+        "end" => (
+            phases[3]["completed_at_elapsed_seconds"]
+                .as_f64()
+                .context("drain end")?,
+            end_census_completed.context("missing pre-stop census completion")?,
+        ),
+        _ => return Err(anyhow!("invalid census boundary")),
+    };
     anyhow::ensure!(
         census.elapsed >= warm && census.elapsed <= normal,
-        "pool census is not after warmup before normal"
+        "pool census is outside its declared active-endpoint boundary"
     );
     let mut reports = Vec::new();
     for row in &census.rows {
@@ -443,7 +462,11 @@ pub(super) fn audit(
                 "pool process ownership mismatch"
             );
             anyhow::ensure!(
-                actor.raw_file == format!("pool-pages-{}-{}.smaps", actor.role, actor.process.pid),
+                actor.raw_file
+                    == format!(
+                        "pool-pages-{label}-{}-{}.smaps",
+                        actor.role, actor.process.pid
+                    ),
                 "invalid raw census locator"
             );
             let raw_path = directory.join(&actor.raw_file);
@@ -467,7 +490,7 @@ pub(super) fn audit(
                 anyhow::ensure!(
                     probe.raw_file
                         == format!(
-                            "pool-pages-{}-{}-{index}.fincore.json",
+                            "pool-pages-{label}-{}-{}-{index}.fincore.json",
                             actor.role, actor.process.pid
                         )
                         && probe.argv.len() == 6

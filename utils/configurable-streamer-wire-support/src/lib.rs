@@ -12,6 +12,8 @@
  ********************************************************************************/
 
 //! Explicit wire-specific endpoint construction and route installation for Streamer applications.
+#[cfg(feature = "zenoh-zero-copy")]
+mod allocation_observer;
 pub mod capacity;
 pub mod native_profile;
 pub mod payload_bytes;

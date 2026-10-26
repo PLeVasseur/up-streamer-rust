@@ -43,33 +43,36 @@ For optional iceoryx2 slice/allocation/subscriber/TX controls, see
 Those options are visible in every iceoryx2 frontend and applied to the real
 binding configuration with typed validation.
 
-The six `iceoryx2_*` and six `lola_*` entrypoints each contain their command-line fields and
-defaults, Tokio runtime, physical backend construction and concrete selected-wire
-constructors. The local `run_endpoint!` macro shows the five wire choices for
-both owned-frame and copy-minimized APIs. Native selection requires the supplied
+The six `iceoryx2_*` and six `lola_*` entrypoints retain their command-line fields,
+defaults, Tokio runtime and role-specific inputs. `common/endpoint.rs` owns the
+backend construction match and the five concrete wire choices for owned-frame
+and copy-minimized APIs. `common/backend.rs` shares classic binding constructors
+and the owned Zenoh wire selector. Native selection requires the supplied
 agreement; serialized selections construct their codecs directly.
 
 `src/bin/common/flow.rs` implements publication, notification and RPC over these
 configured transports. Payload generation, native identity checks, flow evidence,
 passive registration/readiness and sustained worker execution use the existing
-common modules. `endpoint_config.rs` validates reusable backend options; actual
-backend constructors remain in the entrypoint.
+common modules. `endpoint_config.rs` validates reusable backend options and
+delegates prepared-core setup to the binding-owned constructors. These helpers
+compile once in the example-support library rather than once in every role.
 
 LoLa roles retain their explicit primary/optional RPC-response channel settings.
 Reusable option validation requires a canonical complete MW COM manifest shared
-by both channels; each role constructs either a prepared native core or an owned
-`UTransportLola` endpoint locally. Hidden compatibility transport/role selectors and existing
+by both channels; the shared LoLa factory constructs either a prepared native
+core or an owned `UTransportLola` endpoint from those inputs. Hidden compatibility transport/role selectors and existing
 defaults remain available. See the
 [LoLa binding documentation](https://github.com/PLeVasseur/up-transport-lola-rust#readme)
 for physical sample configuration, setup and storage lifecycle requirements.
 
 ## DDS entrypoints
 
-Each of the six `dds_*` binaries declares its own parser/defaults, Tokio runtime,
-domain/origin/QoS configuration, carriage-family constructor and five encoded-owned
-wire choices. `common/dds.rs` receives those configured endpoints and shares the
-DDS message flow, payload/native validation, observations and workload handling.
-It does not parse arguments or construct the backend.
+Each of the six `dds_*` binaries declares its own parser/defaults, Tokio runtime
+and domain/origin/QoS inputs. It passes an explicit `common/dds.rs::DdsArgs` value
+to the shared DDS constructor and role runner. That module owns the carriage-family
+and five encoded-owned wire choices together with DDS message flow, payload/native
+validation, observations and workload handling. It does not depend on a binary's
+parser type.
 
 The existing `classic`, `owned-frame` and `encoded-owned` families, defaults and
 feature-gated workload option are unchanged. DDS encoded-owned is owned byte
@@ -118,8 +121,8 @@ identity. Broker storage/mapping/setup remain in the MQTT binding documentation.
 
 SOME/IP's six roles use the same codec-backed payload selection and shared classic
 flow with the ordinary `vsomeip-transport` feature. Each entrypoint keeps its native
-application config, URI validation, runtime and explicit
-`TransportConfig::new(payload_encoding)` setup. Its `--encoding` convention must
+application config, URI validation and runtime; the common backend factory applies
+the explicit `TransportConfig::new(payload_encoding)` setup. Its `--encoding` convention must
 agree at both endpoints and supports native/protobuf/xcdrv2/arrow/omgidl, defaulting
 to protobuf. Serialized modes need no native agreement. Existing configuration
 defaults remain relative to the owning Cargo manifest directory. Physical mapping,
@@ -127,7 +130,8 @@ native setup and the request/session/client-ID reconstruction boundary belong to
 the [SOME/IP binding](https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust#readme).
 
 All six Zenoh entrypoints retain their CLI/defaults, runtime, configuration and
-concrete backend/wire constructors while sharing actual message flow:
+role-specific URI/payload policies. Shared backend factories and wire selectors
+construct their endpoints, while the existing flows handle messages:
 
 - `common/classic.rs` owns delayed classic send iteration, timer payloads and
   admitted listeners awaiting process shutdown. Passive classic roles await

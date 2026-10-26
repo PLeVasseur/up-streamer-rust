@@ -93,6 +93,49 @@ impl Observation {
         }))
     }
 
+    /// Captures an admitted borrowed header and its opaque visible payload.
+    ///
+    /// This does not form a typed payload reference. Disabled evidence returns
+    /// before reading bytes; enabled evidence checks metadata/carrier presence.
+    ///
+    /// # Errors
+    /// Returns `InvalidArgument` for an absent actor or inconsistent presence.
+    pub fn header(
+        stage: &str,
+        route: Option<&str>,
+        header: &up_rust::RxHeader<'_>,
+        payload: Option<&[u8]>,
+    ) -> Result<Option<Self>, UStatus> {
+        let Ok(run) = std::env::var("UPROTOCOL_FLOW_EVIDENCE_RUN") else {
+            return Ok(None);
+        };
+        let actor = std::env::var("UPROTOCOL_FLOW_EVIDENCE_ACTOR")
+            .map_err(|_| invalid("flow evidence requires an explicit actor"))?;
+        if payload.is_some() != header.payload_encoding.is_some() {
+            return Err(invalid("observed header and carrier presence disagree"));
+        }
+        let bytes = payload.unwrap_or_default();
+        Ok(Some(Self {
+            schema: 1,
+            run,
+            actor,
+            stage: stage.into(),
+            route: route.map(str::to_owned),
+            id: header.id.to_hyphenated_string(),
+            reqid: header
+                .reqid
+                .as_ref()
+                .map(|value| value.to_hyphenated_string()),
+            kind: format!("{:?}", header.kind),
+            source: header.source.to_uri(false),
+            sink: header.sink.as_ref().map(|value| value.to_uri(false)),
+            encoding: header.payload_encoding.map(|value| value.id()),
+            present: payload.is_some(),
+            length: bytes.len(),
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+        }))
+    }
+
     /// Projects a classic message's metadata and captures its visible payload.
     ///
     /// Returns `None` when evidence is disabled, or an error if metadata projection
@@ -329,5 +372,174 @@ mod tests {
             true
         )
         .is_err());
+    }
+}
+
+#[cfg(test)]
+mod borrowed_header_tests {
+    use super::*;
+    use up_rust::{
+        HeaderAdmission, HeaderLimits, PayloadEncoding, StableContainerWire,
+        UFrameFieldsMetadataCodec, UUri, UWireMetadataCodec, UWireMetadataContext,
+    };
+
+    #[test]
+    fn admitted_header_matches_existing_capture_and_rejects_wrong_presence() {
+        let old_run = std::env::var_os("UPROTOCOL_FLOW_EVIDENCE_RUN");
+        let old_actor = std::env::var_os("UPROTOCOL_FLOW_EVIDENCE_ACTOR");
+        std::env::set_var("UPROTOCOL_FLOW_EVIDENCE_RUN", "borrowed-header-unit");
+        std::env::set_var("UPROTOCOL_FLOW_EVIDENCE_ACTOR", "bridge");
+        for (encoding, payload) in [
+            (None, None),
+            (Some(PayloadEncoding::PROTOBUF), Some(&b""[..])),
+            (
+                Some(PayloadEncoding::PROTOBUF),
+                Some(&b"actual payload"[..]),
+            ),
+            (
+                Some(PayloadEncoding::CONTRACT_DEFINED),
+                Some(&b"opaque"[..]),
+            ),
+        ] {
+            let source = UUri::try_from_parts("source", 0x1234, 1, 0x8001).unwrap();
+            let mut builder = UFrameMetadata::publish(source);
+            if let Some(encoding) = encoding {
+                builder = builder.with_payload_encoding(encoding);
+            }
+            if encoding == Some(PayloadEncoding::CONTRACT_DEFINED) {
+                builder =
+                    builder.with_native_type_token(up_rust::NativeTypeToken::from_u32(0x51ab_1234));
+            }
+            let metadata = builder.build().unwrap();
+            let context =
+                UWireMetadataContext::from_wire::<StableContainerWire, UFrameFieldsMetadataCodec>();
+            let bytes = UFrameFieldsMetadataCodec
+                .encode_frame_metadata(context, &metadata)
+                .unwrap();
+            let admission =
+                HeaderAdmission::for_wire::<StableContainerWire>(HeaderLimits::default()).unwrap();
+            let header =
+                up_rust::parse_header(admission.prefix(), &bytes, &HeaderLimits::default())
+                    .unwrap();
+            let expected = Observation::capture(
+                "ingress",
+                Some("native-a -> native-b"),
+                &metadata,
+                payload.map_or(0, <[u8]>::len),
+                [payload.unwrap_or_default()],
+            )
+            .unwrap();
+            assert_eq!(
+                Observation::header("ingress", Some("native-a -> native-b"), &header, payload)
+                    .unwrap(),
+                expected
+            );
+            let wrong = if payload.is_some() {
+                None
+            } else {
+                Some(&b""[..])
+            };
+            assert!(Observation::header("ingress", None, &header, wrong).is_err());
+        }
+        match old_run {
+            Some(value) => std::env::set_var("UPROTOCOL_FLOW_EVIDENCE_RUN", value),
+            None => std::env::remove_var("UPROTOCOL_FLOW_EVIDENCE_RUN"),
+        }
+        match old_actor {
+            Some(value) => std::env::set_var("UPROTOCOL_FLOW_EVIDENCE_ACTOR", value),
+            None => std::env::remove_var("UPROTOCOL_FLOW_EVIDENCE_ACTOR"),
+        }
+    }
+}
+
+/// Observation of an initialized payload borrowed from the actual egress loan.
+///
+/// This is recorded before native publication, so a later failed put does not
+/// erase the copy. `egress` names the configured endpoint, not an ingress route.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PayloadCopyObservation {
+    schema: u32,
+    run: String,
+    egress: String,
+    id: String,
+    boundary: String,
+    copied_payload_bytes: usize,
+    payload_slice_copies: u8,
+    present: bool,
+    sha256: String,
+}
+impl PayloadCopyObservation {
+    /// Hashes the synchronously borrowed initialized egress payload.
+    ///
+    /// No typed reference is formed and no bytes are retained. Absent and
+    /// present-empty payloads have different presence and copy counts.
+    pub fn capture(run: &str, egress: &str, id: &up_rust::UUID, payload: Option<&[u8]>) -> Self {
+        let bytes = payload.unwrap_or_default();
+        Self {
+            schema: 1,
+            run: run.into(),
+            egress: egress.into(),
+            id: id.to_hyphenated_string(),
+            boundary: "ingress_to_egress_loan".into(),
+            copied_payload_bytes: bytes.len(),
+            payload_slice_copies: u8::from(payload.is_some()),
+            present: payload.is_some(),
+            sha256: format!("{:x}", Sha256::digest(bytes)),
+        }
+    }
+    /// Emits one raw copy record; formatting and hashing costs belong to the process.
+    pub fn emit(&self) {
+        match serde_json::to_string(self) {
+            Ok(record) => eprintln!("FLOW_PAYLOAD_COPY {record}"),
+            Err(error) => eprintln!("FLOW_EVIDENCE_ERROR {error}"),
+        }
+    }
+}
+#[cfg(test)]
+mod copied_payload_tests {
+    use super::*;
+    #[test]
+    fn actual_copy_record_preserves_presence_extent_and_independent_known_digest() {
+        let id = up_rust::UUID::build();
+        let absent = PayloadCopyObservation::capture("run", "egress", &id, None);
+        let empty = PayloadCopyObservation::capture("run", "egress", &id, Some(b""));
+        let copied = PayloadCopyObservation::capture("run", "egress", &id, Some(b"abc"));
+        assert_eq!(
+            (
+                absent.present,
+                absent.copied_payload_bytes,
+                absent.payload_slice_copies
+            ),
+            (false, 0, 0)
+        );
+        assert_eq!(
+            (
+                empty.present,
+                empty.copied_payload_bytes,
+                empty.payload_slice_copies
+            ),
+            (true, 0, 1)
+        );
+        assert_eq!(
+            (
+                copied.present,
+                copied.copied_payload_bytes,
+                copied.payload_slice_copies
+            ),
+            (true, 3, 1)
+        );
+        assert_eq!(
+            copied.sha256,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(absent.sha256, empty.sha256);
+        assert_ne!(absent, empty);
+        assert_eq!(
+            serde_json::from_str::<PayloadCopyObservation>(
+                &serde_json::to_string(&copied).unwrap()
+            )
+            .unwrap(),
+            copied
+        );
     }
 }

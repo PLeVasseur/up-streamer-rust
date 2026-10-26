@@ -18,6 +18,7 @@ struct Fact {
     attributes: Option<String>,
     sequence: Option<u64>,
     phase: Option<String>,
+    reconstructed_sink: bool,
 }
 
 #[derive(Default)]
@@ -42,6 +43,7 @@ pub(crate) struct Counts {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Report {
+    pub reconstructed_sink_ids: BTreeMap<String, String>,
     pub reordered_receipts: u64,
     pub maximum_reorder_distance: u64,
     pub phases: BTreeMap<String, Counts>,
@@ -54,6 +56,9 @@ pub(crate) struct Report {
 }
 
 pub(crate) struct Oracle {
+    someip_finite: bool,
+    reconstructed_sink_ids: BTreeMap<String, String>,
+    reconstructed_attributes: BTreeMap<String, String>,
     require_fifo: bool,
     reordered: u64,
     reorder_distance: u64,
@@ -86,7 +91,7 @@ fn equal(left: &Fact, right: &Fact) -> Result<()> {
     let b = &right.observation;
     ensure!(
         a.run == b.run
-            && a.id == b.id
+            && (a.id == b.id || right.reconstructed_sink)
             && a.reqid == b.reqid
             && a.kind == b.kind
             && a.source == b.source
@@ -98,6 +103,9 @@ fn equal(left: &Fact, right: &Fact) -> Result<()> {
         "message identity, metadata or payload changed"
     );
     if let (Some(a), Some(b)) = (&left.attributes, &right.attributes) {
+        if right.reconstructed_sink {
+            return Ok(());
+        }
         ensure!(a == b, "complete attributes changed");
     }
     Ok(())
@@ -173,6 +181,9 @@ impl Oracle {
         require_fifo: bool,
     ) -> Self {
         Self {
+            someip_finite: false,
+            reconstructed_sink_ids: BTreeMap::new(),
+            reconstructed_attributes: BTreeMap::new(),
             require_fifo,
             reordered: 0,
             reorder_distance: 0,
@@ -338,7 +349,66 @@ impl Oracle {
                 && crate::artifact::is_digest(&observation.sha256),
             "invalid payload observation"
         );
-        let id = observation.id.clone();
+        let mut id = observation.id.clone();
+        let reconstructed_sink = self.someip_finite && record.actor == "sink";
+        if reconstructed_sink {
+            ensure!(
+                operation
+                    && ["receive", "processed"].contains(&stage.as_str())
+                    && observation.kind == "Publish"
+                    && observation.encoding == Some(2)
+                    && observation.reqid.is_none()
+                    && observation.sink.is_none()
+                    && observation.present,
+                "SOME/IP finite policy is only for protobuf publication receipts"
+            );
+            let attributes = value["attributes_sha256"]
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("missing sink attributes"))?;
+            if let Some(previous) = self.reconstructed_attributes.get(&id) {
+                ensure!(
+                    previous == attributes,
+                    "sink attributes changed between receive and disposition"
+                );
+            } else {
+                self.reconstructed_attributes
+                    .insert(id.clone(), attributes.into());
+            }
+            if let Some(canonical) = self.reconstructed_sink_ids.get(&id) {
+                id = canonical.clone();
+            } else {
+                let matches: Vec<_> = self
+                    .pending
+                    .iter()
+                    .filter(|(_, entry)| {
+                        entry.get("source", "offer").is_some_and(|fact| {
+                            let a = &fact.observation;
+                            a.sha256 == observation.sha256
+                                && a.length == observation.length
+                                && a.source == observation.source
+                                && a.encoding == observation.encoding
+                                && a.kind == observation.kind
+                                && a.present == observation.present
+                        })
+                    })
+                    .map(|(key, _)| key.clone())
+                    .collect();
+                ensure!(
+                    matches.len() == 1 && self.reconstructed_sink_ids.len() < 5,
+                    "ambiguous or foreign reconstructed finite publication"
+                );
+                let canonical = matches[0].clone();
+                ensure!(
+                    !self
+                        .reconstructed_sink_ids
+                        .values()
+                        .any(|v| v == &canonical),
+                    "duplicate reconstructed publication"
+                );
+                self.reconstructed_sink_ids.insert(id, canonical.clone());
+                id = canonical;
+            }
+        }
         ensure!(
             !id.is_empty() && id.len() <= 128,
             "invalid message identity"
@@ -369,6 +439,7 @@ impl Oracle {
         }
         ensure!(!self.retired.contains(&id), "duplicate completed message");
         let fact = Fact {
+            reconstructed_sink,
             observation,
             attributes: value
                 .get("attributes_sha256")
@@ -615,7 +686,19 @@ impl Oracle {
         self.pending.len()
     }
 
+    pub fn enable_someip_finite(&mut self) {
+        self.someip_finite = true;
+    }
+
     pub fn finish(self) -> Result<Report> {
+        if self.someip_finite {
+            ensure!(
+                self.sequence == 5
+                    && self.reconstructed_sink_ids.len() == 5
+                    && self.phases.values().map(|c| c.processed).sum::<u64>() == 5,
+                "SOME/IP finite denominator must remain exactly five"
+            );
+        }
         ensure!(
             self.pending.is_empty() && self.receive_order.iter().all(VecDeque::is_empty),
             "unaccounted or foreign messages remain"
@@ -647,6 +730,7 @@ impl Oracle {
             );
         }
         Ok(Report {
+            reconstructed_sink_ids: self.reconstructed_sink_ids,
             reordered_receipts: self.reordered,
             maximum_reorder_distance: self.reorder_distance,
             phases: self.phases,

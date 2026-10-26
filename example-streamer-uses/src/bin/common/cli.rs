@@ -1,8 +1,6 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-#![allow(dead_code)]
-
 #[cfg(feature = "vsomeip-transport")]
 use std::fs::canonicalize;
 #[cfg(feature = "vsomeip-transport")]
@@ -39,35 +37,35 @@ fn parse_unsigned(flag: &str, raw: &str, expected: &str, max: u128) -> Result<u1
     Ok(parsed)
 }
 
-pub(crate) fn parse_u32_flag(flag: &str, raw: &str) -> Result<u32, String> {
+pub fn parse_u32_flag(flag: &str, raw: &str) -> Result<u32, String> {
     parse_unsigned(flag, raw, "u32", u32::MAX as u128).map(|value| value as u32)
 }
 
-pub(crate) fn parse_u16_flag(flag: &str, raw: &str) -> Result<u16, String> {
+pub fn parse_u16_flag(flag: &str, raw: &str) -> Result<u16, String> {
     parse_unsigned(flag, raw, "u16", u16::MAX as u128).map(|value| value as u16)
 }
 
-pub(crate) fn parse_u8_flag(flag: &str, raw: &str) -> Result<u8, String> {
+pub fn parse_u8_flag(flag: &str, raw: &str) -> Result<u8, String> {
     parse_unsigned(flag, raw, "u8", u8::MAX as u128).map(|value| value as u8)
 }
 
-pub(crate) fn invalid_argument_status(message: impl Into<String>) -> UStatus {
+pub fn invalid_argument_status(message: impl Into<String>) -> UStatus {
     UStatus::fail_with_code(UCode::InvalidArgument, message.into())
 }
 
-pub(crate) fn parse_u32_status(flag: &str, raw: &str) -> Result<u32, UStatus> {
+pub fn parse_u32_status(flag: &str, raw: &str) -> Result<u32, UStatus> {
     parse_u32_flag(flag, raw).map_err(invalid_argument_status)
 }
 
-pub(crate) fn parse_u16_status(flag: &str, raw: &str) -> Result<u16, UStatus> {
+pub fn parse_u16_status(flag: &str, raw: &str) -> Result<u16, UStatus> {
     parse_u16_flag(flag, raw).map_err(invalid_argument_status)
 }
 
-pub(crate) fn parse_u8_status(flag: &str, raw: &str) -> Result<u8, UStatus> {
+pub fn parse_u8_status(flag: &str, raw: &str) -> Result<u8, UStatus> {
     parse_u8_flag(flag, raw).map_err(invalid_argument_status)
 }
 
-pub(crate) fn build_uuri(
+pub fn build_uuri(
     authority: &str,
     uentity: u32,
     uversion: u8,
@@ -82,7 +80,7 @@ pub(crate) fn build_uuri(
 
 #[cfg(feature = "vsomeip-transport")]
 #[allow(dead_code)]
-pub(crate) fn canonicalize_cli_path(flag: &str, raw: &str) -> Result<PathBuf, UStatus> {
+pub fn canonicalize_cli_path(flag: &str, raw: &str) -> Result<PathBuf, UStatus> {
     canonicalize(PathBuf::from(raw)).map_err(|error| {
         invalid_argument_status(format!(
             "invalid value for {flag}: '{raw}' (expected an existing file path): {error}"

@@ -12,7 +12,7 @@
  ********************************************************************************/
 
 //! Send uProtocol RPC requests using the selected Zenoh endpoint API and wire.
-mod common;
+use example_streamer_uses::common;
 
 use clap::{Parser, ValueEnum};
 use common::cli;
@@ -37,7 +37,7 @@ use up_rust::{
 };
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
-    UPTransportZenoh, ZenohOwnedCore, ZenohPreparedConfig,
+    ZenohPreparedConfig,
 };
 use up_wire_arrow::ArrowWire;
 use up_wire_omgidl::OmgIdlWire;
@@ -166,7 +166,7 @@ async fn main() -> Result<(), UStatus> {
 
     let client_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
     let client: Arc<dyn UTransport> = Arc::new(
-        UPTransportZenoh::new(zenoh_config, client_uuri.to_string())
+        common::backend::zenoh(zenoh_config, client_uuri.to_string())
             .await
             .unwrap(),
     );
@@ -308,87 +308,23 @@ async fn run_selected_wire_client(
         };
     }
 
-    match args.encoding {
-        Encoding::Native => {
-            let transport = Arc::new(
-                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
-                    .await?
-                    .into_stable_container_transport(args.native.agreement()?.clone()),
-            ) as Arc<dyn UOwnedTransport>;
-            run_owned_selected_client(
-                &transport,
-                args,
-                source,
-                sink,
-                response_source_filter,
-                response_sink_filter,
-            )
-            .await
-        }
-        Encoding::Protobuf => {
-            let transport = Arc::new(
-                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
-                    .await?
-                    .with_selected_wire(ProtobufWire),
-            ) as Arc<dyn UOwnedTransport>;
-            run_owned_selected_client(
-                &transport,
-                args,
-                source,
-                sink,
-                response_source_filter,
-                response_sink_filter,
-            )
-            .await
-        }
-        Encoding::Xcdrv2 => {
-            let transport = Arc::new(
-                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
-                    .await?
-                    .with_selected_wire(XcdrV2Wire),
-            ) as Arc<dyn UOwnedTransport>;
-            run_owned_selected_client(
-                &transport,
-                args,
-                source,
-                sink,
-                response_source_filter,
-                response_sink_filter,
-            )
-            .await
-        }
-        Encoding::Arrow => {
-            let transport = Arc::new(
-                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
-                    .await?
-                    .with_selected_wire(ArrowWire),
-            ) as Arc<dyn UOwnedTransport>;
-            run_owned_selected_client(
-                &transport,
-                args,
-                source,
-                sink,
-                response_source_filter,
-                response_sink_filter,
-            )
-            .await
-        }
-        Encoding::Omgidl => {
-            let transport = Arc::new(
-                ZenohOwnedCore::new(zenoh_config, local_uri.to_string())
-                    .await?
-                    .with_selected_wire(OmgIdlWire),
-            ) as Arc<dyn UOwnedTransport>;
-            run_owned_selected_client(
-                &transport,
-                args,
-                source,
-                sink,
-                response_source_filter,
-                response_sink_filter,
-            )
-            .await
-        }
+    {
+        let transport = common::backend::zenoh_owned_selected(
+            zenoh_config,
+            local_uri.to_string(),
+            args.encoding.into(),
+            &args.native,
+        )
+        .await?;
+        run_owned_selected_client(
+            &transport,
+            args,
+            source,
+            sink,
+            response_source_filter,
+            response_sink_filter,
+        )
+        .await
     }
 }
 
@@ -522,4 +458,16 @@ impl Args {
 
 fn invalid_config(message: impl Into<String>) -> UStatus {
     UStatus::fail_with_code(UCode::InvalidArgument, message.into())
+}
+
+impl From<Encoding> for common::encoding::Encoding {
+    fn from(value: Encoding) -> Self {
+        match value {
+            Encoding::Native => Self::Native,
+            Encoding::Protobuf => Self::Protobuf,
+            Encoding::Xcdrv2 => Self::Xcdrv2,
+            Encoding::Arrow => Self::Arrow,
+            Encoding::Omgidl => Self::Omgidl,
+        }
+    }
 }

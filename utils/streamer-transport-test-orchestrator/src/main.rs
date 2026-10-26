@@ -82,7 +82,9 @@ const DDS_MIN_UNPRIVILEGED_PORT: i32 = 1_024;
 const DDS_PORT_MODULUS: i32 = 65_536;
 const SUMMARY_SCHEMA_VERSION: &str = "6.0";
 const CHECKPOINT_SCHEMA_VERSION: &str = "1.0";
+mod allocation;
 mod direct;
+mod lane;
 mod native_controls;
 mod native_generation;
 mod prepared;
@@ -1413,18 +1415,19 @@ impl ResourcePeaks {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    if cli.direct_pairs {
-        return direct::run(&cli);
-    }
-    if cli.single_type_controls {
-        return native_controls::run(&cli);
-    }
-    if let Some(root) = &cli.replay_soak {
-        println!("{}", serde_json::to_string_pretty(&soak::audit(root)?)?);
-        return Ok(());
-    }
-    if cli.soak.is_some() {
-        return soak::run(&cli);
+    match lane::select(&cli)? {
+        lane::Selection::DirectPeers => return direct::run(&cli),
+        lane::Selection::SingleTypeControls => return native_controls::run(&cli),
+        lane::Selection::ReplaySustained => {
+            let root = cli
+                .replay_soak
+                .as_ref()
+                .context("selected replay input missing")?;
+            println!("{}", serde_json::to_string_pretty(&soak::audit(root)?)?);
+            return Ok(());
+        }
+        lane::Selection::Sustained => return soak::run(&cli),
+        lane::Selection::Matrix | lane::Selection::ReplayWorkload => {}
     }
     if let Some(directory) = &cli.replay_workload {
         if cli.list
@@ -4821,6 +4824,7 @@ fn run_row_attempt(
             });
         }
         timings.streamer_readiness_us = duration_us(streamer_started.elapsed());
+        allocation::snapshot(&row_dir, "ready-before-first-send", 3)?;
         atomic_write(&source_start_file, b"START\n")?;
 
         if requires_vsomeip_subscription_acceptance(row) {
@@ -4886,6 +4890,7 @@ fn run_row_attempt(
         );
         timings.validation_us = duration_us(validation_started.elapsed());
         validation?;
+        allocation::snapshot(&row_dir, "completed-before-cleanup", 3)?;
         let teardown_started = Instant::now();
         terminate(&mut passive)?;
         terminate(&mut active)?;
@@ -7154,23 +7159,33 @@ fn spawn_process(
     let log_path = artifact_dir.join(format!("{name}.log"));
     let stdout = log_file(&log_path)?;
     let stderr = stdout.try_clone()?;
+    let observation = allocation::Launch::configured(artifact_dir, name)?;
+    let observed_executable = observation
+        .as_ref()
+        .map_or(executable, allocation::Launch::program);
     let mut command = if let Some(namespace) = namespace {
         let mut command = Command::new(bundle.executable("nsenter")?);
         command
             .arg("-t")
             .arg(namespace.child.id().to_string())
             .args(["-U", "--preserve-credentials", "-m", "-n", "-i", "--"])
-            .arg(executable);
+            .arg(observed_executable);
         command
     } else {
-        Command::new(executable)
+        Command::new(observed_executable)
     };
+    if let Some(observation) = &observation {
+        command.args(observation.prefix(executable));
+    }
     command
         .current_dir(workdir)
         .args(args)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
     configure_matrix_environment(&mut command, env);
+    if let Some(observation) = &observation {
+        observation.environment(&mut command);
+    }
     let launched = RunningProcess::spawn(&mut command, name, log_path).with_context(|| {
         format!(
             "unable to spawn {name}: {} {}",
@@ -7944,9 +7959,33 @@ fn stage_run_bundle_with_type(
     rows: &[MatrixRow],
     single_type: Option<&str>,
 ) -> Result<RunBundle> {
+    stage_run_bundle_with_workers(
+        repo_root,
+        target_directory,
+        artifacts_root,
+        rows,
+        single_type,
+        &[],
+    )
+}
+
+fn stage_run_bundle_with_workers(
+    repo_root: &Path,
+    target_directory: &Path,
+    artifacts_root: &Path,
+    rows: &[MatrixRow],
+    single_type: Option<&str>,
+    additional_matrix_executables: &[&str],
+) -> Result<RunBundle> {
     let root = artifacts_root.join("run-bundle");
     let mut inputs = Vec::new();
-    for name in required_matrix_executables(rows) {
+    let mut matrix_executables = required_matrix_executables(rows);
+    matrix_executables.extend(
+        additional_matrix_executables
+            .iter()
+            .map(|name| (*name).to_owned()),
+    );
+    for name in matrix_executables {
         inputs.push((
             BundleFileKind::MatrixExecutable,
             name.clone(),

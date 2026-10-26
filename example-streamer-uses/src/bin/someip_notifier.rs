@@ -12,7 +12,7 @@
  ********************************************************************************/
 
 //! Send directed uProtocol notifications using a configured native SOME/IP application.
-mod common;
+use example_streamer_uses::common;
 
 use clap::Parser;
 use common::cli;
@@ -21,7 +21,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, trace, warn};
 use up_rust::{PayloadEncoding, UCode, UMessageBuilder, UStatus, UTransport};
-use up_transport_vsomeip::{TransportConfig, UPTransportVsomeip};
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
 const DEFAULT_UENTITY: &str = "0x5BA0";
@@ -96,12 +95,11 @@ async fn main() -> Result<(), UStatus> {
     let local_uuri = cli::build_uuri(&args.uauthority, uentity, uversion, 0)?;
     let payload_encoding = payload_encoding(&args)?;
     let notifier: Arc<dyn UTransport> = Arc::new(
-        UPTransportVsomeip::new_with_config_and_transport_config(
+        common::backend::someip(
             local_uuri,
             &args.remote_authority,
             &vsomeip_config,
-            None,
-            TransportConfig::new(payload_encoding),
+            payload_encoding,
         )
         .unwrap(),
     );

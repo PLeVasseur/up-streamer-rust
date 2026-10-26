@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Optional controller-owned startup and source-lifetime barriers for finite roles.
-#![allow(dead_code)]
 
 use std::{io::Read, path::Path, time::Duration};
 use up_rust::{UCode, UStatus};
@@ -9,7 +8,7 @@ use up_rust::{UCode, UStatus};
 /// Completes once before source traffic. Without the explicit controller file,
 /// ordinary examples retain their existing startup behavior. No sample warms a
 /// publisher or RPC client while waiting for the native peers to become ready.
-pub(crate) async fn wait_for_start() -> Result<(), UStatus> {
+pub async fn wait_for_start() -> Result<(), UStatus> {
     static STARTED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
     STARTED
         .get_or_try_init(|| async {
@@ -30,7 +29,7 @@ async fn wait_for_release(path: &Path, timeout: Duration) -> Result<(), UStatus>
 /// Retains the finite source endpoint after publication until its controller
 /// observes receiver completion. No extra traffic or fixed keepalive delay is used.
 /// Ordinary examples omit the variable and keep their existing exit behavior.
-pub(crate) async fn wait_for_completion() -> Result<(), UStatus> {
+pub async fn wait_for_completion() -> Result<(), UStatus> {
     let Some(path) = std::env::var_os("UPROTOCOL_SOURCE_FINISH_FILE") else {
         return Ok(());
     };

@@ -1,9 +1,8 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
-//! Shared role behavior over configured transports. Entrypoints own CLI, binding
-//! construction and concrete wire selection; passive readiness, payload identity,
+//! Shared role behavior over configured transports. Entrypoints own their CLI
+//! and configuration; shared backend factories select wires. Passive readiness, payload identity,
 //! RPC correlation and evidence stay on the same flow for owned and native APIs.
-#![allow(dead_code)]
 
 use std::{sync::Arc, time::Duration};
 
@@ -24,20 +23,20 @@ use super::payloads::{
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum FlowMode {
+pub enum FlowMode {
     CopyMinimized,
     OwnedFrame,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum FlowTransport {
+pub enum FlowTransport {
     Zenoh,
     Iceoryx2,
     Lola,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum FlowWireFormat {
+pub enum FlowWireFormat {
     Native,
     Protobuf,
     Xcdrv2,
@@ -46,7 +45,7 @@ pub(crate) enum FlowWireFormat {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum FlowRole {
+pub enum FlowRole {
     PubSender,
     PubReceiver,
     NotifySender,
@@ -57,7 +56,7 @@ pub(crate) enum FlowRole {
 
 /// Repetition policy for finite connectivity sends of one prepared message.
 #[derive(Clone, Copy)]
-pub(crate) struct SendOptions {
+pub struct SendOptions {
     pub count: usize,
     pub interval: Option<Duration>,
 }
@@ -72,7 +71,7 @@ impl From<&FlowConfig> for SendOptions {
 }
 
 #[derive(Clone)]
-pub(crate) struct FlowConfig {
+pub struct FlowConfig {
     pub native: NativeContext,
     pub wire_format: FlowWireFormat,
     pub role: FlowRole,
@@ -94,14 +93,14 @@ pub(crate) struct FlowConfig {
 }
 
 impl FlowConfig {
-    pub(crate) fn local_endpoint(&self) -> Result<UUri, UStatus> {
+    pub fn local_endpoint(&self) -> Result<UUri, UStatus> {
         UUri::try_from_parts(&self.local_authority, self.ue_id, self.ue_version_major, 0)
             .map_err(|error| invalid(error.to_string()))
     }
 
     // The existing examples use one fixture entity independently of the backend's
     // local registration URI. Keep that distinction when sharing their flow.
-    pub(crate) fn uri(&self, authority: &str, resource: u16) -> Result<UUri, UStatus> {
+    pub fn uri(&self, authority: &str, resource: u16) -> Result<UUri, UStatus> {
         UUri::try_from_parts(authority, 0x5BA0, 1, resource)
             .map_err(|error| invalid(error.to_string()))
     }
@@ -129,7 +128,7 @@ impl FlowConfig {
         })
     }
 
-    pub(crate) fn encoding(&self) -> Result<PayloadEncoding, UStatus> {
+    pub fn encoding(&self) -> Result<PayloadEncoding, UStatus> {
         Ok(match self.wire_format {
             FlowWireFormat::Native => self.native.encoding()?,
             FlowWireFormat::Protobuf => up_rust::ProtobufWire::encoding(),
@@ -139,7 +138,7 @@ impl FlowConfig {
         })
     }
 
-    pub(crate) fn payload(&self, sequence: u32, workload: bool) -> Result<Vec<u8>, UStatus> {
+    pub fn payload(&self, sequence: u32, workload: bool) -> Result<Vec<u8>, UStatus> {
         #[cfg(feature = "payload-contract-large-fixtures")]
         if let Some(fixture) = self.native.fixture() {
             if !workload || self.wire_format != FlowWireFormat::Native {
@@ -221,7 +220,7 @@ impl FlowConfig {
         )
     }
 
-    pub(crate) fn alignment(&self) -> usize {
+    pub fn alignment(&self) -> usize {
         if self.wire_format == FlowWireFormat::Native {
             native_payload_alignment()
         } else {
@@ -247,14 +246,14 @@ impl FlowConfig {
     }
 }
 
-pub(crate) async fn run_owned(
+pub async fn run_owned(
     transport: Arc<dyn UOwnedTransport>,
     config: &FlowConfig,
 ) -> Result<(), UStatus> {
     run_owned_with_ready(transport, config, super::receive::listener_ready).await
 }
 
-pub(crate) async fn run_owned_with_ready(
+pub async fn run_owned_with_ready(
     transport: Arc<dyn UOwnedTransport>,
     config: &FlowConfig,
     ready: fn(),
@@ -340,7 +339,7 @@ pub(crate) async fn run_owned_with_ready(
     Ok(())
 }
 
-pub(crate) async fn run_native<T>(transport: Arc<T>, config: &FlowConfig) -> Result<(), UStatus>
+pub async fn run_native<T>(transport: Arc<T>, config: &FlowConfig) -> Result<(), UStatus>
 where
     T: PreparedEndpoint,
     T::Core: NativeSetupReady,
@@ -348,7 +347,7 @@ where
     run_native_with_ready(transport, config, super::receive::listener_ready).await
 }
 
-pub(crate) async fn run_native_with_ready<T>(
+pub async fn run_native_with_ready<T>(
     transport: Arc<T>,
     config: &FlowConfig,
     ready: fn(),
@@ -523,7 +522,7 @@ async fn send_owned(
     .await
 }
 
-pub(crate) async fn send_owned_repeated(
+pub async fn send_owned_repeated(
     transport: &Arc<dyn UOwnedTransport>,
     metadata: UFrameMetadata,
     payload: &[u8],
@@ -553,7 +552,7 @@ where
     super::proof::send_prepared(transport.as_ref(), &metadata, payload)
 }
 
-pub(crate) async fn send_native_repeated<T>(
+pub async fn send_native_repeated<T>(
     transport: &Arc<PreparedSession<T>>,
     metadata: UFrameMetadata,
     payload: &[u8],
@@ -575,7 +574,7 @@ where
     Ok(())
 }
 
-pub(crate) async fn receive_owned_pull(
+pub async fn receive_owned_pull(
     transport: &Arc<dyn UOwnedTransport>,
     source: &UUri,
     sink: Option<&UUri>,
@@ -614,7 +613,7 @@ pub(crate) async fn receive_owned_pull(
     }
 }
 
-pub(crate) async fn receive_native_pull<T>(
+pub async fn receive_native_pull<T>(
     transport: &Arc<PreparedSession<T>>,
     source: &UUri,
     sink: Option<&UUri>,
@@ -661,7 +660,7 @@ fn observed_receive(role: FlowRole, size: usize) {
         role_name(role)
     );
 }
-pub(crate) fn invalid(message: impl Into<String>) -> UStatus {
+pub fn invalid(message: impl Into<String>) -> UStatus {
     UStatus::fail_with_code(UCode::InvalidArgument, message.into())
 }
 
@@ -696,6 +695,38 @@ mod tests {
             #[cfg(feature = "sustained-workload")]
             workload_plan: None,
         }
+    }
+
+    #[cfg(feature = "sustained-workload")]
+    #[test]
+    fn finite_publications_encode_five_distinct_protobuf_sequences() {
+        use protobuf::Message;
+        use std::collections::BTreeSet;
+        let settings = config();
+        let mut payloads = BTreeSet::new();
+        let mut identifiers = BTreeSet::new();
+        for sequence in 1..=5 {
+            let message = settings.workload_message(sequence).unwrap();
+            let bytes = message.payload().unwrap();
+            let decoded =
+                hello_world_protos::hello_world_service::HelloRequest::parse_from_bytes(&bytes)
+                    .unwrap();
+            assert_eq!(decoded.name, format!("sample:{sequence}"));
+            assert!(payloads.insert(bytes.to_vec()));
+            let attributes = message.attributes();
+            assert_eq!(
+                attributes.payload_encoding(),
+                Some(up_rust::ProtobufWire::encoding())
+            );
+            assert!(identifiers.insert(attributes.id().to_string()));
+            assert!(
+                attributes.is_publish()
+                    && attributes.sink().is_none()
+                    && attributes.request_id().is_none()
+            );
+        }
+        assert_eq!(payloads.len(), 5);
+        assert_eq!(identifiers.len(), 5);
     }
 
     #[test]

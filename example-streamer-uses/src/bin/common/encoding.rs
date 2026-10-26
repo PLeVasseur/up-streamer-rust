@@ -1,14 +1,13 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Codec-backed payload selection for classic message examples.
-#![allow(dead_code)]
 
 use super::{native::NativeContext, payloads};
 use clap::ValueEnum;
 use up_rust::{PayloadCodecIdentity, PayloadEncoding, UStatus};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
-pub(crate) enum Encoding {
+pub enum Encoding {
     Native,
     Protobuf,
     Xcdrv2,
@@ -18,7 +17,7 @@ pub(crate) enum Encoding {
 
 impl Encoding {
     /// Explicit payload identity; native requires the supplied deployment agreement.
-    pub(crate) fn identity(self, native: &NativeContext) -> Result<PayloadEncoding, UStatus> {
+    pub fn identity(self, native: &NativeContext) -> Result<PayloadEncoding, UStatus> {
         Ok(match self {
             Self::Native => native.encoding()?,
             Self::Protobuf => PayloadEncoding::PROTOBUF,
@@ -30,7 +29,7 @@ impl Encoding {
 
     /// Build an actual codec representation. Protobuf message types are selected
     /// by the role's Timer/HelloRequest factory, rather than treating text as protobuf.
-    pub(crate) fn payload_parts(
+    pub fn payload_parts(
         self,
         native: &NativeContext,
         magic: u32,

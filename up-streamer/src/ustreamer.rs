@@ -633,6 +633,13 @@ impl UStreamer {
             ),
             || native::NativeForward {
                 egress: Arc::clone(&output),
+                #[cfg(feature = "flow-evidence")]
+                label: std::env::var_os("UPROTOCOL_FLOW_EVIDENCE_RUN").map(|_| {
+                    format!(
+                        "native:{}@{} -> native:{}@{}",
+                        ingress.name, ingress.authority, egress.name, egress.authority,
+                    )
+                }),
             },
         )
         .await?;
@@ -640,6 +647,10 @@ impl UStreamer {
         Ok(())
     }
     /// Installs a prepared route whose selected wire is equal at compile time.
+    ///
+    /// Opt-in `flow-evidence` records the admitted borrowed frame and successful
+    /// prepared handoff. Formatting/hashing costs belong to the observed process;
+    /// copied-loan byte inspection remains the separate prepared observer API.
     pub async fn add_selected_wire_copy_minimized_route_ref<
         I: PreparedEndpoint,
         E: PreparedEndpoint + up_rust::UHasWire<Wire = I::Wire>,
@@ -697,6 +708,9 @@ impl UStreamer {
 ))]
 impl UStreamer {
     /// Adds an owned-to-native adapter using the existing exact egress catalog.
+    ///
+    /// Opt-in flow evidence observes ingress and successful native handoff using
+    /// the submitted owned frame; its formatting and hashing costs are included.
     pub async fn add_owned_to_copy_minimized_route_ref<E: PreparedEndpoint>(
         &mut self,
         ingress: &OwnedFrameEndpoint,
@@ -710,6 +724,9 @@ impl UStreamer {
         .await
     }
     /// Adds an owned-to-native adapter with explicit pre-reserved alignment.
+    ///
+    /// Opt-in flow evidence observes ingress and successful native handoff using
+    /// the submitted owned frame; its formatting and hashing costs are included.
     pub async fn add_owned_to_copy_minimized_route_ref_with_options<E: PreparedEndpoint>(
         &mut self,
         ingress: &OwnedFrameEndpoint,
@@ -742,7 +759,16 @@ impl UStreamer {
                 &egress.name,
                 &egress.authority,
             ),
-            owned::NativeDestination { egress: output },
+            owned::NativeDestination {
+                egress: output,
+                #[cfg(feature = "flow-evidence")]
+                label: std::env::var_os("UPROTOCOL_FLOW_EVIDENCE_RUN").map(|_| {
+                    format!(
+                        "owned:{}@{} -> native:{}@{}",
+                        ingress.name, ingress.authority, egress.name, egress.authority,
+                    )
+                }),
+            },
         )
         .await?;
         self.frame_routes.insert(key, binding);
@@ -799,6 +825,9 @@ impl UStreamer {
         Ok(())
     }
     /// Adds a classic-to-native adapter with default native-boundary policy.
+    ///
+    /// Opt-in flow evidence observes ingress and successful native handoff using
+    /// the submitted owned frame; its formatting and hashing costs are included.
     pub async fn add_classic_to_copy_minimized_route_ref<E: PreparedEndpoint>(
         &mut self,
         ingress: &Endpoint,
@@ -811,6 +840,9 @@ impl UStreamer {
         .await
     }
     /// Adds a classic-to-native adapter after complete-route native policy validation.
+    ///
+    /// Opt-in flow evidence observes ingress and successful native handoff using
+    /// the submitted owned frame; its formatting and hashing costs are included.
     pub async fn add_classic_to_copy_minimized_route_ref_with_native_policy<E: PreparedEndpoint>(
         &mut self,
         ingress: &Endpoint,
@@ -854,7 +886,16 @@ impl UStreamer {
                 &egress.authority,
             ),
             agreement,
-            owned::NativeDestination { egress: output },
+            owned::NativeDestination {
+                egress: output,
+                #[cfg(feature = "flow-evidence")]
+                label: std::env::var_os("UPROTOCOL_FLOW_EVIDENCE_RUN").map(|_| {
+                    format!(
+                        "classic:{}@{} -> native:{}@{}",
+                        ingress.name, ingress.authority, egress.name, egress.authority,
+                    )
+                }),
+            },
         )
         .await?;
         self.frame_routes.insert(key, binding);

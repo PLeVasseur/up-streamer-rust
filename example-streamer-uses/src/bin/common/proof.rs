@@ -1,11 +1,10 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
-//! Observational helpers; role construction and control flow remain in each binary.
-#![allow(dead_code)]
+//! Observational helpers for shared role flows and explicit endpoint setup.
 
 use up_rust::{UMessage, UStatus, UTransport};
 
-pub(crate) async fn send(
+pub async fn send(
     transport: &(impl UTransport + ?Sized),
     message: UMessage,
 ) -> Result<(), UStatus> {
@@ -17,7 +16,7 @@ pub(crate) async fn send(
     Ok(())
 }
 
-pub(crate) fn received(message: &UMessage) {
+pub fn received(message: &UMessage) {
     #[cfg(feature = "flow-evidence")]
     match streamer_flow_evidence::Observation::message("rx", None, message) {
         Ok(record) => streamer_flow_evidence::Observation::emit(record),
@@ -28,7 +27,7 @@ pub(crate) fn received(message: &UMessage) {
 }
 
 #[cfg(feature = "selected-wire-common")]
-pub(crate) fn received_frame(frame: &(impl up_rust::UFrameView + ?Sized)) {
+pub fn received_frame(frame: &(impl up_rust::UFrameView + ?Sized)) {
     #[cfg(feature = "flow-evidence")]
     match streamer_flow_evidence::Observation::frame("rx", None, frame) {
         Ok(record) => streamer_flow_evidence::Observation::emit(record),
@@ -39,7 +38,7 @@ pub(crate) fn received_frame(frame: &(impl up_rust::UFrameView + ?Sized)) {
 }
 
 #[cfg(feature = "selected-wire-common")]
-pub(crate) async fn send_owned(
+pub async fn send_owned(
     transport: &(impl up_rust::UOwnedTransport + ?Sized),
     frame: up_rust::UOwnedFrame,
 ) -> Result<(), UStatus> {
@@ -52,7 +51,7 @@ pub(crate) async fn send_owned(
 }
 
 #[cfg(feature = "selected-wire-common")]
-pub(crate) fn send_prepared<T: configurable_streamer_wire_support::prepared::PreparedEndpoint>(
+pub fn send_prepared<T: configurable_streamer_wire_support::prepared::PreparedEndpoint>(
     transport: &configurable_streamer_wire_support::prepared::PreparedSession<T>,
     metadata: &up_rust::UFrameMetadata,
     payload: &[u8],

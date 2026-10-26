@@ -179,3 +179,17 @@ requirements. The optional flow-evidence helper remains workspace-internal;
 offline extracted checks use the matching helper, SDK and binding sources. See
 [package dependency boundaries](docs/packaging.md) for archive normalization and
 the distinction from registry availability.
+
+
+Prepared native routes expose optional successful-handoff observations under the
+existing `flow-evidence` feature. Their scope and observer costs are described in
+[Optional flow observations](docs/prepared-routing.md#optional-flow-observations);
+physical copied-loan inspection and statistics remain separate APIs.
+
+The optional observations also cover owned/classic-to-native copying adapters,
+with the same successful API boundary and explicit observer cost scope.
+
+Optional native flow evidence also hashes the actual initialized egress-loan
+payload before native put and records completion, including failed puts. See
+[Optional flow observations](docs/prepared-routing.md#optional-flow-observations)
+for endpoint correlation, presence, cost and disabled-observer behavior.

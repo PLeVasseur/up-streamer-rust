@@ -1,56 +1,11 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
 //! Receive notifications through an explicitly configured iceoryx2 endpoint.
-mod common;
 use clap::Parser;
 use common::flow::{self, FlowConfig, FlowMode, FlowRole, FlowTransport, FlowWireFormat};
 use common::payloads::NativeContext;
+use example_streamer_uses::common;
 use up_rust::UStatus;
-
-// Keep this endpoint's concrete wire setup visible; only the role flow is shared.
-macro_rules! run_endpoint {
-    ($core:expr, $config:expr, $run:ident) => {{
-        use std::sync::Arc;
-        use up_rust::UWithNativePrefixWire;
-        let core = $core;
-        let config = $config;
-        match config.wire_format {
-            FlowWireFormat::Native => {
-                flow::$run(
-                    Arc::new(
-                        core.into_stable_container_transport(config.native.agreement()?.clone()),
-                    ),
-                    config,
-                )
-                .await
-            }
-            FlowWireFormat::Protobuf => {
-                flow::$run(Arc::new(core.into_protobuf_transport()), config).await
-            }
-            FlowWireFormat::Xcdrv2 => {
-                flow::$run(
-                    Arc::new(core.into_native_prefix_wire_transport(up_wire_xcdrv2::XcdrV2Wire)),
-                    config,
-                )
-                .await
-            }
-            FlowWireFormat::Arrow => {
-                flow::$run(
-                    Arc::new(core.into_native_prefix_wire_transport(up_wire_arrow::ArrowWire)),
-                    config,
-                )
-                .await
-            }
-            FlowWireFormat::Omgidl => {
-                flow::$run(
-                    Arc::new(core.into_native_prefix_wire_transport(up_wire_omgidl::OmgIdlWire)),
-                    config,
-                )
-                .await
-            }
-        }
-    }};
-}
 
 #[derive(Parser)]
 #[command()]
@@ -170,55 +125,18 @@ async fn main() -> Result<(), UStatus> {
         #[cfg(feature = "sustained-workload")]
         workload_plan: None,
     };
-    match (cli.mode, cli.transport) {
-        #[cfg(feature = "iceoryx2-zero-copy")]
-        (FlowMode::CopyMinimized, FlowTransport::Iceoryx2) => {
-            let core = common::endpoint_config::prepared_iceoryx2(
-                common::endpoint_config::iceoryx2(None, 0, &capacities)?,
-                &config,
-                &capacities,
-            )?;
-            run_endpoint!(core, &config, run_native)
-        }
-        #[cfg(feature = "iceoryx2-owned-frame")]
-        (FlowMode::OwnedFrame, FlowTransport::Iceoryx2) => {
-            let physical = up_transport_iceoryx2_rust::Iceoryx2PubSub::try_with_config(
-                common::endpoint_config::iceoryx2(None, 0, &capacities)?,
-            )?;
-            let core = up_transport_iceoryx2_rust::BenchmarkOwnedIceoryx2Core::new(physical);
-            run_endpoint!(core, &config, run_owned)
-        }
-        #[cfg(feature = "zenoh-zero-copy")]
-        (FlowMode::CopyMinimized, FlowTransport::Zenoh) => {
-            let physical = up_transport_zenoh::zenoh_config::Config::from_file(&cli.zenoh_config)
-                .map_err(|error| {
-                flow::invalid(format!(
-                    "failed to load Zenoh config {}: {error:?}",
-                    cli.zenoh_config
-                ))
-            })?;
-            let core = common::endpoint_config::prepared_zenoh(physical, &config, None).await?;
-            run_endpoint!(core, &config, run_native)
-        }
-        #[cfg(feature = "zenoh-owned-frame")]
-        (FlowMode::OwnedFrame, FlowTransport::Zenoh) => {
-            let physical = up_transport_zenoh::zenoh_config::Config::from_file(&cli.zenoh_config)
-                .map_err(|error| {
-                flow::invalid(format!(
-                    "failed to load Zenoh config {}: {error:?}",
-                    cli.zenoh_config
-                ))
-            })?;
-            let core = up_transport_zenoh::ZenohOwnedCore::new(
-                physical,
-                config.local_endpoint()?.to_string(),
-            )
-            .await?;
-            run_endpoint!(core, &config, run_owned)
-        }
-        #[cfg(any(feature = "lola-transport", feature = "lola-owned-frame"))]
-        (mode, FlowTransport::Lola) => {
-            let options = common::endpoint_config::LolaOptions {
+    common::endpoint::run(
+        common::endpoint::Options {
+            mode: cli.mode,
+            transport: cli.transport,
+            zenoh_config: cli.zenoh_config,
+            zenoh_shm_segment_size: None,
+            iceoryx2_capacity: capacities,
+            iceoryx2_receive_capacity: None,
+            iceoryx2_min_subscribers: 0,
+            ready: false,
+            #[cfg(any(feature = "lola-transport", feature = "lola-owned-frame"))]
+            lola: common::endpoint_config::LolaOptions {
                 mw_com_config_file: cli.lola_mw_com_config_file,
                 response_mw_com_config_file: cli.lola_rpc_response_mw_com_config_file,
                 instance_specifier: cli.lola_instance_specifier,
@@ -231,49 +149,9 @@ async fn main() -> Result<(), UStatus> {
                 sample_size: cli.lola_sample_size,
                 sample_alignment: cli.lola_sample_alignment,
                 max_samples: cli.lola_max_samples,
-            };
-            let (primary, response, channel) = options.configuration(&cli.local_authority)?;
-            let physical = || {
-                up_transport_lola_rust::UTransportLola::build_with_response_channel_and_default_rx(
-                    primary.clone(),
-                    response.clone(),
-                    channel,
-                )
-            };
-            let _ = &physical;
-            match mode {
-                #[cfg(feature = "lola-transport")]
-                FlowMode::CopyMinimized => {
-                    run_endpoint!(
-                        common::endpoint_config::prepared_lola(
-                            &primary,
-                            response.as_ref(),
-                            &config
-                        )?,
-                        &config,
-                        run_native
-                    )
-                }
-                #[cfg(feature = "lola-owned-frame")]
-                FlowMode::OwnedFrame => {
-                    run_endpoint!(
-                        up_transport_lola_rust::LolaOwnedCore::new(physical()?.zero_copy_core()),
-                        &config,
-                        run_owned
-                    )
-                }
-                #[cfg(not(all(feature = "lola-transport", feature = "lola-owned-frame")))]
-                _ => Err(flow::invalid("requested LoLa API is not enabled")),
-            }
-        }
-        #[cfg(not(all(
-            feature = "iceoryx2-zero-copy",
-            feature = "iceoryx2-owned-frame",
-            feature = "zenoh-zero-copy",
-            feature = "zenoh-owned-frame",
-            feature = "lola-transport",
-            feature = "lola-owned-frame"
-        )))]
-        _ => Err(flow::invalid("requested endpoint API is not enabled")),
-    }
+            },
+        },
+        &config,
+    )
+    .await
 }

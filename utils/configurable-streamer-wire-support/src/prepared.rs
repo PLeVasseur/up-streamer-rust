@@ -475,8 +475,11 @@ pub async fn zenoh_core(
     config: up_transport_zenoh::zenoh_config::Config,
     uri: &str,
     catalog: &[PreparedAddress],
-    setup: up_transport_zenoh::ZenohPreparedConfig,
+    mut setup: up_transport_zenoh::ZenohPreparedConfig,
 ) -> Result<std::sync::Arc<up_transport_zenoh::ZenohPreparedCore>, UStatus> {
+    if setup.allocation_observer.is_none() {
+        setup.allocation_observer = crate::allocation_observer::configured()?;
+    }
     let addresses = catalog
         .iter()
         .map(|address| {
