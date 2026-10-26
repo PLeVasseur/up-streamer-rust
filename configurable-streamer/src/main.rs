@@ -450,7 +450,23 @@ async fn zenoh_route_wire_endpoints(
             if endpoint_config.zenoh_wait_for_subscriber {
                 builder = builder.with_publisher_readiness(std::time::Duration::from_secs(5))?;
             }
-            let core = builder.build().await?;
+            let core = builder
+                .with_shm_prewarm(endpoint_config.zenoh_shm_prewarm)
+                .build()
+                .await?;
+            if let Some(bytes) = core.prewarmed_shm_segment_size() {
+                #[derive(serde::Serialize)]
+                struct ProviderSetup<'a> {
+                    endpoint: &'a str,
+                    configured_bytes: usize,
+                }
+                let receipt = json5::to_string(&ProviderSetup {
+                    endpoint: &endpoint_config.endpoint,
+                    configured_bytes: bytes,
+                })
+                .map_err(|error| invalid_config(format!("provider setup receipt: {error}")))?;
+                println!("NATIVE_SHM_PROVIDER_INITIALIZED {receipt}");
+            }
             endpoints.insert(
                 *route_wire_format,
                 configurable_streamer_wire_support::zenoh_endpoint(

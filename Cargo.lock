@@ -6242,7 +6242,7 @@ dependencies = [
 [[package]]
 name = "up-transport-iceoryx2-rust"
 version = "0.1.0"
-source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=4dd22dd17bf02e915681eedee4eb46f5c7009bc3#4dd22dd17bf02e915681eedee4eb46f5c7009bc3"
+source = "git+https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git?rev=4854c0bf78ce0d8cb7387cd7b616d98e64d6cdb8#4854c0bf78ce0d8cb7387cd7b616d98e64d6cdb8"
 dependencies = [
  "async-trait",
  "bytes",
@@ -6251,6 +6251,7 @@ dependencies = [
  "iceoryx2-bb-container",
  "iceoryx2-bb-system-types",
  "protobuf",
+ "rustix 0.38.44",
  "tokio",
  "up-rust",
 ]
@@ -6310,7 +6311,7 @@ dependencies = [
 [[package]]
 name = "up-transport-zenoh"
 version = "0.9.1"
-source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=80f3a1dd7bf7ad46e842d034c713e28d86f6ba4a#80f3a1dd7bf7ad46e842d034c713e28d86f6ba4a"
+source = "git+https://github.com/PLeVasseur/up-client-zenoh-rust.git?rev=1d63677ba9a86f3439957bb8f4ef9ea94ba0ab23#1d63677ba9a86f3439957bb8f4ef9ea94ba0ab23"
 dependencies = [
  "anyhow",
  "async-trait",

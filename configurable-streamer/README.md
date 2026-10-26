@@ -262,3 +262,8 @@ Optional iceoryx2 slice, allocation, subscriber and TX-loan controls are describ
 in [native capacity configuration](docs/native-capacity.md). Existing buffer/borrow
 and Zenoh SHM settings are reused. Omitted controls preserve defaults; fixed-budget
 deployments opt into exact binding validation and retain configurable fan-out.
+
+Native Zenoh routes may additionally set disabled-default `zenoh_shm_prewarm` to
+delegate eager provider setup to the binding before admission. See
+[native capacity configuration](docs/native-capacity.md); setup-size receipts and
+OS-measured pool residency are separate evidence.

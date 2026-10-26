@@ -40,3 +40,17 @@ and process; application queues, transient receive samples and live TX loans are
 distinct budgets. Native allocation failure cannot be relabelled as an allowed
 application drop. See the [iceoryx2 binding capacity guide](https://github.com/PLeVasseur/up-transport-iceoryx2-rust/blob/main/docs/capacity.md)
 for physical service compatibility and allocator ownership.
+
+Native Zenoh endpoints may set `zenoh_shm_prewarm: true` to initialize their
+existing provider before route admission. Omission preserves lazy setup. The
+binding owns page materialization and setup errors; see its
+[provider prewarming guide](https://github.com/PLeVasseur/up-transport-zenoh-rust/blob/main/docs/shm-prewarming.md).
+`NATIVE_SHM_PROVIDER_INITIALIZED` records the endpoint and configured size, not an
+OS residency measurement. Receive-only role workers do not gain an extra provider.
+
+Within `iceoryx2_namespace`, disabled-default `publisher_prewarm` delegates static
+backing setup to the binding. It requires explicit static/exact capacities and
+does not change subscriber, TX or application queue limits. The generic native
+role frontend exposes `--iceoryx2-publisher-prewarm`; the representative generator
+selects it explicitly for its source. See the binding's
+[backing-page guide](https://github.com/PLeVasseur/up-transport-iceoryx2-rust/blob/main/docs/capacity.md#linux-static-backing-page-preallocation).

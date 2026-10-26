@@ -30,6 +30,11 @@ Omitted fields preserve defaults; invalid inputs return typed errors. See the
 [native capacity guide](../../configurable-streamer/docs/native-capacity.md) for
 configuration and ownership boundaries. Physical allocation and service checks
 remain binding-owned.
+
+Disabled-default `publisher_prewarm` delegates exact/static publisher backing setup
+through the same capacity object; it requires explicit static allocation. It does
+not alter queue/slot limits. The [native capacity guide](../../configurable-streamer/docs/native-capacity.md)
+describes configuration, CLI ownership and binding-owned physical behavior.
 # Sensor workload types
 
 With `payload-contract-large-fixtures`, `sensor::SensorFixture` selects the actual

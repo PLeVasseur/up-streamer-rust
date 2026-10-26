@@ -85,6 +85,7 @@ pub(super) fn rows(mode: Mode) -> Result<Vec<MatrixRow>> {
 }
 
 pub(super) fn set_limits(plan: &mut Plan) {
+    plan.require_pool_page_census = true;
     let diagnostic = plan.mode == Mode::Diagnostic;
     plan.warmup_seconds = if diagnostic { 10 } else { 120 };
     plan.normal_seconds = if diagnostic { 20 } else { 180 };
@@ -300,6 +301,7 @@ pub(super) fn configure_endpoints(
         namespace["publisher_allocation_strategy"] = json!("static");
         namespace["max_subscribers"] = json!(2);
         namespace["publisher_max_loaned_samples"] = json!(1);
+        namespace["publisher_prewarm"] = json!(true);
     }
     let zenoh = config
         .pointer_mut("/transports/zenoh/endpoints")
@@ -307,6 +309,7 @@ pub(super) fn configure_endpoints(
         .context("missing Zenoh endpoint")?;
     anyhow::ensure!(zenoh.len() == 1, "representative needs one Zenoh provider");
     zenoh[0]["zenoh_shm_segment_size"] = json!(geometry.zenoh_pool_bytes);
+    zenoh[0]["zenoh_shm_prewarm"] = json!(true);
     zenoh[0]["zenoh_wait_for_subscriber"] = json!(true);
     atomic_write_json(path, &config)?;
     atomic_write_json(&directory.join("sensor-geometry.json"), &geometry)?;
@@ -338,6 +341,7 @@ pub(super) fn role_configuration(profile: EndpointProfile, geometry: &Geometry) 
             "2".into(),
             "--iceoryx2-publisher-max-loaned-samples".into(),
             "1".into(),
+            "--iceoryx2-publisher-prewarm".into(),
         ]
         .into()
     } else {

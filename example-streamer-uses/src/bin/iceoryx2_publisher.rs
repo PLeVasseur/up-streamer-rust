@@ -69,6 +69,9 @@ struct Cli {
     /// Maximum simultaneous native publisher TX loans.
     #[arg(long)]
     iceoryx2_publisher_max_loaned_samples: Option<usize>,
+    /// Delegate static publisher backing prewarming to the owning binding.
+    #[arg(long)]
+    iceoryx2_publisher_prewarm: bool,
     #[arg(skip)]
     native: NativeContext,
     /// Controller-provisioned sustained workload over this configured endpoint.
@@ -156,6 +159,7 @@ async fn main() -> Result<(), UStatus> {
         publisher_allocation_strategy: cli.iceoryx2_publisher_allocation_strategy,
         max_subscribers: cli.iceoryx2_max_subscribers,
         publisher_max_loaned_samples: cli.iceoryx2_publisher_max_loaned_samples,
+        publisher_prewarm: cli.iceoryx2_publisher_prewarm,
     };
     capacities.validate()?;
     if capacities.configured() && cli.transport != FlowTransport::Iceoryx2 {

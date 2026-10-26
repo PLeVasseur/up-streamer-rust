@@ -6,6 +6,7 @@ use streamer_soak::control::{Phase, PhaseCommand};
 use streamer_soak::{JournalWriter, Reconciler, ReplayOptions};
 use streamer_transport_test_orchestrator::platform::{process_tree_samples, ProcessSample};
 
+mod pool_pages;
 mod representative;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
@@ -30,6 +31,9 @@ pub(super) enum Mode {
 struct Plan {
     #[serde(default)]
     lane: Lane,
+    /// New representative plans require owning-pool census; old receipts retain their declared scope.
+    #[serde(default)]
+    require_pool_page_census: bool,
     schema: String,
     mode: Mode,
     source_identity: String,
@@ -745,6 +749,7 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
     };
     let mut plan = Plan {
         lane: cli.soak_lane,
+        require_pool_page_census: false,
         schema: "uprotocol.sustained-workload.v1".into(),
         mode,
         source_identity,
@@ -820,6 +825,9 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
             (Phase::Slow, plan.slow_seconds),
             (Phase::Drain, plan.drain_seconds),
         ] {
+            if phase == Phase::Normal && plan.require_pool_page_census {
+                pool_pages::capture(root, &streams, &plan_hash, start.elapsed().as_secs_f64())?;
+            }
             for stream in &streams {
                 stream.phase(phase)?;
             }
@@ -1197,13 +1205,18 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
             "incomplete resource window or excess growth"
         );
     }
+    let pool_page_census = if plan.require_pool_page_census {
+        Some(pool_pages::audit(root, &plan, phases)?)
+    } else {
+        None
+    };
     let representative_resources = if plan.lane == Lane::Representative {
         Some(representative::audit_resources(root, &plan, phases)?)
     } else {
         None
     };
     Ok(
-        json!({"success": true, "mode": plan.mode, "lane":plan.lane, "representative_resources":representative_resources, "source_identity": plan.source_identity,
+        json!({"success": true, "mode": plan.mode, "lane":plan.lane, "pool_page_census":pool_page_census, "representative_resources":representative_resources, "source_identity": plan.source_identity,
         "plan_sha256": hash, "rows": reports, "resource_samples": samples,
         "resources_sha256": sha256_file(&root.join("resources.jsonl"))?, "execution_sha256": sha256_file(&root.join("execution.json"))?}),
     )

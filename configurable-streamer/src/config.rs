@@ -441,6 +441,9 @@ pub struct Iceoryx2PublisherReadiness {
 #[derive(Deserialize, Serialize, Debug, Clone, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Iceoryx2Namespace {
+    /// Delegate exact/static publisher backing setup to the binding; default false.
+    #[serde(default)]
+    pub(crate) publisher_prewarm: bool,
     /// Complete encoded sample capacity; omission preserves ordinary binding growth.
     pub(crate) publisher_initial_max_slice_len: Option<usize>,
     /// Explicit publisher allocation policy delegated to the binding.
@@ -467,6 +470,7 @@ impl Iceoryx2Namespace {
             publisher_allocation_strategy: self.publisher_allocation_strategy,
             max_subscribers: self.max_subscribers,
             publisher_max_loaned_samples: self.publisher_max_loaned_samples,
+            publisher_prewarm: self.publisher_prewarm,
         }
     }
 
@@ -536,6 +540,10 @@ pub struct EndpointConfig {
     /// Optional Zenoh native transmit-pool size, forwarded to the binding builder.
     /// Omission keeps the binding's default; zero is rejected by the binding.
     pub(crate) zenoh_shm_segment_size: Option<usize>,
+    /// Eagerly initialize the binding-owned native provider before route admission.
+    /// Disabled by default; pool sizing and native memory behavior stay in the binding.
+    #[serde(default)]
+    pub(crate) zenoh_shm_prewarm: bool,
     /// Whether the native Zenoh publisher waits for an actual matching subscriber.
     #[serde(default)]
     pub(crate) zenoh_wait_for_subscriber: bool,
@@ -672,6 +680,7 @@ mod tests {
     #[test]
     fn native_namespace_rejects_relative_root_or_invalid_prefix() {
         assert!(Iceoryx2Namespace {
+            publisher_prewarm: false,
             publisher_initial_max_slice_len: None,
             publisher_allocation_strategy: None,
             max_subscribers: None,
@@ -684,6 +693,7 @@ mod tests {
         .validate()
         .is_err());
         assert!(Iceoryx2Namespace {
+            publisher_prewarm: false,
             publisher_initial_max_slice_len: None,
             publisher_allocation_strategy: None,
             max_subscribers: None,

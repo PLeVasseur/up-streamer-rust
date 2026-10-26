@@ -6,6 +6,11 @@ send completion; each workload retains its declared deadline and loss criteria. 
 [worker guide](../../example-streamer-uses/docs/sustained-workloads.md).
 Finite inbox capacity is5 to admit the entire finite backend burst.
 
+New representative plans explicitly require a post-warmup owning-pool page
+census. Raw Linux mapping snapshots and process identities are retained and
+reparsed during replay; see [pool page evidence](docs/pool-pages.md). Earlier
+plans retain their original declared scope and do not acquire this evidence.
+
 `streamer-transport-test-orchestrator` executes the canonical endpoint-profile
 matrix through `configurable-streamer` and independent active/passive role
 processes. It preserves matrix order, records structural unsupported rows, and

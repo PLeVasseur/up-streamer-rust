@@ -50,6 +50,10 @@ pub struct Iceoryx2Capacity {
     pub max_subscribers: Option<usize>,
     /// Maximum simultaneous live publisher TX loans.
     pub publisher_max_loaned_samples: Option<usize>,
+    /// Delegate Linux exact/static publisher backing prewarming to the binding.
+    /// Disabled by default; no application queue or native slot limit is changed.
+    #[serde(default)]
+    pub publisher_prewarm: bool,
 }
 
 impl Iceoryx2Capacity {
@@ -59,6 +63,7 @@ impl Iceoryx2Capacity {
             || self.publisher_allocation_strategy.is_some()
             || self.max_subscribers.is_some()
             || self.publisher_max_loaned_samples.is_some()
+            || self.publisher_prewarm
     }
 
     /// Checks the frontend values before constructing a backend.
@@ -67,6 +72,14 @@ impl Iceoryx2Capacity {
     /// Returns `InvalidArgument` for zero capacities. Binding validation also
     /// checks effective slot arithmetic, readiness compatibility and native limits.
     pub fn validate(&self) -> Result<(), UStatus> {
+        if self.publisher_prewarm
+            && self.publisher_allocation_strategy != Some(PublisherAllocationStrategy::Static)
+        {
+            return Err(UStatus::fail_with_code(
+                UCode::InvalidArgument,
+                "publisher prewarming requires explicit static allocation",
+            ));
+        }
         if [
             self.publisher_initial_max_slice_len,
             self.max_subscribers,
@@ -128,6 +141,9 @@ impl Iceoryx2Capacity {
                 .publisher_max_loaned_samples = value;
         }
         config.require_exact_service_limits = true;
+        if self.publisher_prewarm {
+            config.publisher_prewarm = true;
+        }
         config.validate()
     }
 }
@@ -146,11 +162,12 @@ mod tests {
         let capacity: Iceoryx2Capacity = serde_json::from_str(
             r#"{
             "publisher_initial_max_slice_len": 4096, "publisher_allocation_strategy":"static",
-            "max_subscribers":2, "publisher_max_loaned_samples":1}"#,
+            "max_subscribers":2, "publisher_max_loaned_samples":1, "publisher_prewarm":true}"#,
         )
         .unwrap();
         capacity.apply(&mut config).unwrap();
         assert!(config.require_exact_service_limits);
+        assert!(config.publisher_prewarm);
         assert_eq!(config.publisher_initial_max_slice_len, 4096);
         assert_eq!(
             config.publisher_allocation_strategy,

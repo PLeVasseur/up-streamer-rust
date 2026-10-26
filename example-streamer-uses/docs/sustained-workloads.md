@@ -103,3 +103,8 @@ validation checks identity/field bits and fixture semantics before consumption,
 with retained leases rather than copied receive payloads. Publisher fixture
 preparation currently uses heap-owned initialization before copying into its TX
 loan; it is not claimed to be allocation-free source construction.
+
+The representative source additionally selects
+`--iceoryx2-publisher-prewarm` with its exact/static capacities. This delegates
+construction-time backing setup to the binding, preserving the same TX/receiver
+limits and worker behavior. See [native capacity configuration](../../configurable-streamer/docs/native-capacity.md).

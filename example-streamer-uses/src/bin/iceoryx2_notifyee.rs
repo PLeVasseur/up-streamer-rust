@@ -138,6 +138,7 @@ async fn main() -> Result<(), UStatus> {
         publisher_allocation_strategy: cli.iceoryx2_publisher_allocation_strategy,
         max_subscribers: cli.iceoryx2_max_subscribers,
         publisher_max_loaned_samples: cli.iceoryx2_publisher_max_loaned_samples,
+        publisher_prewarm: false,
     };
     capacities.validate()?;
     if capacities.configured() && cli.transport != FlowTransport::Iceoryx2 {
