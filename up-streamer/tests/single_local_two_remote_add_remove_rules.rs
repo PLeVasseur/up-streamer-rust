@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Exercise route additions and removals with controlled local and remote clients.
 mod support;
 
 use async_broadcast::broadcast;

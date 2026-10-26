@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Exercise bidirectional routing between one local and one remote controlled client.
 mod support;
 
 use async_broadcast::broadcast;

@@ -22,19 +22,29 @@ use tokio::runtime::Builder;
 use tokio::sync::Mutex;
 use tokio_condvar::Condvar;
 use tracing::{debug, error};
-use up_rust::{UListener, UMessage, UStatus, UTransport, UUri, UUID};
+use up_rust::{UListener, UMessage, UStatus, UTransport, UUri};
 
+/// Shared boolean and async condition variable for test-client pause handshakes.
 pub type Signal = Arc<(Mutex<bool>, Condvar)>;
 
+/// Per-message-destination enablement flags used by a controlled sender.
 pub type ActiveConnections = Vec<bool>;
+/// Command consumed by the client while it is paused.
 #[derive(PartialEq)]
 pub enum ClientCommand {
+    /// Preserve the current sender state.
     NoOp,
+    /// Stop the sender and return its successful-send history.
     Stop,
+    /// Replace destination enablement after removing a Streamer connection.
     DisconnectedFromStreamer(ActiveConnections),
+    /// Replace destination enablement after adding a Streamer connection.
     ConnectedToStreamer(ActiveConnections),
 }
 
+/// Asserts nonzero counts and an absolute discrepancy within `sent * percentage_slack`.
+///
+/// Despite its name, `percentage_slack` is a fraction, for example0.1 for ten percent.
 pub async fn check_send_receive_message_discrepancy(
     number_of_sent_messages: u64,
     number_of_messages_received: u64,
@@ -56,6 +66,7 @@ pub async fn check_send_receive_message_discrepancy(
     }
 }
 
+/// Waits for the atomic count to reach the target, panicking with a labeled diagnostic on timeout.
 pub async fn wait_for_send_count(
     counter: &Arc<AtomicU64>,
     target: u64,
@@ -85,6 +96,7 @@ pub async fn wait_for_send_count(
     }
 }
 
+/// Waits for a saturating baseline-plus-delta target using the same bounded count check.
 pub async fn wait_for_send_delta(
     counter: &Arc<AtomicU64>,
     baseline: u64,
@@ -132,52 +144,43 @@ async fn wait_for_receive_settle(client: &UPClientFoo, name: &str) {
 }
 
 // TODO: Fix this function to work with UUIDv7
+/// Asserts nondecreasing UUID timestamps within each source/message-kind stream.
+/// Equal timestamps are allowed; this does not assert a strict sequence order.
 pub async fn check_messages_in_order(messages: Arc<Mutex<Vec<UMessage>>>) {
     let messages = messages.lock().await;
     if messages.is_empty() {
         return;
     }
 
-    // Step 1: Group messages by source UUri
+    // Step 1: Group messages by source UUri and message type. Different message types may be
+    // generated concurrently from the same source, so only each per-type stream has a stable order.
     #[allow(clippy::mutable_key_type)]
-    let mut grouped_messages: HashMap<UUri, Vec<(usize, &UMessage)>> = HashMap::new();
+    let mut grouped_messages: HashMap<(UUri, String), Vec<(usize, &UMessage)>> = HashMap::new();
     for (index, msg) in messages.iter().enumerate() {
-        let source_uuri = msg
-            .source()
-            .cloned()
-            .unwrap_or_else(|| panic!("message index {index} missing source URI"));
+        let source_uuri = msg.source().clone();
+        let message_type = format!("{:?}", msg.attributes().type_());
 
         grouped_messages
-            .entry(source_uuri)
+            .entry((source_uuri, message_type))
             .or_default()
             .push((index, msg));
     }
 
     // Step 2: Check each group for strict increasing order of id.msb first 48 bytes
-    for (source_uuri, group) in grouped_messages {
-        debug!("source_uuri: {source_uuri}");
-        if let Some((first_index, first_msg)) = group.first() {
-            let mut prev_timestamp = first_msg.id().map(|id| id.msb >> 16).unwrap_or_else(|| {
-                panic!(
-                    "message index {} for source {} missing message id",
-                    first_index, source_uuri
-                )
-            });
+    for ((source_uuri, message_type), group) in grouped_messages {
+        debug!("source_uuri: {source_uuri}, message_type: {message_type}");
+        if let Some((_first_index, first_msg)) = group.first() {
+            let mut prev_timestamp = first_msg.id().time();
 
             for (msg_index, msg) in group.iter().skip(1) {
-                let curr_timestamp = msg.id().map(|id| id.msb >> 16).unwrap_or_else(|| {
-                    panic!(
-                        "message index {} for source {} missing message id",
-                        msg_index, source_uuri
-                    )
-                });
+                let curr_timestamp = msg.id().time();
 
                 debug!("prev_timestamp: {prev_timestamp}, curr_timestamp: {curr_timestamp}");
                 // relaxing to < instead of <= since we now do not have the counter for tie breaker
                 if curr_timestamp < prev_timestamp {
                     panic!(
-                        "message ordering issue for source_uuri {}: prev_timestamp={}, curr_timestamp={}, msg_index={}",
-                        source_uuri, prev_timestamp, curr_timestamp, msg_index
+                        "message ordering issue for source_uuri {} message_type {:?}: prev_timestamp={}, curr_timestamp={}, msg_index={}",
+                        source_uuri, message_type, prev_timestamp, curr_timestamp, msg_index
                     );
                 }
                 prev_timestamp = curr_timestamp;
@@ -186,6 +189,7 @@ pub async fn check_messages_in_order(messages: Arc<Mutex<Vec<UMessage>>>) {
     }
 }
 
+/// Waits until the supplied pause-acknowledgment boolean becomes true.
 pub async fn wait_for_pause(signal: Signal) {
     let (lock, cvar) = &*signal;
     let mut has_paused = lock.lock().await;
@@ -198,6 +202,7 @@ pub async fn wait_for_pause(signal: Signal) {
     debug!("exiting wait_for_pause");
 }
 
+/// Sets the pause-request boolean and wakes waiters to observe it.
 pub async fn signal_to_pause(signal: Signal) {
     let (lock, cvar) = &*signal;
     let mut should_pause = lock.lock().await;
@@ -205,6 +210,7 @@ pub async fn signal_to_pause(signal: Signal) {
     cvar.notify_all(); // Wake up the client so it can check the condition and continue
 }
 
+/// Clears the pause-request boolean and wakes paused clients.
 pub async fn signal_to_resume(signal: Signal) {
     let (lock, cvar) = &*signal;
     let mut should_pause = lock.lock().await;
@@ -212,6 +218,7 @@ pub async fn signal_to_resume(signal: Signal) {
     cvar.notify_all(); // Wake up the client so it can check the condition and continue
 }
 
+/// Clears a pause acknowledgment without notifying its condition variable.
 pub async fn reset_pause(signal: Signal) {
     {
         let (lock, _cvar) = &*signal;
@@ -220,39 +227,50 @@ pub async fn reset_pause(signal: Signal) {
     }
 }
 
+/// Identity, listener and in-process bus channels used by a controlled client.
 pub struct ClientConfiguration {
+    /// Diagnostic client label.
     pub name: String,
+    /// Fixture service/recipient URI used to register the listener.
     pub my_client_uuri: UUri,
+    /// Listener receiving admitted messages for this client.
     pub listener: Arc<dyn UListener>,
+    /// Outgoing broadcast-bus channel.
     pub tx: Sender<Result<UMessage, UStatus>>,
+    /// Incoming broadcast-bus receiver.
     pub rx: Receiver<Result<UMessage, UStatus>>,
 }
 
+/// Message sets repeatedly sent to enabled destinations by the fixture client.
 pub struct ClientMessages {
+    /// Directed notification messages.
     pub notification_msgs: Vec<UMessage>,
+    /// RPC request messages.
     pub request_msgs: Vec<UMessage>,
+    /// RPC response messages.
     pub response_msgs: Vec<UMessage>,
 }
 
+/// Shared send accounting and initial capacity for the returned message history.
 pub struct ClientHistory {
+    /// Incremented after each successful fixture send.
     pub number_of_sends: Arc<AtomicU64>,
+    /// Initial vector capacity, not a bound on retained history.
     pub sent_message_vec_capacity: usize,
 }
 
+/// Pause handshake and command channel for coordinating route changes with a sender.
 pub struct ClientControl {
+    /// Pause request set by the test controller.
     pub pause_execution: Signal,
+    /// Acknowledgment set by the client after processing a paused-state command.
     pub execution_paused: Signal,
+    /// Command read while the client is paused.
     pub client_command: Arc<Mutex<ClientCommand>>,
 }
 
 fn any_uuri() -> UUri {
-    UUri {
-        authority_name: "*".to_string(),
-        ue_id: 0x0000_FFFF,     // any instance, any service
-        ue_version_major: 0xFF, // any
-        resource_id: 0xFFFF,    // any
-        ..Default::default()
-    }
+    UUri::any()
 }
 
 async fn configure_client(client_configuration: &ClientConfiguration) -> UPClientFoo {
@@ -265,11 +283,29 @@ async fn configure_client(client_configuration: &ClientConfiguration) -> UPClien
     let client = UPClientFoo::new(&name, rx, tx).await;
 
     let register_res = client
-        .register_listener(&any_uuri(), Some(&my_client_uuri.clone()), listener)
+        .register_listener(&any_uuri(), Some(&my_client_uuri), listener.clone())
         .await;
     let Ok(_registration_string) = register_res else {
         panic!("Unable to register!");
     };
+
+    // The fixture is both an RPC service and a reply/notification recipient.
+    // Those have different exact sink resources; authority-only dispatch used
+    // to hide the missing resource-zero registration.
+    if my_client_uuri.resource_id() != 0 {
+        let reply = UUri::try_from_parts(
+            my_client_uuri.authority_name(),
+            (u32::from(my_client_uuri.uentity_instance_id()) << 16)
+                | u32::from(my_client_uuri.uentity_type_id()),
+            my_client_uuri.uentity_major_version(),
+            0,
+        )
+        .expect("fixture reply URI");
+        client
+            .register_listener(&any_uuri(), Some(&reply), listener)
+            .await
+            .expect("register reply/notification recipient");
+    }
 
     client
 }
@@ -362,11 +398,6 @@ async fn send_message_set(
             continue;
         }
 
-        if let Some(attributes) = msg.attributes.as_mut() {
-            let new_id = UUID::build();
-            attributes.id.0 = Some(Box::new(new_id));
-        }
-
         debug!(
             "prior to sending from client {}, the {msg_type} message: {:?}",
             &name, &msg
@@ -387,6 +418,10 @@ async fn send_message_set(
     }
 }
 
+/// Starts a dedicated-thread fixture sender and returns a join handle for its send history.
+///
+/// The controller must request pause with `ClientCommand::Stop` to finish the loop.
+/// The history retains successful sends and can grow beyond its initial capacity.
 pub async fn run_client(
     client_configuration: ClientConfiguration,
     mut client_messages: ClientMessages,

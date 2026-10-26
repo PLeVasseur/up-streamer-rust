@@ -25,7 +25,6 @@ pub const EGRESS_WORKER_REMOVE: &str = "egress_worker_remove";
 
 // Ingress and routing events.
 pub const INGRESS_RECEIVE: &str = "ingress_receive";
-pub const INGRESS_DROP_UNSUPPORTED_PAYLOAD: &str = "ingress_drop_unsupported_payload";
 pub const INGRESS_SEND_TO_POOL_FAILED: &str = "ingress_send_to_pool_failed";
 pub const INGRESS_REGISTER_REQUEST_LISTENER_OK: &str = "ingress_register_request_listener_ok";
 pub const INGRESS_REGISTER_REQUEST_LISTENER_FAILED: &str =

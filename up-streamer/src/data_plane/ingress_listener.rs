@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::sync::broadcast::Sender;
 use tracing::{debug, error, Level};
-use up_rust::{UListener, UMessage, UPayloadFormat};
+use up_rust::{UListener, UMessage};
 
 const COMPONENT: &str = "ingress_listener";
 
@@ -75,23 +75,6 @@ impl UListener for IngressRouteListener {
             );
         }
 
-        if msg.payload_format().unwrap_or_default() == UPayloadFormat::UPAYLOAD_FORMAT_SHM {
-            if let Some(fields) = formatted_fields.as_ref() {
-                debug!(
-                    event = events::INGRESS_DROP_UNSUPPORTED_PAYLOAD,
-                    component = COMPONENT,
-                    route_label,
-                    msg_id = fields.msg_id.as_str(),
-                    msg_type = fields.msg_type.as_str(),
-                    src = fields.src.as_str(),
-                    sink = fields.sink.as_str(),
-                    reason = "unsupported_payload_format_shm",
-                    "dropping unsupported shared-memory payload"
-                );
-            }
-            return;
-        }
-
         if let Err(e) = self.sender.send(Arc::new(msg)) {
             error!(
                 event = events::INGRESS_SEND_TO_POOL_FAILED,
@@ -101,5 +84,48 @@ impl UListener for IngressRouteListener {
                 "unable to send message to egress pool"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_case::test_case;
+    use up_rust::{PayloadEncoding, UMessageBuilder, UUri};
+
+    #[test_case(None, None; "absent payload remains absent")]
+    #[test_case(Some(0), Some(b"".as_slice()); "explicit zero with present empty payload")]
+    #[test_case(Some(8), Some(b"\0\xff".as_slice()); "retired SHM number is opaque carriage")]
+    #[test_case(Some(9), Some(b"\xff\x80".as_slice()); "unassigned public number is opaque")]
+    #[test_case(Some(0xE000), Some(b"\0\xff".as_slice()); "reserved number is preserved")]
+    #[test_case(Some(0xF211), Some(b"\0\xff".as_slice()); "private identity does not trigger decoding")]
+    #[tokio::test]
+    async fn forwards_opaque_identity_and_payload_presence(
+        encoding: Option<u32>,
+        payload: Option<&[u8]>,
+    ) {
+        let source = UUri::try_from_parts("source", 0x5BA0, 1, 0x8001).unwrap();
+        let mut builder = UMessageBuilder::publish(source);
+        let message = match (encoding, payload) {
+            (Some(id), Some(bytes)) => builder
+                .build_with_payload(bytes.to_vec(), PayloadEncoding::from_id(id).unwrap())
+                .unwrap(),
+            (None, None) => builder.build().unwrap(),
+            _ => unreachable!("test cases preserve payload/encoding presence equivalence"),
+        };
+        let (sender, mut receiver) = tokio::sync::broadcast::channel(1);
+        IngressRouteListener::new("opaque-route", sender)
+            .on_receive(message.clone())
+            .await;
+        let forwarded = receiver
+            .try_recv()
+            .expect("opaque message must reach egress dispatch");
+        assert_eq!(forwarded.id(), message.id());
+        assert_eq!(forwarded.source(), message.source());
+        assert_eq!(
+            forwarded.payload_encoding().map(|encoding| encoding.id()),
+            encoding
+        );
+        assert_eq!(forwarded.payload().as_deref(), payload);
     }
 }

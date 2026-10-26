@@ -16,11 +16,15 @@ use std::sync::Arc;
 use tracing::debug;
 use up_rust::{UCode, UListener, UMessage, UStatus, UTransport, UUri};
 
+/// Failure-injection transport whose listener registrations return `InvalidArgument`.
+///
+/// Sends and unregister calls succeed without delivery; pull receive is unimplemented.
 pub struct UPClientFailingRegister {
     name: Arc<String>,
 }
 
 impl UPClientFailingRegister {
+    /// Creates a named failure-injection transport without starting a worker.
     pub async fn new(name: &str) -> Self {
         let name = Arc::new(name.to_string());
 
@@ -54,7 +58,7 @@ impl UTransport for UPClientFailingRegister {
             self.name, source_filter, sink_filter
         );
         Err(UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
+            UCode::InvalidArgument,
             "Failing to register listener",
         ))
     }

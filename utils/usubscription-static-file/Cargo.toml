@@ -9,6 +9,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+[lints]
+workspace = true
+
 [package]
 name = "usubscription-static-file"
 rust-version.workspace = true

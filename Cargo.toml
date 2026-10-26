@@ -12,16 +12,11 @@
 [workspace]
 resolver = "2"
 members = [
-    "example-streamer-uses",
+    "up-streamer",
     "utils/hello-world-protos",
     "utils/integration-test-utils",
-    "example-streamer-implementations",
-    "utils/criterion-guardrail",
-    "utils/transport-smoke-suite",
-    "configurable-streamer",
-    "up-linux-streamer-plugin",
-    "up-streamer",
     "utils/usubscription-static-file",
+    "utils/streamer-flow-evidence",
 ]
 
 [workspace.package]
@@ -35,6 +30,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 async-trait = { version = "0.1" }
+bytes = { version = "1.11" }
 clap = { version = "4.5" }
 futures = { version = "0.3.30" }
 lazy_static = { version = "1.5.0" }
@@ -52,10 +48,16 @@ tokio = { version = "1.44", default-features = false, features = [
     "macros",
 ] }
 protobuf = { version = "3.7.2", features = ["with-bytes"] }
-up-rust = { version = "0.9", default-features = false }
-up-transport-zenoh = { version = "0.9.0" }
-up-transport-vsomeip = { git = "https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust", rev = "278ab26415559d6cb61f40facd21de822032cc83", default-features = false }
-up-transport-mqtt5 = { version = "0.4.0" }
+up-rust = { git = "https://github.com/PLeVasseur/up-rust.git", rev = "cae0c55d19098a498ac6629d94c4cbcede66caae", default-features = false }
+up-native-profile = { version = "=0.1.0", git = "https://github.com/PLeVasseur/up-rust.git", rev = "cae0c55d19098a498ac6629d94c4cbcede66caae" }
+up-transport-zenoh = { git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "72466529213b345a8bdb39c6e815867dec477660" }
+up-transport-iceoryx2-rust = { git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "1a1c3f2fae4ddcc9bd552b8f80c12c80741591a8" }
+up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "4439274785f8d18daefa8e122c948cb8f5d10c97", default-features = false }
+up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "c17165d8f6e8458768ddd0e5dea97469cd0afbe4" }
+up-transport-dds = { git = "https://github.com/PLeVasseur/up-transport-dds-rust.git", rev = "7cb0316ec2b4e7af94005d8a8955a355bc829afe" }
+up-wire-xcdrv2 = { git = "https://github.com/PLeVasseur/up-wire-xcdrv2-rust.git", rev = "71e1b320056854e1fb480ed0b8b9340a1de74ab0" }
+up-wire-arrow = { git = "https://github.com/PLeVasseur/up-wire-arrow-rust.git", rev = "7d1f6f10c57f396d433d6e96514a8823fa4f7f9f" }
+up-wire-omgidl = { git = "https://github.com/PLeVasseur/up-wire-omgidl-rust.git", rev = "02420606b33e6e99f39b1532504c8c4747cdf378" }
 zenoh = { version = "1.2.1", features = [
     "default",
     "plugins",
@@ -67,9 +69,18 @@ zenoh-plugin-trait = { version = "1.2.1" }
 zenoh-result = { version = "1.2.1" }
 zenoh-util = { version = "1.2.1" }
 
+[workspace.lints.rust]
+missing_docs = "deny"
+
 [profile.dev]
 debug = true
 opt-level = 0
+
+[profile.matrix]
+inherits = "dev"
+debug = 0
+strip = "debuginfo"
+incremental = false
 
 [profile.fast]
 inherits = "release"

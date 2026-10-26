@@ -9,6 +9,9 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+[lints]
+workspace = true
+
 [package]
 name = "hello-world-protos"
 version = "0.1.0"
@@ -23,4 +26,3 @@ protobuf = { workspace = true }
 [build-dependencies]
 protobuf-codegen = { version = "3.3" }
 protoc-bin-vendored = { version = "3.0" }
-reqwest = { version = "0.12.14", features = ["blocking"] }

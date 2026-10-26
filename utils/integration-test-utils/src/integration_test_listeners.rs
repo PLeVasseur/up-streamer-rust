@@ -18,17 +18,20 @@ use tracing::debug;
 use up_rust::{UListener, UMessage};
 
 #[derive(Clone)]
+/// Local-side listener retaining received messages in a shared test history.
 pub struct LocalClientListener {
     message_store: Arc<Mutex<Vec<UMessage>>>,
 }
 
 impl LocalClientListener {
+    /// Creates an empty message history with initial capacity10000, not a fixed bound.
     pub fn new() -> Self {
         Self {
             message_store: Arc::new(Mutex::new(Vec::with_capacity(10000))),
         }
     }
 
+    /// Clones the shared history handle without clearing stored messages.
     pub fn retrieve_message_store(&self) -> Arc<Mutex<Vec<UMessage>>> {
         self.message_store.clone()
     }
@@ -49,17 +52,20 @@ impl Default for LocalClientListener {
 }
 
 #[derive(Clone)]
+/// Remote-side listener retaining received messages in a shared test history.
 pub struct RemoteClientListener {
     message_store: Arc<Mutex<Vec<UMessage>>>,
 }
 
 impl RemoteClientListener {
+    /// Creates an empty message history with initial capacity10000, not a fixed bound.
     pub fn new() -> Self {
         Self {
             message_store: Arc::new(Mutex::new(Vec::with_capacity(10000))),
         }
     }
 
+    /// Clones the shared history handle without clearing stored messages.
     pub fn retrieve_message_store(&self) -> Arc<Mutex<Vec<UMessage>>> {
         self.message_store.clone()
     }

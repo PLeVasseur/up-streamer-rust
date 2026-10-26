@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tracing::warn;
-use up_rust::core::usubscription::FetchSubscriptionsResponse;
+use up_rust::core::usubscription::SubscriptionInfo;
 use up_rust::UStatus;
 
 use crate::observability::events;
@@ -66,7 +66,7 @@ impl SubscriptionDirectory {
                     snapshot_version = snapshot.version,
                     "no subscribers found for egress authority"
                 );
-                HashMap::new()
+                Arc::new(HashMap::new())
             }
         }
     }
@@ -85,7 +85,7 @@ impl SubscriptionDirectory {
     /// Atomically applies one fetched subscription snapshot.
     pub(crate) async fn apply_snapshot(
         &self,
-        snapshot: FetchSubscriptionsResponse,
+        snapshot: Vec<SubscriptionInfo>,
     ) -> Result<(), UStatus> {
         let next_cache = SubscriptionCache::new(snapshot)?;
         let next_version = self.next_version.fetch_add(1, Ordering::Relaxed);
@@ -119,56 +119,39 @@ mod tests {
     use super::SubscriptionDirectory;
     use crate::routing::subscription_cache::SubscriptionCache;
     use std::str::FromStr;
-    use up_rust::core::usubscription::{FetchSubscriptionsResponse, SubscriberInfo, Subscription};
+    use up_rust::communication::SubscriptionStatus;
+    use up_rust::core::usubscription::SubscriptionInfo;
     use up_rust::UUri;
 
-    fn subscription(topic: &str, subscriber: &str) -> Subscription {
-        Subscription {
-            topic: Some(UUri::from_str(topic).expect("valid topic URI")).into(),
-            subscriber: Some(SubscriberInfo {
-                uri: Some(UUri::from_str(subscriber).expect("valid subscriber URI")).into(),
-                ..Default::default()
-            })
-            .into(),
-            ..Default::default()
-        }
+    fn subscription(topic: &str, subscriber: &str) -> SubscriptionInfo {
+        SubscriptionInfo::new(
+            UUri::from_str(topic).expect("valid topic URI"),
+            UUri::from_str(subscriber).expect("valid subscriber URI"),
+            SubscriptionStatus::Subscribed,
+            None,
+            None,
+        )
     }
 
     #[tokio::test]
-    async fn apply_snapshot_keeps_previous_cache_when_rebuild_fails() {
-        let initial_cache = SubscriptionCache::new(FetchSubscriptionsResponse {
-            subscriptions: vec![subscription(
-                "//authority-a/5BA0/1/8001",
-                "//authority-b/5678/1/1234",
-            )],
-            ..Default::default()
-        })
+    async fn apply_snapshot_replaces_previous_cache_with_empty_snapshot() {
+        let initial_cache = SubscriptionCache::new(vec![subscription(
+            "//authority-a/5BA0/1/8001",
+            "//authority-b/5678/1/1234",
+        )])
         .expect("initial cache should build");
 
         let directory = SubscriptionDirectory::new(initial_cache);
         assert_eq!(directory.current_version(), 0);
 
-        let invalid_snapshot = FetchSubscriptionsResponse {
-            subscriptions: vec![Subscription {
-                topic: None.into(),
-                subscriber: Some(SubscriberInfo {
-                    uri: Some(UUri::from_str("//authority-b/5678/1/1234").unwrap()).into(),
-                    ..Default::default()
-                })
-                .into(),
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        assert!(directory.apply_snapshot(invalid_snapshot).await.is_err());
-        assert_eq!(directory.current_version(), 0);
+        assert!(directory.apply_snapshot(Vec::new()).await.is_ok());
+        assert_eq!(directory.current_version(), 1);
 
         let remaining = directory
             .lookup_route_subscribers_with_version("authority-b")
             .await
             .1;
-        assert_eq!(remaining.len(), 1);
+        assert!(remaining.is_empty());
     }
 
     #[tokio::test]
@@ -177,13 +160,10 @@ mod tests {
         assert_eq!(directory.current_version(), 0);
 
         directory
-            .apply_snapshot(FetchSubscriptionsResponse {
-                subscriptions: vec![subscription(
-                    "//authority-a/5BA0/1/8001",
-                    "//authority-b/5678/1/1234",
-                )],
-                ..Default::default()
-            })
+            .apply_snapshot(vec![subscription(
+                "//authority-a/5BA0/1/8001",
+                "//authority-b/5678/1/1234",
+            )])
             .await
             .expect("first snapshot should apply");
 

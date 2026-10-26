@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Verify subscription bootstrap and listener-registration failure propagation.
 use integration_test_utils::{local_authority, remote_authority_a, UPClientFailingRegister};
 use std::sync::Arc;
 use up_rust::{UCode, UStatus, UTransport};
@@ -46,7 +47,7 @@ async fn usubscription_bad_data() {
     assert_eq!(
         add_route_res,
         Err(UStatus::fail_with_code(
-            UCode::INVALID_ARGUMENT,
+            UCode::InvalidArgument,
             "Failed to register notification request/response listener"
         ))
     );

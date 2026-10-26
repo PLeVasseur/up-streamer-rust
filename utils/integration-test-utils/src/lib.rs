@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Controlled transports, message fixtures and synchronization helpers for Streamer tests.
 mod up_client_foo;
 pub use up_client_foo::UPClientFoo;
 

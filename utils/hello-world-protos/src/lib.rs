@@ -11,4 +11,5 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Generated protobuf message definitions for the Hello World application examples.
 include!(concat!(env!("OUT_DIR"), "/helloworld/mod.rs"));

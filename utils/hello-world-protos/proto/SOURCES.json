@@ -1,0 +1,33 @@
+{
+  "description": "Frozen inputs for local Hello World protobuf generation; URLs are provenance only",
+  "files": [
+    {
+      "path": "google/type/timeofday.proto",
+      "source_url": "https://raw.githubusercontent.com/googleapis/googleapis/master/google/type/timeofday.proto",
+      "source_sha256": "95e0e5b05489f3c7e17b115ff8db9fe5b6b9f5162e83381e34d8208cf659728e",
+      "sha256": "95e0e5b05489f3c7e17b115ff8db9fe5b6b9f5162e83381e34d8208cf659728e",
+      "changes": "none"
+    },
+    {
+      "path": "uprotocol/uoptions.proto",
+      "source_url": "https://raw.githubusercontent.com/eclipse-uprotocol/up-spec/main/up-core-api/uprotocol/uoptions.proto",
+      "source_sha256": "dd70d8a0b1265e6a3a724fc707471c7fa4c384ac4f81d0f5e4b8060e23801c64",
+      "sha256": "ad5bc215a51500d510bc63cf9765d8d2c3d0e6f089bfeb2c3a8ece51aabcfec7",
+      "changes": "CRLF to LF and trailing comment whitespace only"
+    },
+    {
+      "path": "example/hello_world/v1/hello_world_topics.proto",
+      "source_url": "https://raw.githubusercontent.com/COVESA/uservices/main/src/main/proto/example/hello_world/v1/hello_world_topics.proto",
+      "source_sha256": "968da36d4c7927390f2b8e0afbb5ade2ed1d294065f9d72c15f046bec7352182",
+      "sha256": "0aece557687e0ee3d47839a39532fced0f927c564861ffb7a9262aeb0ec31615",
+      "changes": "final newline added"
+    },
+    {
+      "path": "example/hello_world/v1/hello_world_service.proto",
+      "source_url": "https://raw.githubusercontent.com/COVESA/uservices/main/src/main/proto/example/hello_world/v1/hello_world_service.proto",
+      "source_sha256": "8214668cdf7097bce50ee2c484698a4b4f7a26ef9cb3ba1d103d6f02ff461ea1",
+      "sha256": "8214668cdf7097bce50ee2c484698a4b4f7a26ef9cb3ba1d103d6f02ff461ea1",
+      "changes": "none"
+    }
+  ]
+}

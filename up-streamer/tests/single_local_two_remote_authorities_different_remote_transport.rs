@@ -11,6 +11,7 @@
  * SPDX-License-Identifier: Apache-2.0
  ********************************************************************************/
 
+//! Verify two remote authorities routed through distinct transport instances.
 use async_broadcast::broadcast;
 use futures::future::join;
 use integration_test_utils::{
