@@ -980,6 +980,7 @@ mod tests {
     #[test_case(0xF001; "XCDRv2 private reservation")]
     #[test_case(0xF002; "Arrow private reservation")]
     #[test_case(0xF003; "OMG IDL private reservation")]
+    #[test_case(0xFFFF; "future reserved ID")]
     #[test_case(65536; "encoding overflow")]
     fn invalid_allocations_are_rejected(id: u32) {
         let seeds = serde_json::json!([{"key": {"name": SelectedWireNativePayload::TYPE_NAME, "revision": SelectedWireNativePayload::REVISION}, "encoding_id": id}]);
@@ -991,7 +992,7 @@ mod tests {
                 1,
                 AllocationBand {
                     first: 0xF000,
-                    last: 0xFFFF
+                    last: 0xFFFE
                 },
                 None,
                 &seeds,
@@ -1001,6 +1002,31 @@ mod tests {
         } else {
             assert_eq!(id, 65536);
         }
+    }
+
+    #[test]
+    fn full_private_band_rejects_even_when_all_seed_ids_are_valid() {
+        let generate = |last| {
+            AgreementArtifact::generate_table(
+                &matrix_native_inventory().unwrap(),
+                "explicit-band".into(),
+                1,
+                AllocationBand {
+                    first: 0xF000,
+                    last,
+                },
+                None,
+                &matrix_seed_allocations(),
+                matrix_identity_declarations(),
+            )
+        };
+        assert!(generate(0xFFFE).unwrap().profile().is_ok());
+        assert!(matches!(
+            generate(0xFFFF),
+            Err(up_native_profile::ProfileToolError::Invalid(
+                "invalid private allocation band"
+            ))
+        ));
     }
 
     #[test]

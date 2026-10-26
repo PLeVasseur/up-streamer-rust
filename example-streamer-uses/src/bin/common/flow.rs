@@ -259,10 +259,7 @@ pub(crate) async fn run_owned_with_ready(
     config: &FlowConfig,
     ready: fn(),
 ) -> Result<(), UStatus> {
-    if matches!(
-        config.role,
-        FlowRole::PubSender | FlowRole::NotifySender | FlowRole::RpcClient
-    ) {
+    if matches!(config.role, FlowRole::PubSender | FlowRole::NotifySender) {
         super::startup::wait_for_start().await?;
     }
     match config.role {
@@ -276,6 +273,7 @@ pub(crate) async fn run_owned_with_ready(
             )
             .await?;
             observed_send(config.role, payload.len());
+            super::startup::wait_for_completion().await?;
         }
         FlowRole::PubReceiver | FlowRole::NotifyReceiver => {
             let (source, sink) = config.filters()?;
@@ -292,37 +290,32 @@ pub(crate) async fn run_owned_with_ready(
         }
         FlowRole::RpcClient => {
             let payload = config.payload(1, false)?;
-            let metadata = config.outbound_metadata()?;
             let (source, sink) = config.filters()?;
-            let response = if config.send_count <= 1 {
-                send_owned(&transport, metadata, &payload).await?;
-                receive_owned_pull(
-                    &transport,
-                    &source,
-                    sink.as_ref(),
-                    config.timeout_ms,
-                    (config.wire_format == FlowWireFormat::Native).then_some(&config.native),
+            let mut receiving =
+                super::receive::register_owned(&transport, &source, sink.as_ref()).await?;
+            let result = async {
+                ready();
+                super::startup::wait_for_start().await?;
+                let metadata = config.outbound_metadata()?;
+                receiving.expect_response(metadata.id());
+                let deadline = tokio::time::Instant::now()
+                    .checked_add(Duration::from_millis(config.timeout_ms))
+                    .ok_or_else(|| invalid("response deadline overflow"))?;
+                exchange(
+                    send_owned_repeated(&transport, metadata, &payload, config.into()),
+                    receiving.receive_until(deadline),
                 )
-                .await?
-            } else {
-                let sender = Arc::clone(&transport);
-                let bytes = payload.clone();
-                let settings = config.clone();
-                let task = tokio::spawn(async move {
-                    send_owned_repeated(&sender, metadata, &bytes, (&settings).into()).await
-                });
-                let response = receive_owned_pull(
-                    &transport,
-                    &source,
-                    sink.as_ref(),
-                    config.timeout_ms,
-                    (config.wire_format == FlowWireFormat::Native).then_some(&config.native),
-                )
-                .await;
-                task.abort();
-                let _ = task.await;
-                response?
-            };
+                .await
+            }
+            .await;
+            let cleanup = receiving.stop().await;
+            let response = result?;
+            cleanup?;
+            if config.wire_format == FlowWireFormat::Native {
+                config
+                    .native
+                    .verify_owned(response.metadata(), response.payload_bytes())?;
+            }
             ensure_payload_matches(&payload, response.payload_bytes())?;
             observed_receive(config.role, response.payload_bytes().len());
         }
@@ -418,6 +411,7 @@ where
             )
             .await?;
             observed_send(config.role, payload.len());
+            super::startup::wait_for_completion().await?;
         }
         FlowRole::PubReceiver | FlowRole::NotifyReceiver => {
             let (source, sink) = config.filters()?;
@@ -443,29 +437,33 @@ where
             ready();
             super::startup::wait_for_start().await?;
             let metadata = config.outbound_metadata()?;
-            let response = if config.send_count <= 1 {
-                send_native(&transport, metadata, &payload, config.alignment()).await?;
-                receiving.receive(config.timeout_ms).await?
-            } else {
-                let sender = Arc::clone(&transport);
-                let bytes = payload.clone();
-                let settings = config.clone();
-                let task = tokio::spawn(async move {
-                    send_native_repeated(
-                        &sender,
-                        metadata,
-                        &bytes,
-                        settings.alignment(),
-                        (&settings).into(),
-                    )
-                    .await
-                });
-                let response = receiving.receive(config.timeout_ms).await;
-                task.abort();
-                let _ = task.await;
-                response?
-            };
-            receiving.stop().await?;
+            let request_id = metadata.id().clone();
+            let deadline = tokio::time::Instant::now()
+                .checked_add(Duration::from_millis(config.timeout_ms))
+                .ok_or_else(|| invalid("response deadline overflow"))?;
+            let result = exchange(
+                send_native_repeated(
+                    &transport,
+                    metadata,
+                    &payload,
+                    config.alignment(),
+                    config.into(),
+                ),
+                async {
+                    loop {
+                        let response = receiving.receive_until(deadline).await?;
+                        if response.metadata().reqid() == Some(&request_id)
+                            && response.metadata().kind() == up_rust::UMessageType::Response
+                        {
+                            break Ok(response);
+                        }
+                    }
+                },
+            )
+            .await;
+            let cleanup = receiving.stop().await;
+            let response = result?;
+            cleanup?;
             let bytes = super::payloads::copy_payload_bytes(&response)?;
             ensure_payload_matches(&payload, &bytes)?;
             observed_receive(config.role, bytes.len());
@@ -495,6 +493,21 @@ where
         }
     }
     Ok(())
+}
+
+/// Drive a repeated sender and one correlated receive in the caller's task.
+/// A reply or send failure drops the other future, so cancellation cannot leave
+/// a detached sender continuing to publish after its exchange has ended.
+async fn exchange<T>(
+    send: impl std::future::Future<Output = Result<(), UStatus>>,
+    receive: impl std::future::Future<Output = Result<T, UStatus>>,
+) -> Result<T, UStatus> {
+    tokio::pin!(send, receive);
+    tokio::select! {
+        biased;
+        sent = &mut send => { sent?; receive.await },
+        response = &mut receive => response,
+    }
 }
 
 async fn send_owned(
@@ -804,5 +817,122 @@ mod tests {
         assert_eq!(response.metadata().ttl(), request.ttl());
         assert_eq!(response.payload_bytes(), b"request bytes");
         assert_eq!(endpoint.unregistered.load(Ordering::SeqCst), 1);
+    }
+
+    #[derive(Default)]
+    struct ImmediateReply {
+        listener: Mutex<Option<Arc<dyn UOwnedListener>>>,
+        sent: AtomicUsize,
+        removed: AtomicUsize,
+    }
+    #[async_trait]
+    impl UOwnedTransportImpl for ImmediateReply {
+        async fn register_validated_owned_listener(
+            &self,
+            _: &UUri,
+            _: Option<&UUri>,
+            listener: Arc<dyn UOwnedListener>,
+        ) -> Result<(), UStatus> {
+            *self.listener.lock().unwrap() = Some(listener);
+            Ok(())
+        }
+        async fn unregister_validated_owned_listener(
+            &self,
+            _: &UUri,
+            _: Option<&UUri>,
+            _: Arc<dyn UOwnedListener>,
+        ) -> Result<(), UStatus> {
+            self.listener.lock().unwrap().take();
+            self.removed.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        async fn send_validated_owned(&self, frame: UOwnedFrame) -> Result<(), UStatus> {
+            let listener = self
+                .listener
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("register before publishing the first request");
+            self.sent.fetch_add(1, Ordering::SeqCst);
+            let response = |id| {
+                UOwnedFrame::with_payload(
+                    UFrameMetadata::response(
+                        frame.metadata().sink().unwrap().clone(),
+                        frame.metadata().source().clone(),
+                        id,
+                    )
+                    .with_payload_encoding(*frame.metadata().payload_encoding().unwrap())
+                    .build()
+                    .unwrap(),
+                    frame.payload_bytes().to_vec(),
+                )
+                .unwrap()
+            };
+            listener
+                .on_receive_owned(response(up_rust::UUID::build()))
+                .await;
+            listener
+                .on_receive_owned(response(frame.metadata().id().clone()))
+                .await;
+            Ok(())
+        }
+    }
+
+    async fn immediate_rpc(count: usize) {
+        let endpoint = Arc::new(ImmediateReply::default());
+        let transport: Arc<dyn UOwnedTransport> = endpoint.clone();
+        let mut settings = config();
+        settings.role = FlowRole::RpcClient;
+        settings.send_count = count;
+        settings.send_interval_ms = 50;
+        run_owned(transport, &settings).await.unwrap();
+        assert_eq!(endpoint.sent.load(Ordering::SeqCst), 1);
+        assert_eq!(endpoint.removed.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn single_owned_request_registers_before_immediate_reply() {
+        immediate_rpc(1).await;
+    }
+
+    #[tokio::test]
+    async fn repeated_owned_request_stops_after_first_correlated_reply() {
+        immediate_rpc(5).await;
+    }
+
+    struct Dropped(Arc<AtomicUsize>);
+    impl Drop for Dropped {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn completed_reply_drops_pending_repeated_sender() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let guard = Dropped(Arc::clone(&dropped));
+        let send = async move {
+            let _guard = guard;
+            std::future::pending::<Result<(), UStatus>>().await
+        };
+        assert_eq!(exchange(send, async { Ok(7) }).await.unwrap(), 7);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn rejected_send_drops_pending_receiver() {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let guard = Dropped(Arc::clone(&dropped));
+        let receive = async move {
+            let _guard = guard;
+            std::future::pending::<Result<(), UStatus>>().await
+        };
+        let result = exchange(
+            async { Err(UStatus::fail_with_code(UCode::Unavailable, "rejected")) },
+            receive,
+        )
+        .await;
+        assert_eq!(result.unwrap_err().code(), UCode::Unavailable);
+        assert_eq!(dropped.load(Ordering::SeqCst), 1);
     }
 }

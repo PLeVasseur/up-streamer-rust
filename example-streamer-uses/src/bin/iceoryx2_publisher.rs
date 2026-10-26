@@ -121,7 +121,7 @@ struct Cli {
     /// Optional binding receive-buffer/borrow limit using the configured role namespace.
     #[arg(long)]
     iceoryx2_receive_capacity: Option<usize>,
-    /// Actual subscriber discovery requirement before an iceoryx2 publication.
+    /// Actual subscriber discovery requirement before owned or native iceoryx2 publication.
     #[arg(long, default_value_t = 0)]
     iceoryx2_min_subscribers: usize,
     #[arg(long)]
@@ -238,7 +238,11 @@ async fn main() -> Result<(), UStatus> {
         #[cfg(feature = "iceoryx2-owned-frame")]
         (FlowMode::OwnedFrame, FlowTransport::Iceoryx2) => {
             let physical = up_transport_iceoryx2_rust::Iceoryx2PubSub::try_with_config(
-                common::endpoint_config::iceoryx2(None, 0, &capacities)?,
+                common::endpoint_config::iceoryx2(
+                    cli.iceoryx2_receive_capacity,
+                    cli.iceoryx2_min_subscribers,
+                    &capacities,
+                )?,
             )?;
             let core = up_transport_iceoryx2_rust::BenchmarkOwnedIceoryx2Core::new(physical);
             run_endpoint!(core, &config, run_owned)

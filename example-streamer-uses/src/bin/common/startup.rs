@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Contributors to the Eclipse Foundation
 // SPDX-License-Identifier: Apache-2.0
-//! Optional controller-owned first-send barrier for finite connectivity roles.
+//! Optional controller-owned startup and source-lifetime barriers for finite roles.
 #![allow(dead_code)]
 
 use std::{io::Read, path::Path, time::Duration};
@@ -24,23 +24,42 @@ pub(crate) async fn wait_for_start() -> Result<(), UStatus> {
 }
 
 async fn wait_for_release(path: &Path, timeout: Duration) -> Result<(), UStatus> {
+    wait_for_marker(path, timeout, b"START\n").await
+}
+
+/// Retains the finite source endpoint after publication until its controller
+/// observes receiver completion. No extra traffic or fixed keepalive delay is used.
+/// Ordinary examples omit the variable and keep their existing exit behavior.
+pub(crate) async fn wait_for_completion() -> Result<(), UStatus> {
+    let Some(path) = std::env::var_os("UPROTOCOL_SOURCE_FINISH_FILE") else {
+        return Ok(());
+    };
+    println!("READY source_complete_waiting");
+    wait_for_marker(Path::new(&path), Duration::from_secs(30), b"STOP\n").await
+}
+
+async fn wait_for_marker<const N: usize>(
+    path: &Path,
+    timeout: Duration,
+    expected: &[u8; N],
+) -> Result<(), UStatus> {
     let deadline = tokio::time::Instant::now()
         .checked_add(timeout)
         .ok_or_else(|| {
-            UStatus::fail_with_code(UCode::InvalidArgument, "source start deadline overflow")
+            UStatus::fail_with_code(UCode::InvalidArgument, "source barrier deadline overflow")
         })?;
     loop {
         match std::fs::File::open(path) {
             Ok(mut file) => {
-                let mut marker = [0u8; 6];
+                let mut marker = [0u8; N];
                 let mut extra = [0u8; 1];
                 if file.read_exact(&mut marker).is_err()
-                    || &marker != b"START\n"
+                    || &marker != expected
                     || file.read(&mut extra).ok() != Some(0)
                 {
                     return Err(UStatus::fail_with_code(
                         UCode::InvalidArgument,
-                        "invalid source start marker",
+                        "invalid source barrier marker",
                     ));
                 }
                 return Ok(());
@@ -49,14 +68,14 @@ async fn wait_for_release(path: &Path, timeout: Duration) -> Result<(), UStatus>
             Err(error) => {
                 return Err(UStatus::fail_with_code(
                     UCode::Unavailable,
-                    format!("source start marker: {error}"),
+                    format!("source barrier marker: {error}"),
                 ))
             }
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(UStatus::fail_with_code(
                 UCode::DeadlineExceeded,
-                "source start barrier timed out",
+                "source barrier timed out",
             ));
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -111,5 +130,27 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(error.code(), UCode::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn finite_source_lifetime_requires_the_exact_completion_marker() {
+        let marker = Marker::new();
+        let waiting = wait_for_marker(&marker.0, Duration::from_secs(1), b"STOP\n");
+        tokio::pin!(waiting);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut waiting)
+                .await
+                .is_err()
+        );
+        std::fs::write(&marker.0, b"STOP\n").unwrap();
+        waiting.await.unwrap();
+        std::fs::write(&marker.0, b"START\n").unwrap();
+        assert_eq!(
+            wait_for_marker(&marker.0, Duration::from_secs(1), b"STOP\n")
+                .await
+                .unwrap_err()
+                .code(),
+            UCode::InvalidArgument
+        );
     }
 }

@@ -8,13 +8,53 @@ use async_trait::async_trait;
 use configurable_streamer_wire_support::prepared::{
     PreparedEndpoint, PreparedReceived, PreparedSession,
 };
-use std::{sync::Arc, time::Duration};
-use tokio::sync::mpsc;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::sync::{oneshot, Notify};
 use up_rust::{
-    PreparedTransportCore, UCode, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UUri,
+    PreparedTransportCore, UCode, UMessageType, UOwnedFrame, UOwnedListener, UOwnedTransport,
+    UStatus, UUri, UUID,
 };
 
-struct OwnedChannel(mpsc::UnboundedSender<UOwnedFrame>);
+enum Expected {
+    Any,
+    Response(UUID),
+}
+
+struct OwnedState {
+    expected: Option<Expected>,
+    frame: Option<UOwnedFrame>,
+    closed: bool,
+}
+
+struct OwnedInbox {
+    state: Mutex<OwnedState>,
+    ready: Notify,
+}
+
+impl OwnedInbox {
+    fn clear(&self, close: bool) {
+        let frame = {
+            let mut state = self.state.lock().unwrap();
+            state.closed |= close;
+            state.expected = None;
+            state.frame.take()
+        };
+        drop(frame);
+        self.ready.notify_waiters();
+    }
+}
+
+struct OwnedWait<'a>(&'a OwnedInbox);
+impl Drop for OwnedWait<'_> {
+    fn drop(&mut self) {
+        self.0.clear(false);
+    }
+}
+
+struct OwnedChannel(Arc<OwnedInbox>);
 
 pub(crate) fn listener_ready() {
     println!("READY listener_registered");
@@ -29,8 +69,167 @@ pub(crate) fn zenoh_listener_ready() {
 impl UOwnedListener for OwnedChannel {
     async fn on_receive_owned(&self, frame: UOwnedFrame) {
         super::proof::received_frame(&frame);
-        let _ = self.0.send(frame);
+        let mut state = self.0.state.lock().unwrap();
+        let matches = match &state.expected {
+            Some(Expected::Any) => true,
+            Some(Expected::Response(id)) => {
+                frame.metadata().kind() == UMessageType::Response
+                    && frame.metadata().reqid() == Some(id)
+            }
+            None => false,
+        };
+        if state.closed || state.frame.is_some() || !matches {
+            return;
+        }
+        state.frame = Some(frame);
+        drop(state);
+        self.0.ready.notify_one();
     }
+}
+
+/// One registered owned listener, one result slot and one setup-owned lifecycle task.
+/// Dropping the reception closes admission immediately; the task finishes native
+/// unregister even when the caller cancels registration, receive or explicit stop.
+pub(crate) struct OwnedReception {
+    inbox: Arc<OwnedInbox>,
+    close: Option<oneshot::Sender<()>>,
+    task: Option<tokio::task::JoinHandle<Result<(), UStatus>>>,
+}
+
+impl OwnedReception {
+    pub(crate) fn expect_response(&mut self, id: &UUID) {
+        let previous = {
+            let mut state = self.inbox.state.lock().unwrap();
+            state.expected = Some(Expected::Response(id.clone()));
+            state.frame.take()
+        };
+        drop(previous);
+    }
+
+    pub(crate) async fn receive(&mut self, timeout_ms: u64) -> Result<UOwnedFrame, UStatus> {
+        let deadline = tokio::time::Instant::now()
+            .checked_add(Duration::from_millis(timeout_ms))
+            .ok_or_else(|| {
+                UStatus::fail_with_code(UCode::InvalidArgument, "owned receive deadline overflow")
+            })?;
+        self.receive_until(deadline).await
+    }
+
+    pub(crate) async fn receive_until(
+        &mut self,
+        deadline: tokio::time::Instant,
+    ) -> Result<UOwnedFrame, UStatus> {
+        let _waiting = OwnedWait(&self.inbox);
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(UStatus::fail_with_code(
+                    UCode::DeadlineExceeded,
+                    "registered owned receive timed out",
+                ));
+            }
+            let ready = self.inbox.ready.notified();
+            tokio::pin!(ready);
+            ready.as_mut().enable();
+            {
+                let mut state = self.inbox.state.lock().unwrap();
+                if state.closed {
+                    return Err(UStatus::fail_with_code(
+                        UCode::Unavailable,
+                        "registered owned receiver closed",
+                    ));
+                }
+                if let Some(frame) = state.frame.take() {
+                    state.expected = None;
+                    return Ok(frame);
+                }
+            }
+            tokio::time::timeout_at(deadline, ready)
+                .await
+                .map_err(|_| {
+                    UStatus::fail_with_code(
+                        UCode::DeadlineExceeded,
+                        "registered owned receive timed out",
+                    )
+                })?;
+        }
+    }
+
+    fn close(&mut self) {
+        self.inbox.clear(true);
+        if let Some(close) = self.close.take() {
+            let _ = close.send(());
+        }
+    }
+
+    pub(crate) async fn stop(mut self) -> Result<(), UStatus> {
+        self.close();
+        if let Some(task) = self.task.take() {
+            task.await.map_err(|error| {
+                UStatus::fail_with_code(
+                    UCode::Internal,
+                    format!("owned registration lifecycle task failed: {error}"),
+                )
+            })??;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for OwnedReception {
+    fn drop(&mut self) {
+        self.close();
+        // Detach the setup task rather than aborting native unregister. This is
+        // one lifecycle task per registration, never a task per received frame.
+        self.task.take();
+    }
+}
+
+pub(crate) async fn register_owned(
+    transport: &Arc<dyn UOwnedTransport>,
+    source: &UUri,
+    sink: Option<&UUri>,
+) -> Result<OwnedReception, UStatus> {
+    let inbox = Arc::new(OwnedInbox {
+        state: Mutex::new(OwnedState {
+            expected: Some(Expected::Any),
+            frame: None,
+            closed: false,
+        }),
+        ready: Notify::new(),
+    });
+    let listener: Arc<dyn UOwnedListener> = Arc::new(OwnedChannel(Arc::clone(&inbox)));
+    let transport = Arc::clone(transport);
+    let source = source.clone();
+    let sink = sink.cloned();
+    let (ready, registered) = oneshot::channel();
+    let (close, closed) = oneshot::channel();
+    let task = tokio::spawn(async move {
+        let result = transport
+            .register_owned_listener(&source, sink.as_ref(), Arc::clone(&listener))
+            .await;
+        let active = result.is_ok();
+        let _ = ready.send(result);
+        if active {
+            let _ = closed.await;
+            transport
+                .unregister_owned_listener(&source, sink.as_ref(), listener)
+                .await
+        } else {
+            Ok(())
+        }
+    });
+    let reception = OwnedReception {
+        inbox,
+        close: Some(close),
+        task: Some(task),
+    };
+    registered.await.map_err(|error| {
+        UStatus::fail_with_code(
+            UCode::Internal,
+            format!("owned registration did not complete: {error}"),
+        )
+    })??;
+    Ok(reception)
 }
 
 pub(crate) type NativeFrame<T> =
@@ -49,7 +248,19 @@ impl<T: PreparedEndpoint> NativeReception<T> {
             .ok_or_else(|| {
                 UStatus::fail_with_code(UCode::InvalidArgument, "native receive deadline overflow")
             })?;
+        self.receive_until(deadline).await
+    }
+    pub(crate) async fn receive_until(
+        &mut self,
+        deadline: tokio::time::Instant,
+    ) -> Result<NativeFrame<T>, UStatus> {
         loop {
+            if tokio::time::Instant::now() >= deadline {
+                return Err(UStatus::fail_with_code(
+                    UCode::DeadlineExceeded,
+                    "registered native receive timed out",
+                ));
+            }
             let raw = tokio::time::timeout_at(deadline, self.inbox.recv())
                 .await
                 .map_err(|_| {
@@ -154,16 +365,10 @@ pub(crate) async fn owned_with_ready(
     native: Option<&NativeContext>,
     ready: impl FnOnce(),
 ) -> Result<UOwnedFrame, UStatus> {
-    let (sender, mut receiver) = mpsc::unbounded_channel();
-    let listener: Arc<dyn UOwnedListener> = Arc::new(OwnedChannel(sender));
-    transport
-        .register_owned_listener(source, sink, listener.clone())
-        .await?;
+    let mut receiver = register_owned(transport, source, sink).await?;
     ready();
-    let result = receive(&mut receiver, timeout_ms).await;
-    let cleanup = transport
-        .unregister_owned_listener(source, sink, listener)
-        .await;
+    let result = receiver.receive(timeout_ms).await;
+    let cleanup = receiver.stop().await;
     let frame = result?;
     cleanup?;
     if let Some(native) = native {
@@ -233,23 +438,6 @@ where
     zero_copy(transport, source, sink, timeout_ms)
         .await
         .and_then(|frame| super::payloads::copy_payload_bytes(&frame))
-}
-
-async fn receive<T>(
-    receiver: &mut mpsc::UnboundedReceiver<T>,
-    timeout_ms: u64,
-) -> Result<T, UStatus> {
-    tokio::time::timeout(Duration::from_millis(timeout_ms), receiver.recv())
-        .await
-        .map_err(|_| {
-            UStatus::fail_with_code(
-                UCode::DeadlineExceeded,
-                "timed out waiting for registered receiver",
-            )
-        })?
-        .ok_or_else(|| {
-            UStatus::fail_with_code(UCode::Unavailable, "registered receiver channel closed")
-        })
 }
 
 #[cfg(test)]
@@ -349,5 +537,139 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(error.code(), UCode::Unavailable);
+    }
+
+    struct Controlled {
+        listener: Mutex<Option<Arc<dyn UOwnedListener>>>,
+        registration_entered: Notify,
+        registration_release: Notify,
+        removal_entered: Notify,
+        removal_release: Notify,
+        removed: Notify,
+        removals: AtomicUsize,
+        pause_registration: bool,
+        pause_removal: bool,
+    }
+    impl Controlled {
+        fn new(pause_registration: bool, pause_removal: bool) -> Arc<Self> {
+            Arc::new(Self {
+                listener: Mutex::new(None),
+                registration_entered: Notify::new(),
+                registration_release: Notify::new(),
+                removal_entered: Notify::new(),
+                removal_release: Notify::new(),
+                removed: Notify::new(),
+                removals: AtomicUsize::new(0),
+                pause_registration,
+                pause_removal,
+            })
+        }
+    }
+    #[async_trait]
+    impl UOwnedTransportImpl for Controlled {
+        async fn send_validated_owned(&self, _: UOwnedFrame) -> Result<(), UStatus> {
+            unreachable!()
+        }
+        async fn register_validated_owned_listener(
+            &self,
+            _: &UUri,
+            _: Option<&UUri>,
+            listener: Arc<dyn UOwnedListener>,
+        ) -> Result<(), UStatus> {
+            *self.listener.lock().unwrap() = Some(listener);
+            self.registration_entered.notify_one();
+            if self.pause_registration {
+                self.registration_release.notified().await;
+            }
+            Ok(())
+        }
+        async fn unregister_validated_owned_listener(
+            &self,
+            _: &UUri,
+            _: Option<&UUri>,
+            _: Arc<dyn UOwnedListener>,
+        ) -> Result<(), UStatus> {
+            self.removal_entered.notify_one();
+            if self.pause_removal {
+                self.removal_release.notified().await;
+            }
+            self.listener.lock().unwrap().take();
+            self.removals.fetch_add(1, Ordering::SeqCst);
+            self.removed.notify_one();
+            Ok(())
+        }
+    }
+
+    async fn notified(notify: &Notify) {
+        tokio::time::timeout(Duration::from_secs(2), notify.notified())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_registration_retires_the_late_native_registration() {
+        let control = Controlled::new(true, false);
+        let transport: Arc<dyn UOwnedTransport> = control.clone();
+        let caller = tokio::spawn(async move {
+            owned(
+                &transport,
+                &UUri::try_from("//ready-test/5ba0/1/8001").unwrap(),
+                None,
+                1000,
+                None,
+            )
+            .await
+        });
+        notified(&control.registration_entered).await;
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        control.registration_release.notify_one();
+        notified(&control.removed).await;
+        assert_eq!(control.removals.load(Ordering::SeqCst), 1);
+        assert!(control.listener.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn cancellation_while_receiving_retires_the_registration() {
+        let control = Controlled::new(false, false);
+        let transport: Arc<dyn UOwnedTransport> = control.clone();
+        let ready = Arc::new(Notify::new());
+        let callback = Arc::clone(&ready);
+        let caller = tokio::spawn(async move {
+            owned_with_ready(
+                &transport,
+                &UUri::try_from("//ready-test/5ba0/1/8001").unwrap(),
+                None,
+                1000,
+                None,
+                move || callback.notify_one(),
+            )
+            .await
+        });
+        notified(&ready).await;
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+        notified(&control.removed).await;
+        assert_eq!(control.removals.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cancelling_stop_keeps_the_setup_owned_retirement_task_alive() {
+        let control = Controlled::new(false, true);
+        let transport: Arc<dyn UOwnedTransport> = control.clone();
+        let receiver = register_owned(
+            &transport,
+            &UUri::try_from("//ready-test/5ba0/1/8001").unwrap(),
+            None,
+        )
+        .await
+        .unwrap();
+        let stopping = tokio::spawn(receiver.stop());
+        notified(&control.removal_entered).await;
+        stopping.abort();
+        assert!(stopping.await.unwrap_err().is_cancelled());
+        control.removal_release.notify_one();
+        notified(&control.removed).await;
+        assert_eq!(control.removals.load(Ordering::SeqCst), 1);
     }
 }

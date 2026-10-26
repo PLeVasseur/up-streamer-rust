@@ -5,7 +5,7 @@
 
 use super::{flow, payloads::NativeContext};
 use configurable_streamer_wire_support::prepared::{PreparedEndpoint, PreparedSession};
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use up_rust::{UCode, UFrameMetadata, UFrameView, UOwnedTransport, UStatus, UUri};
 
 #[derive(Clone)]
@@ -35,27 +35,54 @@ pub(crate) async fn owned(
     options: &ClientOptions,
     request: impl Fn(u32) -> Result<(UFrameMetadata, Vec<u8>), UStatus>,
 ) -> Result<(), UStatus> {
-    super::startup::wait_for_start().await?;
     let sends = options.sends()?;
-    exchanges(options, request, |metadata, payload| async move {
-        let receiver = transport.clone();
-        let receive_options = options.clone();
-        let task = tokio::spawn(async move {
-            let frame = flow::receive_owned_pull(
-                &receiver,
-                &receive_options.response_source,
-                Some(&receive_options.response_sink),
-                receive_options.timeout_ms,
-                receive_options.native.as_ref(),
-            )
-            .await?;
-            Ok(frame.payload_bytes().to_vec())
-        });
-        tokio::time::sleep(options.receive_settle).await;
-        let sent = flow::send_owned_repeated(transport, metadata, &payload, sends).await;
-        finish(task, sent).await
-    })
-    .await
+    let mut receiver = super::receive::register_owned(
+        transport,
+        &options.response_source,
+        Some(&options.response_sink),
+    )
+    .await?;
+    let result = async {
+        super::startup::wait_for_start().await?;
+        let mut exchange = 0u64;
+        loop {
+            let sequence =
+                u32::try_from(exchange.saturating_add(1).min(u64::from(u32::MAX))).unwrap();
+            let (metadata, payload) = request(sequence)?;
+            // One registration spans every exchange. Arm exact correlation before
+            // sending so an immediate reply cannot race creation of its waiter.
+            receiver.expect_response(metadata.id());
+            let deadline = tokio::time::Instant::now()
+                .checked_add(Duration::from_millis(options.timeout_ms))
+                .ok_or_else(|| flow::invalid("response deadline overflow"))?;
+            // Preserve the existing per-exchange pause; it no longer establishes
+            // registration readiness and does not renew the response deadline.
+            tokio::time::sleep(options.receive_settle).await;
+            flow::send_owned_repeated(transport, metadata, &payload, sends).await?;
+            let response = receiver.receive_until(deadline).await?;
+            if let Some(native) = &options.native {
+                native.verify_owned(response.metadata(), response.payload_bytes())?;
+            }
+            if response.payload_bytes() != payload {
+                return Err(flow::invalid("correlated response payload mismatch"));
+            }
+            println!(
+                "FLOW observed_payload_bytes={} role=rpc_client",
+                response.payload_bytes().len()
+            );
+            exchange = exchange.checked_add(1).ok_or_else(|| {
+                UStatus::fail_with_code(UCode::OutOfRange, "RPC exchange counter exhausted")
+            })?;
+            if options.send_count != 0 {
+                return Ok(());
+            }
+            tokio::time::sleep(options.interval).await;
+        }
+    }
+    .await;
+    let cleanup = receiver.stop().await;
+    result?;
+    cleanup
 }
 
 pub(crate) async fn native<T>(
@@ -132,81 +159,144 @@ where
     cleanup
 }
 
-async fn exchanges<F: Future<Output = Result<Vec<u8>, UStatus>>>(
-    options: &ClientOptions,
-    request: impl Fn(u32) -> Result<(UFrameMetadata, Vec<u8>), UStatus>,
-    mut exchange: impl FnMut(UFrameMetadata, Vec<u8>) -> F,
-) -> Result<(), UStatus> {
-    let mut exchanges = 0_u64;
-    loop {
-        let sequence = exchanges.saturating_add(1).min(u64::from(u32::MAX)) as u32;
-        let (metadata, payload) = request(sequence)?;
-        let response = exchange(metadata, payload.clone()).await?;
-        if payload != response {
-            return Err(flow::invalid(format!(
-                "response payload mismatch: expected {} bytes, observed {} bytes",
-                payload.len(),
-                response.len()
-            )));
-        }
-        println!(
-            "FLOW observed_payload_bytes={} role=rpc_client",
-            response.len()
-        );
-        exchanges = exchanges.checked_add(1).ok_or_else(|| {
-            UStatus::fail_with_code(UCode::OutOfRange, "RPC exchange counter exhausted")
-        })?;
-        if options.send_count != 0 {
-            return Ok(());
-        }
-        tokio::time::sleep(options.interval).await;
-    }
-}
-
-async fn finish(
-    task: tokio::task::JoinHandle<Result<Vec<u8>, UStatus>>,
-    sent: Result<(), UStatus>,
-) -> Result<Vec<u8>, UStatus> {
-    if let Err(error) = sent {
-        task.abort();
-        let _ = task.await;
-        return Err(error);
-    }
-    task.await.map_err(|error| {
-        UStatus::fail_with_code(
-            UCode::Internal,
-            format!("response receive task failed: {error}"),
-        )
-    })?
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    };
+    use up_rust::{PayloadEncoding, UOwnedFrame, UOwnedListener, UOwnedTransportImpl, UUID};
 
-    struct Dropped(Arc<AtomicBool>);
-    impl Drop for Dropped {
-        fn drop(&mut self) {
-            self.0.store(true, Ordering::SeqCst);
+    struct Loopback {
+        listener: Mutex<Option<Arc<dyn UOwnedListener>>>,
+        registrations: AtomicUsize,
+        removals: AtomicUsize,
+        sends: AtomicUsize,
+        fail_on: usize,
+    }
+
+    #[async_trait::async_trait]
+    impl UOwnedTransportImpl for Loopback {
+        async fn register_validated_owned_listener(
+            &self,
+            _: &UUri,
+            _: Option<&UUri>,
+            listener: Arc<dyn UOwnedListener>,
+        ) -> Result<(), UStatus> {
+            self.registrations.fetch_add(1, Ordering::SeqCst);
+            *self.listener.lock().unwrap() = Some(listener);
+            Ok(())
+        }
+        async fn unregister_validated_owned_listener(
+            &self,
+            _: &UUri,
+            _: Option<&UUri>,
+            _: Arc<dyn UOwnedListener>,
+        ) -> Result<(), UStatus> {
+            self.listener.lock().unwrap().take();
+            self.removals.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        async fn send_validated_owned(&self, frame: UOwnedFrame) -> Result<(), UStatus> {
+            let listener = self
+                .listener
+                .lock()
+                .unwrap()
+                .clone()
+                .expect("response registration precedes send");
+            let send = self.sends.fetch_add(1, Ordering::SeqCst) + 1;
+            if send == self.fail_on {
+                return Err(UStatus::fail_with_code(UCode::Unavailable, "send rejected"));
+            }
+            let reply = |id, bytes: Vec<u8>| {
+                UOwnedFrame::with_payload(
+                    UFrameMetadata::response(
+                        frame.metadata().sink().unwrap().clone(),
+                        frame.metadata().source().clone(),
+                        id,
+                    )
+                    .with_payload_encoding(PayloadEncoding::RAW)
+                    .build()
+                    .unwrap(),
+                    bytes,
+                )
+                .unwrap()
+            };
+            // Synchronous delivery inside send proves setup and correlation are
+            // already armed. An unrelated ID and a duplicate cannot win the call.
+            listener
+                .on_receive_owned(reply(UUID::build(), b"unrelated".to_vec()))
+                .await;
+            listener
+                .on_receive_owned(reply(
+                    frame.metadata().id().clone(),
+                    frame.payload_bytes().to_vec(),
+                ))
+                .await;
+            listener
+                .on_receive_owned(reply(frame.metadata().id().clone(), b"duplicate".to_vec()))
+                .await;
+            Ok(())
         }
     }
 
-    #[tokio::test]
-    async fn failed_send_cancels_and_reaps_pending_response_task() {
-        let dropped = Arc::new(AtomicBool::new(false));
-        let guard = Dropped(dropped.clone());
-        let task = tokio::spawn(async move {
-            let _guard = guard;
-            std::future::pending::<Result<Vec<u8>, UStatus>>().await
+    async fn run(send_count: u64, fail_on: usize) -> (Result<(), UStatus>, Arc<Loopback>) {
+        let raw = Arc::new(Loopback {
+            listener: Mutex::new(None),
+            registrations: AtomicUsize::new(0),
+            removals: AtomicUsize::new(0),
+            sends: AtomicUsize::new(0),
+            fail_on,
         });
-        let error = finish(
-            task,
-            Err(UStatus::fail_with_code(UCode::Unavailable, "send rejected")),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(error.code(), UCode::Unavailable);
-        assert!(dropped.load(Ordering::SeqCst));
+        let transport: Arc<dyn UOwnedTransport> = raw.clone();
+        let method = UUri::try_from("//rpc-role/2/1/1").unwrap();
+        let reply = UUri::try_from("//rpc-role/1/1/0").unwrap();
+        let options = ClientOptions {
+            response_source: method.clone(),
+            response_sink: reply.clone(),
+            timeout_ms: 1000,
+            send_count,
+            interval: Duration::ZERO,
+            receive_settle: Duration::ZERO,
+            alignment: 8,
+            native: None,
+        };
+        let result = owned(&transport, &options, |sequence| {
+            Ok((
+                UFrameMetadata::request(method.clone(), reply.clone(), Duration::from_secs(1))
+                    .with_payload_encoding(PayloadEncoding::RAW)
+                    .build()
+                    .unwrap(),
+                sequence.to_le_bytes().to_vec(),
+            ))
+        })
+        .await;
+        (result, raw)
+    }
+
+    #[tokio::test]
+    async fn owned_rpc_registers_before_immediate_reply_and_checks_correlation() {
+        let (result, transport) = run(1, 0).await;
+        result.unwrap();
+        assert_eq!(transport.registrations.load(Ordering::SeqCst), 1);
+        assert_eq!(transport.removals.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_owned_send_closes_and_reaps_its_response_registration() {
+        let (result, transport) = run(1, 1).await;
+        assert_eq!(result.unwrap_err().code(), UCode::Unavailable);
+        assert_eq!(transport.removals.load(Ordering::SeqCst), 1);
+        assert!(transport.listener.lock().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn owned_rpc_reuses_one_registration_across_exchanges() {
+        let (result, transport) = run(0, 3).await;
+        assert_eq!(result.unwrap_err().code(), UCode::Unavailable);
+        assert_eq!(transport.sends.load(Ordering::SeqCst), 3);
+        assert_eq!(transport.registrations.load(Ordering::SeqCst), 1);
+        assert_eq!(transport.removals.load(Ordering::SeqCst), 1);
     }
 }

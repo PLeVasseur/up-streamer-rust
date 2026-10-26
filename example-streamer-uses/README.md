@@ -8,6 +8,9 @@ The generic native worker frontend also honors `RUST_LOG` for backend diagnostic
 Finite controllers can hold the active role's first send with
 `UPROTOCOL_SOURCE_START_FILE`; see [role startup](docs/role-frontends.md) for the
 readiness marker, exact release bytes and timeout. Normal examples omit it.
+The same guide documents `UPROTOCOL_SOURCE_FINISH_FILE`, an optional controller
+barrier retaining a finite generic publisher until receiver completion instead of
+destroying its native endpoint immediately after a successful send.
 
 The optional `payload-contract-large-fixtures` feature enables full SDK sensor
 representations in explicitly configured native pub/sub worker plans. See
@@ -18,6 +21,8 @@ subscriber-ceiling and TX-loan settings. See the
 [native capacity guide](../configurable-streamer/docs/native-capacity.md) for exact
 flags and namespace requirements; ordinary defaults and multi-subscriber support
 are retained.
+The `iceoryx2_publisher` readiness and receive-capacity arguments apply to both
+owned-frame and copy-minimized modes, including its controller-selected RPC role.
 
 The `iceoryx2_*`, `lola_*` and `dds_*` examples keep CLI/defaults, runtime, backend
 and wire setup in each role file while sharing message flow, native validation and evidence. See
@@ -31,6 +36,14 @@ setup with the configurable frontend. Native receivers attach before READY and
 before publishing a request that needs a response. Finite compatibility controls
 retain the actual native frame while decoding metadata for diagnostic output;
 this allocating conversion is separate from in-place typed allocation evidence.
+Owned RPC roles also register their response listener before first-send readiness
+and reuse it across exchanges. One first-result slot admits the expected response
+ID; unrelated and duplicate responses cannot replace it. One setup-owned lifecycle
+task completes unregister after caller cancellation, rather than allocating a
+receive task per exchange. Passive owned receives through this shared helper use the same bounded ownership
+and readiness mechanism.
+Generic owned/native RPC clients also drive repeated sends and correlated receive
+in one caller task, so completion or cancellation cannot leave a detached sender.
 The custom Zenoh publisher, subscriber and client use that same setup while
 retaining their custom URI fields, payloads and send timing. The ordinary
 `zenoh-transport` feature includes their prepared native constructors.

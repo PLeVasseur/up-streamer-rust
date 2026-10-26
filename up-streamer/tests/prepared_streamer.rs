@@ -302,28 +302,53 @@ async fn real_native_bridge_preserves_opaque_metadata_order_presence_and_retaine
         UCode::AlreadyExists
     );
     let token = "t".repeat(1536);
-    for sequence in 0u8..30 {
+    const ORDERED_MESSAGES: usize = 1000;
+    let receiving_inbox = Arc::clone(&inbox);
+    let receiving_token = token.clone();
+    let ordered = tokio::spawn(async move {
+        let admission = HeaderAdmission::for_wire::<ProtobufWire>(HeaderLimits::default()).unwrap();
+        let mut ids = Vec::with_capacity(ORDERED_MESSAGES);
+        for sequence in 0..u64::try_from(ORDERED_MESSAGES).unwrap() {
+            let frame = tokio::time::timeout(Duration::from_secs(5), receiving_inbox.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert!(frame.sample().payload().as_shm().is_some());
+            let admitted = admission.admit(frame).unwrap();
+            if sequence == 0 {
+                // Keep one processing lease while later values occupy the bounded
+                // inbox. Publication must not depend on a per-send receive barrier.
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            let header = admitted.header().unwrap();
+            assert_eq!(header.token(), Some(receiving_token.as_str()));
+            assert_eq!(
+                header.payload_encoding,
+                Some(PayloadEncoding::private_use(0xF123))
+            );
+            let payload = admitted.payload().unwrap();
+            let bytes = payload.bytes();
+            assert_eq!(u64::from_le_bytes(bytes[..8].try_into().unwrap()), sequence);
+            assert!(bytes[8..].iter().all(|byte| *byte == 0x5a));
+            ids.push(header.id.clone());
+        }
+        ids
+    });
+    let mut expected_ids = Vec::with_capacity(ORDERED_MESSAGES);
+    for sequence in 0..u64::try_from(ORDERED_MESSAGES).unwrap() {
         let metadata = UFrameMetadata::publish(source.clone())
             .with_payload_encoding(PayloadEncoding::private_use(0xF123))
             .build()
             .unwrap();
         let mut header = TxHeaderParts::from(&metadata);
         header.token = Some(&token);
-        sender.send_bytes(header, Some(&[sequence; 64])).unwrap();
-        let frame = tokio::time::timeout(Duration::from_secs(5), inbox.recv())
-            .await
-            .unwrap()
-            .unwrap();
-        assert!(frame.sample().payload().as_shm().is_some());
-        let admitted = admission.admit(frame).unwrap();
-        assert_eq!(admitted.header().unwrap().id, *metadata.id());
-        assert_eq!(admitted.header().unwrap().token(), Some(token.as_str()));
-        assert_eq!(
-            admitted.header().unwrap().payload_encoding,
-            Some(PayloadEncoding::private_use(0xF123))
-        );
-        assert_eq!(admitted.payload().unwrap().bytes(), &[sequence; 64]);
+        let mut payload = [0x5a; 64];
+        payload[..8].copy_from_slice(&sequence.to_le_bytes());
+        sender.send_bytes(header, Some(&payload)).unwrap();
+        expected_ids.push(metadata.id().clone());
+        tokio::time::sleep(Duration::from_millis(1)).await;
     }
+    assert_eq!(ordered.await.unwrap(), expected_ids);
     for present in [false, true] {
         let builder = UFrameMetadata::publish(source.clone());
         let metadata = if present {
@@ -368,16 +393,16 @@ async fn real_native_bridge_preserves_opaque_metadata_order_presence_and_retaine
             .await
             .is_err()
     );
-    assert_eq!(stats.forwarded.load(Ordering::Acquire), 33);
+    assert_eq!(stats.forwarded.load(Ordering::Acquire), 1003);
     assert_eq!(
         stats.copied_payload_bytes.load(Ordering::Acquire),
-        30 * 64 + 8
+        1000 * 64 + 8
     );
-    assert_eq!(stats.payload_copies.load(Ordering::Acquire), 32);
+    assert_eq!(stats.payload_copies.load(Ordering::Acquire), 1002);
     assert_eq!(stats.failed.load(Ordering::Acquire), 0);
-    assert_eq!(observer.ingress.lock().unwrap().len(), 33);
-    assert_eq!(observer.copied.lock().unwrap().len(), 33);
-    assert_eq!(observer.completed.lock().unwrap().len(), 33);
+    assert_eq!(observer.ingress.lock().unwrap().len(), 1003);
+    assert_eq!(observer.copied.lock().unwrap().len(), 1003);
+    assert_eq!(observer.completed.lock().unwrap().len(), 1003);
     receiver.detach(&mut receiving).unwrap();
     drop(receiving);
     drop(receiver);

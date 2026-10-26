@@ -11,6 +11,16 @@ Controllers must use a fresh file and release only after the passive receiver an
 bridge report readiness. Request factories run after this barrier so setup does
 not consume the new request's TTL.
 
+Controllers can also set `UPROTOCOL_SOURCE_FINISH_FILE` for finite generic owned
+or native publication/notification sources. After the configured sends, the
+source reports `READY source_complete_waiting` and retains its endpoint until the
+controller atomically writes exactly `STOP` followed by a newline. The controller
+releases this only after observing receiver completion. The wait is bounded by
+30 seconds and rejects malformed/unreadable markers. It sends no extra samples
+and is not a substitute for subscriber readiness: successful native publication
+alone does not prove consumption before a publisher is destroyed. Ordinary
+examples omit this variable and retain their normal exit behavior.
+
 Prepared native construction uses the shared
 [`PreparedAddress` catalog and `PreparedSession`](../../utils/configurable-streamer-wire-support/docs/prepared.md).
 Exact TX destinations, including the client's response address, are reserved
@@ -20,6 +30,13 @@ each sample. RPC response registration precedes publication. Header identity and
 decoded source/sink filters are checked before compatibility metadata is exposed.
 The diagnostic compatibility view owns decoded metadata but retains the actual
 native frame/payload, so it is distinct from the typed in-place allocation path.
+
+Owned receives in `common/receive.rs` reserve one first-result slot and a setup-owned registration
+lifecycle task. Readiness follows completed registration, including when the
+backend delivers a frame during registration itself. Explicit stop awaits native
+unregister; dropping a caller closes admission immediately and lets that existing
+task finish retirement. Cleanup therefore survives cancellation during setup,
+receive or stop without a per-message task or an unbounded receive channel.
 
 For optional iceoryx2 slice/allocation/subscriber/TX controls, see
 [native capacity configuration](../../configurable-streamer/docs/native-capacity.md).
@@ -70,6 +87,10 @@ transport and role selectors remain available for controller-provisioned uses.
 Backend-specific optional arguments keep their existing scope: for example,
 `iceoryx2_publisher` exposes the receive-capacity/readiness controls and the
 feature-gated `--workload-plan`; the other five entrypoints retain their own CLI.
+For `iceoryx2_publisher`, `--iceoryx2-min-subscribers` and
+`--iceoryx2-receive-capacity` apply to both owned-frame and copy-minimized modes,
+including controller-selected RPC roles. A requested subscriber minimum reaches
+the binding before the first publication; it is not replaced by a fixed delay.
 
 The selected-wire fixtures retain entity `0x5BA0`, version `1` in message addresses
 and receive filters. Authorities and topic/method resource flags select the
@@ -120,11 +141,15 @@ concrete backend/wire constructors while sharing actual message flow:
 - `common/rpc.rs` owns the selected-wire client's exchange loop, response polling,
   correlation, payload comparison and cleanup when sending fails. Prepared native
   clients attach one response receiver before the first request and retain it
-  across exchanges. The owned compatibility control cancels/reaps its receive
-  task on failed sends. The configured
+  across exchanges. Owned clients now do the same, arming exact request-ID and
+  response-kind admission before each send. The first matching result completes
+  the exchange; unrelated IDs and duplicate responses cannot displace it. Failed
+  sends close admission and await retirement of that registration. The configured
   100ms receive-start settle delay, timeout, repeated request identity, finite
   send count and zero-count unbounded exchange policy are retained. This settle
-  delay is existing connectivity behavior, not a conservation readiness proof.
+  delay is existing connectivity behavior, not a registration-readiness proof.
+  It remains a per-exchange pause for owned clients and is included in their fixed
+  response deadline; waiting does not renew that deadline.
 
 Publisher/subscriber/client custom URI fields and payload factories remain
 distinct from the generic fixture addresses. Owned selected publisher repeats
@@ -140,8 +165,13 @@ wire examples do not rely on another workspace member enabling it.
 The finite iceoryx2/LoLa connectivity role repeats one message identity for `--send-count`
 (with zero retaining the existing minimum of one send). Passive connectivity
 roles finish after the first delivery. RPC clients finish after the first matching
-payload response and cancel/reap their repeated-send task. These controls are
+request-ID/payload response and retire their registered receiver. These controls are
 connectivity probes, not counts of distinct delivered messages.
+Generic owned and native RPC clients drive repeated-send and correlated-receive
+futures together in their caller's task. The first matching reply drops the
+remaining send future; send failure or caller cancellation drops its counterpart.
+No detached repeated-send task can outlive the exchange. Owned response admission
+is installed before first-send readiness, including the single-request case.
 
 The optional sustained workload follows its controller-provisioned plan through
 the same configured native endpoint. See [sustained workloads](sustained-workloads.md)

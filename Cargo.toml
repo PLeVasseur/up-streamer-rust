@@ -59,16 +59,16 @@ tokio = { version = "1.44", default-features = false, features = [
     "macros",
 ] }
 protobuf = { version = "3.7.2", features = ["with-bytes"] }
-up-rust = { version = "=0.10.0-SNAPSHOT", git = "https://github.com/PLeVasseur/up-rust.git", rev = "75a5dd25dac271161d4709a0559b788befa21b67", default-features = false }
-up-native-profile = { version = "=0.1.0", git = "https://github.com/PLeVasseur/up-rust.git", rev = "75a5dd25dac271161d4709a0559b788befa21b67" }
-up-transport-zenoh = { version = "=0.9.1", git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "913fd507e797d99c1c4367e970ba34587e24241e" }
-up-transport-iceoryx2-rust = { version = "=0.1.0", git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "4c990a19952ce10aef08d85a819e4a2091497131" }
-up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "d5b4e91e16e0ed9c8157f7048a0694e8e1950046", default-features = false }
-up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "90fbb4f4f1f254326b6bf6bcd548c786192d03f2" }
-up-transport-dds = { git = "https://github.com/PLeVasseur/up-transport-dds-rust.git", rev = "46a56d0b3fee51559383f348a02251780c1a2070" }
-up-wire-xcdrv2 = { git = "https://github.com/PLeVasseur/up-wire-xcdrv2-rust.git", rev = "2eccbb9c50095d488e5586e0e82d12b5bceb2763" }
-up-wire-arrow = { git = "https://github.com/PLeVasseur/up-wire-arrow-rust.git", rev = "600864e0f2cc6a9f90bac6e17fdfcd8f6a39b7b6" }
-up-wire-omgidl = { git = "https://github.com/PLeVasseur/up-wire-omgidl-rust.git", rev = "d3d2c722332e114e1d2c535562923b78035f6c8c" }
+up-rust = { version = "=0.10.0-SNAPSHOT", git = "https://github.com/PLeVasseur/up-rust.git", rev = "d06da415bb24e00ac23335d8365728073f97416c", default-features = false }
+up-native-profile = { version = "=0.1.0", git = "https://github.com/PLeVasseur/up-rust.git", rev = "d06da415bb24e00ac23335d8365728073f97416c" }
+up-transport-zenoh = { version = "=0.9.1", git = "https://github.com/PLeVasseur/up-client-zenoh-rust.git", rev = "46f6d3f69abdd20c699f2c675ed8dc84439cfba1" }
+up-transport-iceoryx2-rust = { version = "=0.1.0", git = "https://github.com/PLeVasseur/up-transport-iceoryx2-rust.git", rev = "417a1d0acffd07de5879952c10419c660f26a411" }
+up-transport-vsomeip = { git = "https://github.com/PLeVasseur/up-client-vsomeip-rust.git", rev = "21f0baab3a95a882d234902decca9a28c562445e", default-features = false }
+up-transport-mqtt5 = { git = "https://github.com/PLeVasseur/up-client-mqtt5-rust.git", rev = "2fbbab7fdfff9cb6af757953e55af415388ad29a" }
+up-transport-dds = { git = "https://github.com/PLeVasseur/up-transport-dds-rust.git", rev = "2fe64fd57c3920c595f5e650ab870d1d3ff8a26f" }
+up-wire-xcdrv2 = { git = "https://github.com/PLeVasseur/up-wire-xcdrv2-rust.git", rev = "759b8cefc1284c4809af87b25050b8b564962043" }
+up-wire-arrow = { git = "https://github.com/PLeVasseur/up-wire-arrow-rust.git", rev = "d9188e56fbf4bc2287afa14f8bc61b5491a5b673" }
+up-wire-omgidl = { git = "https://github.com/PLeVasseur/up-wire-omgidl-rust.git", rev = "3be0185e8bcd3c17906270861126abf137c523c8" }
 zenoh = { version = "1.2.1", features = [
     "default",
     "plugins",
