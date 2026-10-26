@@ -14,25 +14,19 @@
 //! Publish uProtocol messages using the selected Zenoh endpoint API and wire.
 mod common;
 
-use chrono::Local;
-use chrono::Timelike;
 use clap::{Parser, ValueEnum};
 use common::cli;
 use common::payloads::{
     arrow_payload_bytes, native_payload_alignment, native_payload_bytes, omgidl_payload_bytes,
     xcdrv2_payload_bytes, NativeContext,
 };
-use common::protobuf_payload;
-use hello_world_protos::hello_world_topics::Timer;
-use hello_world_protos::timeofday::TimeOfDay;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use up_rust::selected_wire_user_api::ProtobufWire;
 use up_rust::{
-    PayloadCodecIdentity, PayloadEncoding, UFrameMetadata, UMessageBuilder, UOwnedFrame,
-    UOwnedTransport, UStatus, UTransport, UTxBuffer, UTxLoanSpec, UWithNativePrefixWire,
-    UZeroCopyTransport,
+    PayloadCodecIdentity, PayloadEncoding, UFrameMetadata, UMessageBuilder, UOwnedTransport,
+    UStatus, UTransport, UTxBuffer, UWithNativePrefixWire, UZeroCopyTransport,
 };
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
@@ -141,51 +135,35 @@ async fn main() -> Result<(), UStatus> {
 
     let source = cli::build_uuri(&args.uauthority, uentity, uversion, resource)?;
 
-    let mut sent_count: u64 = 0;
-    loop {
-        if args.send_count > 0 && sent_count >= args.send_count {
-            println!("Completed bounded send run: sent_count={sent_count}");
-            break;
-        }
-
-        tokio::time::sleep(Duration::from_millis(args.send_interval_ms)).await;
-
-        let now = Local::now();
-
-        let time_of_day = TimeOfDay {
-            hours: now.hour() as i32,
-            minutes: now.minute() as i32,
-            seconds: now.second() as i32,
-            nanos: now.nanosecond() as i32,
-            ..Default::default()
-        };
-
-        let mut builder = UMessageBuilder::publish(source.clone());
-        let publish_msg = if args.encoding == Encoding::Protobuf {
-            let timer_message = Timer {
-                time: Some(time_of_day).into(),
-                ..Default::default()
+    let sent_count = common::classic::send(
+        publisher.as_ref(),
+        (args.send_count > 0).then_some(args.send_count),
+        Duration::from_millis(args.send_interval_ms),
+        |_| {
+            let mut builder = UMessageBuilder::publish(source.clone());
+            let publish_msg = if args.encoding == Encoding::Protobuf {
+                builder
+                    .build_with_payload(common::classic::timer_payload(), PayloadEncoding::PROTOBUF)
+                    .unwrap()
+            } else {
+                builder
+                    .build_with_payload(
+                        selected_payload_bytes(&args)?,
+                        selected_payload_encoding(&args)?,
+                    )
+                    .map_err(|error| {
+                        invalid_config(format!("failed to build publish message: {error:?}"))
+                    })?
             };
-            builder
-                .build_with_payload(protobuf_payload(&timer_message), PayloadEncoding::PROTOBUF)
-                .unwrap()
-        } else {
-            builder
-                .build_with_payload(
-                    selected_payload_bytes(&args)?,
-                    selected_payload_encoding(&args)?,
-                )
-                .map_err(|error| {
-                    invalid_config(format!("failed to build publish message: {error:?}"))
-                })?
-        };
-        println!("Sending Publish message:\n{publish_msg:?}");
+            println!("Sending Publish message:\n{publish_msg:?}");
 
-        common::proof::send(publisher.as_ref(), publish_msg).await?;
-        sent_count += 1;
-    }
+            Ok(publish_msg)
+        },
+    )
+    .await?;
 
     if args.send_count > 0 {
+        println!("Completed bounded send run: sent_count={sent_count}");
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 
@@ -339,16 +317,16 @@ async fn send_owned_repeated(
     payload: &[u8],
     count: usize,
 ) -> Result<(), UStatus> {
-    for _ in 0..count.max(1) {
-        common::proof::send_owned(
-            transport.as_ref(),
-            UOwnedFrame::with_payload(metadata.clone(), payload.to_vec()).map_err(|error| {
-                invalid_config(format!("failed to build owned frame: {error:?}"))
-            })?,
-        )
-        .await?;
-    }
-    Ok(())
+    common::flow::send_owned_repeated(
+        transport,
+        metadata,
+        payload,
+        common::flow::SendOptions {
+            count,
+            interval: None,
+        },
+    )
+    .await
 }
 
 async fn send_zero_copy_repeated<T>(
@@ -362,21 +340,17 @@ where
     T: UZeroCopyTransport + Send + Sync + 'static,
     T::Tx: UTxBuffer,
 {
-    for attempt in 0..args.selected_send_count.max(1) {
-        let mut tx = transport
-            .loan_validated_tx(UTxLoanSpec::payload(
-                metadata.clone(),
-                payload.len(),
-                alignment,
-            )?)
-            .await?;
-        tx.payload_mut().copy_from_slice(payload);
-        common::proof::send_loan(transport.as_ref(), tx).await?;
-        if attempt + 1 < args.selected_send_count.max(1) {
-            tokio::time::sleep(Duration::from_millis(args.send_interval_ms)).await;
-        }
-    }
-    Ok(())
+    common::flow::send_native_repeated(
+        transport,
+        metadata,
+        payload,
+        alignment,
+        common::flow::SendOptions {
+            count: args.selected_send_count,
+            interval: Some(Duration::from_millis(args.send_interval_ms)),
+        },
+    )
+    .await
 }
 
 fn selected_payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {

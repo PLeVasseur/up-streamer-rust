@@ -58,6 +58,29 @@ representations are validated before inspecting their payload.
 
 ## Connectivity and sustained workloads
 
+All six Zenoh entrypoints retain their CLI/defaults, runtime, configuration and
+concrete backend/wire constructors while sharing actual message flow:
+
+- `common/classic.rs` owns delayed classic send iteration, timer payloads and
+  admitted listeners awaiting process shutdown. Passive classic roles await
+  shutdown without parking a Tokio worker thread. Entry-specific bounded versus
+  unbounded counts and final waits stay explicit.
+- `common/flow.rs` owns finite owned/native sends and the generic notification/
+  RPC-server flows; `common/receive.rs` owns registered receive and cleanup.
+  Zenoh-specific readiness markers follow successful registration. Receivers
+  unregister after finite receipt or timeout, retain the received frame/lease
+  through cleanup and validate native representations before inspection.
+- `common/rpc.rs` owns the selected-wire client's exchange loop, response polling,
+  payload comparison and cancellation/reaping when sending fails. Its configured
+  100ms receive-start settle delay, timeout, repeated request identity, finite
+  send count and zero-count unbounded exchange policy are retained. This settle
+  delay is existing connectivity behavior, not a conservation readiness proof.
+
+Publisher/subscriber/client custom URI fields and payload factories remain
+distinct from the generic fixture addresses. Owned selected publisher repeats
+retain their immediate-send policy; native repeats retain the configured interval.
+Classic counter exhaustion and target-size count overflow fail with typed errors.
+
 The finite iceoryx2/LoLa connectivity role repeats one message identity for `--send-count`
 (with zero retaining the existing minimum of one send). Passive connectivity
 roles finish after the first delivery. RPC clients finish after the first matching

@@ -13,6 +13,15 @@ use up_rust::{
 
 struct OwnedChannel(mpsc::UnboundedSender<UOwnedFrame>);
 
+pub(crate) fn listener_ready() {
+    println!("READY listener_registered");
+}
+
+pub(crate) fn zenoh_listener_ready() {
+    println!("READY zenoh_listener_registered");
+    listener_ready();
+}
+
 #[async_trait]
 impl UOwnedListener for OwnedChannel {
     async fn on_receive_owned(&self, frame: UOwnedFrame) {
@@ -38,12 +47,28 @@ pub(crate) async fn owned(
     timeout_ms: u64,
     native: Option<&NativeContext>,
 ) -> Result<UOwnedFrame, UStatus> {
+    owned_with_ready(transport, source, sink, timeout_ms, native, || {
+        println!("READY listener_registered");
+    })
+    .await
+}
+
+/// Receive through a registered listener, announcing endpoint-specific readiness
+/// only after admission succeeds and removing the listener on receipt or timeout.
+pub(crate) async fn owned_with_ready(
+    transport: &Arc<dyn UOwnedTransport>,
+    source: &UUri,
+    sink: Option<&UUri>,
+    timeout_ms: u64,
+    native: Option<&NativeContext>,
+    ready: impl FnOnce(),
+) -> Result<UOwnedFrame, UStatus> {
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let listener: Arc<dyn UOwnedListener> = Arc::new(OwnedChannel(sender));
     transport
         .register_owned_listener(source, sink, listener.clone())
         .await?;
-    println!("READY listener_registered");
+    ready();
     let result = receive(&mut receiver, timeout_ms).await;
     let cleanup = transport
         .unregister_owned_listener(source, sink, listener)
@@ -78,12 +103,31 @@ where
     T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
     T::Rx: UZeroCopyRxLease + Send + 'static,
 {
+    zero_copy_with_ready(transport, source, sink, timeout_ms, || {
+        println!("READY listener_registered");
+    })
+    .await
+}
+
+/// Native counterpart to [`owned_with_ready`], retaining the received lease
+/// through quiescent unregister and validating its representation before return.
+pub(crate) async fn zero_copy_with_ready<T>(
+    transport: &Arc<T>,
+    source: &UUri,
+    sink: Option<&UUri>,
+    timeout_ms: u64,
+    ready: impl FnOnce(),
+) -> Result<T::Rx, UStatus>
+where
+    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
+    T::Rx: UZeroCopyRxLease + Send + 'static,
+{
     let (sender, mut receiver) = mpsc::unbounded_channel();
     let listener: Arc<dyn UZeroCopyListener<T::Rx>> = Arc::new(LoanChannel(sender));
     transport
         .register_validated_zero_copy_listener(source, sink, listener.clone())
         .await?;
-    println!("READY listener_registered");
+    ready();
     let result = receive(&mut receiver, timeout_ms).await;
     let cleanup = transport
         .unregister_validated_zero_copy_listener(source, sink, listener)
@@ -181,5 +225,47 @@ mod tests {
         let frame = owned(&transport, &source, None, 1000, None).await.unwrap();
         assert_eq!(frame.payload_bytes(), b"first frame");
         assert_eq!(removed.load(Ordering::SeqCst), 1);
+    }
+
+    struct RejectedRegistration;
+
+    #[async_trait]
+    impl UOwnedTransportImpl for RejectedRegistration {
+        async fn send_validated_owned(&self, _: UOwnedFrame) -> Result<(), UStatus> {
+            unreachable!("passive test never sends")
+        }
+
+        async fn register_validated_owned_listener(
+            &self,
+            _: &UUri,
+            _: Option<&UUri>,
+            _: Arc<dyn UOwnedListener>,
+        ) -> Result<(), UStatus> {
+            Err(UStatus::fail_with_code(
+                UCode::Unavailable,
+                "admission rejected",
+            ))
+        }
+
+        async fn unregister_validated_owned_listener(
+            &self,
+            _: &UUri,
+            _: Option<&UUri>,
+            _: Arc<dyn UOwnedListener>,
+        ) -> Result<(), UStatus> {
+            panic!("failed registration must not be treated as admitted")
+        }
+    }
+
+    #[tokio::test]
+    async fn rejected_registration_never_announces_endpoint_readiness() {
+        let transport: Arc<dyn UOwnedTransport> = Arc::new(RejectedRegistration);
+        let source = UUri::try_from_parts("ready-test", 0x5BA0, 1, 0x8001).unwrap();
+        let error = owned_with_ready(&transport, &source, None, 1000, None, || {
+            panic!("readiness must follow successful registration");
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), UCode::Unavailable);
     }
 }

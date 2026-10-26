@@ -1,3 +1,4 @@
+pub(crate) mod classic;
 pub(crate) mod cli;
 #[cfg(any(
     feature = "iceoryx2-zero-copy",
@@ -14,6 +15,8 @@ pub(crate) mod payloads;
 pub(crate) mod proof;
 #[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
 pub(crate) mod receive;
+#[cfg(all(feature = "selected-wire-common", feature = "up-wire-xcdrv2"))]
+pub(crate) mod rpc;
 #[cfg(feature = "sustained-workload")]
 pub(crate) mod workload;
 

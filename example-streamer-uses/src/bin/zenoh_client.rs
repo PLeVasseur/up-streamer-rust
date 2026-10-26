@@ -18,20 +18,19 @@ use clap::{Parser, ValueEnum};
 use common::cli;
 use common::payloads::{
     arrow_payload_bytes, native_payload_alignment, native_payload_bytes, omgidl_payload_bytes,
-    xcdrv2_payload_bytes, NativeContext, NativeLoanVerifier,
+    xcdrv2_payload_bytes, NativeContext,
 };
 use common::{protobuf_payload, ServiceResponseListener};
 use hello_world_protos::hello_world_service::HelloRequest;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tracing::{debug, info};
 use up_rust::selected_wire_user_api::ProtobufWire;
 use up_rust::UWithNativePrefixWire;
 use up_rust::{
-    PayloadCodecIdentity, PayloadEncoding, UCode, UFrameMetadata, UMessageBuilder, UOwnedFrame,
-    UOwnedTransport, UStatus, UTransport, UTxBuffer, UTxLoanSpec, UUri, UZeroCopyRxLease,
-    UZeroCopyTransport,
+    PayloadCodecIdentity, PayloadEncoding, UCode, UFrameMetadata, UMessageBuilder, UOwnedTransport,
+    UStatus, UTransport, UTxBuffer, UUri, UZeroCopyRxLease, UZeroCopyTransport,
 };
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
@@ -185,45 +184,44 @@ async fn main() -> Result<(), UStatus> {
         )
         .await?;
 
-    let mut i: u64 = 0;
-    let mut sent_count: u64 = 0;
-    loop {
-        if args.send_count > 0 && sent_count >= args.send_count {
-            info!("Completed bounded send run: sent_count={sent_count}");
-            break;
-        }
+    let sent_count = common::classic::send(
+        client.as_ref(),
+        (args.send_count > 0).then_some(args.send_count),
+        Duration::from_millis(args.send_interval_ms),
+        |sent_count| {
+            let hello_request = HelloRequest {
+                name: format!("ue_client@i={sent_count}"),
+                ..Default::default()
+            };
 
-        tokio::time::sleep(Duration::from_millis(args.send_interval_ms)).await;
+            let mut builder = UMessageBuilder::request(sink.clone(), source.clone(), REQUEST_TTL);
+            let request_msg = if args.encoding == Encoding::Protobuf {
+                builder
+                    .build_with_payload(protobuf_payload(&hello_request), PayloadEncoding::PROTOBUF)
+                    .unwrap()
+            } else {
+                builder
+                    .build_with_payload(
+                        selected_payload_bytes(
+                            &args,
+                            sent_count.saturating_add(1).min(u64::from(u32::MAX)) as u32,
+                        )?,
+                        selected_payload_encoding(&args)?,
+                    )
+                    .map_err(|error| {
+                        invalid_config(format!("failed to build request message: {error:?}"))
+                    })?
+            };
+            debug!("Invoking URI {} with response URI {}", &sink, &source);
+            info!("Sending Request message:\n{:?}", &request_msg);
 
-        let hello_request = HelloRequest {
-            name: format!("ue_client@i={}", i),
-            ..Default::default()
-        };
-        i += 1;
-
-        let mut builder = UMessageBuilder::request(sink.clone(), source.clone(), REQUEST_TTL);
-        let request_msg = if args.encoding == Encoding::Protobuf {
-            builder
-                .build_with_payload(protobuf_payload(&hello_request), PayloadEncoding::PROTOBUF)
-                .unwrap()
-        } else {
-            builder
-                .build_with_payload(
-                    selected_payload_bytes(&args, sent_count as u32 + 1)?,
-                    selected_payload_encoding(&args)?,
-                )
-                .map_err(|error| {
-                    invalid_config(format!("failed to build request message: {error:?}"))
-                })?
-        };
-        debug!("Invoking URI {} with response URI {}", &sink, &source);
-        info!("Sending Request message:\n{:?}", &request_msg);
-
-        common::proof::send(client.as_ref(), request_msg).await?;
-        sent_count += 1;
-    }
+            Ok(request_msg)
+        },
+    )
+    .await?;
 
     if args.send_count > 0 {
+        info!("Completed bounded send run: sent_count={sent_count}");
         service_response_listener
             .wait_for_response(args.timeout_ms)
             .await?;
@@ -347,7 +345,6 @@ async fn run_selected_wire_client(
                 sink,
                 response_source_filter,
                 response_sink_filter,
-                Some(NativeContext::verify_loan),
             )
             .await
         }
@@ -364,7 +361,6 @@ async fn run_selected_wire_client(
                 sink,
                 response_source_filter,
                 response_sink_filter,
-                None,
             )
             .await
         }
@@ -381,7 +377,6 @@ async fn run_selected_wire_client(
                 sink,
                 response_source_filter,
                 response_sink_filter,
-                None,
             )
             .await
         }
@@ -398,7 +393,6 @@ async fn run_selected_wire_client(
                 sink,
                 response_source_filter,
                 response_sink_filter,
-                None,
             )
             .await
         }
@@ -415,7 +409,6 @@ async fn run_selected_wire_client(
                 sink,
                 response_source_filter,
                 response_sink_filter,
-                None,
             )
             .await
         }
@@ -430,53 +423,14 @@ async fn run_owned_selected_client(
     response_source_filter: UUri,
     response_sink_filter: UUri,
 ) -> Result<(), UStatus> {
-    let run_forever = args.send_count == 0;
-    let attempt_count = args.send_count.max(1);
-    let mut exchanges = 0_u64;
-
-    loop {
-        let sequence = exchanges.saturating_add(1).min(u32::MAX as u64) as u32;
-        let payload = selected_payload_bytes(args, sequence)?;
-        let metadata = request_metadata(args, sink.clone(), source.clone())?;
-        let receive_task = tokio::spawn(receive_owned_payload(
-            transport.clone(),
-            response_source_filter.clone(),
-            response_sink_filter.clone(),
-            args.timeout_ms,
-            (args.encoding == Encoding::Native).then(|| args.native.clone()),
-        ));
-        tokio::time::sleep(Duration::from_millis(RESPONSE_LISTENER_SETTLE_MS)).await;
-        for attempt in 0..attempt_count {
-            if let Err(error) = common::proof::send_owned(
-                transport.as_ref(),
-                UOwnedFrame::with_payload(metadata.clone(), payload.clone()).map_err(|error| {
-                    invalid_config(format!("failed to build owned request frame: {error:?}"))
-                })?,
-            )
-            .await
-            {
-                receive_task.abort();
-                let _ = receive_task.await;
-                return Err(error);
-            }
-            if attempt + 1 < attempt_count {
-                tokio::time::sleep(Duration::from_millis(args.send_interval_ms)).await;
-            }
-        }
-        let response = receive_task.await.map_err(receive_task_failed)??;
-        ensure_payload_matches(&payload, &response)?;
-        println!(
-            "FLOW observed_payload_bytes={} role=rpc_client",
-            response.len()
-        );
-        exchanges += 1;
-        if run_forever {
-            tokio::time::sleep(Duration::from_millis(args.send_interval_ms)).await;
-        } else {
-            break;
-        }
-    }
-    Ok(())
+    let options = client_options(args, response_source_filter, response_sink_filter);
+    common::rpc::owned(transport, &options, |sequence| {
+        Ok((
+            request_metadata(args, sink.clone(), source.clone())?,
+            selected_payload_bytes(args, sequence)?,
+        ))
+    })
+    .await
 }
 
 async fn run_zero_copy_selected_client<T>(
@@ -486,74 +440,41 @@ async fn run_zero_copy_selected_client<T>(
     sink: UUri,
     response_source_filter: UUri,
     response_sink_filter: UUri,
-    verify_native: Option<NativeLoanVerifier<T::Rx>>,
 ) -> Result<(), UStatus>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
+    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
     T::Tx: UTxBuffer,
-    T::Rx: UZeroCopyRxLease,
+    T::Rx: UZeroCopyRxLease + Send + 'static,
 {
-    let run_forever = args.send_count == 0;
-    let attempt_count = args.send_count.max(1);
-    let mut exchanges = 0_u64;
+    let options = client_options(args, response_source_filter, response_sink_filter);
+    common::rpc::native(transport, &options, |sequence| {
+        Ok((
+            request_metadata(args, sink.clone(), source.clone())?,
+            selected_payload_bytes(args, sequence)?,
+        ))
+    })
+    .await
+}
 
-    loop {
-        let sequence = exchanges.saturating_add(1).min(u32::MAX as u64) as u32;
-        let payload = selected_payload_bytes(args, sequence)?;
-        let metadata = request_metadata(args, sink.clone(), source.clone())?;
-        let alignment = match args.encoding {
-            Encoding::Native => native_payload_alignment(),
-            _ => args.payload_alignment,
-        };
-        let receive_task = tokio::spawn(receive_zero_copy_payload(
-            transport.clone(),
-            response_source_filter.clone(),
-            response_sink_filter.clone(),
-            args.timeout_ms,
-            (args.encoding == Encoding::Native).then(|| args.native.clone()),
-            verify_native,
-        ));
-        tokio::time::sleep(Duration::from_millis(RESPONSE_LISTENER_SETTLE_MS)).await;
-        for attempt in 0..attempt_count {
-            let mut tx = match transport
-                .loan_validated_tx(UTxLoanSpec::payload(
-                    metadata.clone(),
-                    payload.len(),
-                    alignment,
-                )?)
-                .await
-            {
-                Ok(tx) => tx,
-                Err(error) => {
-                    receive_task.abort();
-                    let _ = receive_task.await;
-                    return Err(error);
-                }
-            };
-            tx.payload_mut().copy_from_slice(&payload);
-            if let Err(error) = common::proof::send_loan(transport.as_ref(), tx).await {
-                receive_task.abort();
-                let _ = receive_task.await;
-                return Err(error);
-            }
-            if attempt + 1 < attempt_count {
-                tokio::time::sleep(Duration::from_millis(args.send_interval_ms)).await;
-            }
-        }
-        let response = receive_task.await.map_err(receive_task_failed)??;
-        ensure_payload_matches(&payload, &response)?;
-        println!(
-            "FLOW observed_payload_bytes={} role=rpc_client",
-            response.len()
-        );
-        exchanges += 1;
-        if run_forever {
-            tokio::time::sleep(Duration::from_millis(args.send_interval_ms)).await;
+fn client_options(
+    args: &Args,
+    response_source: UUri,
+    response_sink: UUri,
+) -> common::rpc::ClientOptions {
+    common::rpc::ClientOptions {
+        response_source,
+        response_sink,
+        timeout_ms: args.timeout_ms,
+        send_count: args.send_count,
+        interval: Duration::from_millis(args.send_interval_ms),
+        receive_settle: Duration::from_millis(RESPONSE_LISTENER_SETTLE_MS),
+        alignment: if args.encoding == Encoding::Native {
+            native_payload_alignment()
         } else {
-            break;
-        }
+            args.payload_alignment
+        },
+        native: (args.encoding == Encoding::Native).then(|| args.native.clone()),
     }
-    Ok(())
 }
 
 fn zenoh_config_from_args(args: &Args) -> Result<Config, UStatus> {
@@ -613,111 +534,6 @@ fn selected_payload_bytes(args: &Args, sequence: u32) -> Result<Vec<u8>, UStatus
         Encoding::Xcdrv2 => xcdrv2_payload_bytes(sequence, args.uauthority.clone(), &args.payload),
         Encoding::Arrow => arrow_payload_bytes(sequence, &args.payload),
         Encoding::Omgidl => omgidl_payload_bytes(sequence, &args.payload),
-    }
-}
-
-async fn receive_owned_payload(
-    transport: Arc<dyn UOwnedTransport>,
-    source_filter: UUri,
-    sink_filter: UUri,
-    timeout_ms: u64,
-    native: Option<NativeContext>,
-) -> Result<Vec<u8>, UStatus> {
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(UStatus::fail_with_code(
-                UCode::DeadlineExceeded,
-                "timed out waiting for owned response frame",
-            ));
-        }
-        match tokio::time::timeout(
-            remaining,
-            transport.receive_owned(&source_filter, Some(&sink_filter)),
-        )
-        .await
-        {
-            Ok(Ok(frame)) => {
-                common::proof::received_frame(&frame);
-                if let Some(native) = &native {
-                    native.verify_owned(frame.metadata(), frame.payload_bytes())?;
-                }
-                return Ok(frame.payload_bytes().to_vec());
-            }
-            Ok(Err(error)) if error.code() == UCode::NotFound => {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Ok(Err(error)) => return Err(error),
-            Err(_) => {}
-        }
-    }
-}
-
-async fn receive_zero_copy_payload<T>(
-    transport: Arc<T>,
-    source_filter: UUri,
-    sink_filter: UUri,
-    timeout_ms: u64,
-    native: Option<NativeContext>,
-    verify_native: Option<NativeLoanVerifier<T::Rx>>,
-) -> Result<Vec<u8>, UStatus>
-where
-    T: UZeroCopyTransport + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease,
-{
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(UStatus::fail_with_code(
-                UCode::DeadlineExceeded,
-                "timed out waiting for zero-copy response frame",
-            ));
-        }
-        match tokio::time::timeout(
-            remaining,
-            transport.receive_validated_zero_copy(&source_filter, Some(&sink_filter)),
-        )
-        .await
-        {
-            Ok(Ok(frame)) => {
-                common::proof::received_frame(&frame);
-                if let Some(native) = &native {
-                    verify_native.ok_or_else(|| {
-                        invalid_config("native receive requires a typed loan verifier")
-                    })?(native, &frame)?;
-                }
-                return common::payloads::copy_payload_bytes(&frame);
-            }
-            Ok(Err(error)) if error.code() == UCode::NotFound => {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Ok(Err(error)) => return Err(error),
-            Err(_) => {}
-        }
-    }
-}
-
-fn receive_task_failed(error: tokio::task::JoinError) -> UStatus {
-    UStatus::fail_with_code(
-        UCode::Internal,
-        format!("response receive task failed: {error}"),
-    )
-}
-
-fn ensure_payload_matches(expected: &[u8], actual: &[u8]) -> Result<(), UStatus> {
-    if expected == actual {
-        Ok(())
-    } else {
-        Err(UStatus::fail_with_code(
-            UCode::InvalidArgument,
-            format!(
-                "response payload mismatch: expected {} bytes, observed {} bytes",
-                expected.len(),
-                actual.len()
-            ),
-        ))
     }
 }
 

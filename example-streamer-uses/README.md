@@ -5,6 +5,9 @@ The `iceoryx2_*`, `lola_*` and `dds_*` examples keep CLI/defaults, runtime, back
 and wire setup in each role file while sharing message flow, native validation and evidence. See
 [role entrypoints and shared flow](docs/role-frontends.md) for addressing,
 connectivity semantics and the boundary with sustained workloads.
+All six Zenoh roles also share classic/selected-wire send, receive and RPC flow;
+their local configuration, defaults and wire constructors stay visible in the
+entrypoints. The role guide describes timing, readiness and cleanup semantics.
 
 ## Running a UStreamer
 

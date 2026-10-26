@@ -52,6 +52,22 @@ pub(crate) enum FlowRole {
     RpcServer,
 }
 
+/// Repetition policy for finite connectivity sends of one prepared message.
+#[derive(Clone, Copy)]
+pub(crate) struct SendOptions {
+    pub count: usize,
+    pub interval: Option<Duration>,
+}
+
+impl From<&FlowConfig> for SendOptions {
+    fn from(config: &FlowConfig) -> Self {
+        Self {
+            count: config.send_count,
+            interval: Some(Duration::from_millis(config.send_interval_ms)),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct FlowConfig {
     pub native: NativeContext,
@@ -81,7 +97,7 @@ impl FlowConfig {
 
     // The existing examples use one fixture entity independently of the backend's
     // local registration URI. Keep that distinction when sharing their flow.
-    fn uri(&self, authority: &str, resource: u16) -> Result<UUri, UStatus> {
+    pub(crate) fn uri(&self, authority: &str, resource: u16) -> Result<UUri, UStatus> {
         UUri::try_from_parts(authority, 0x5BA0, 1, resource)
             .map_err(|error| invalid(error.to_string()))
     }
@@ -119,7 +135,7 @@ impl FlowConfig {
         })
     }
 
-    fn payload(&self, sequence: u32, workload: bool) -> Result<Vec<u8>, UStatus> {
+    pub(crate) fn payload(&self, sequence: u32, workload: bool) -> Result<Vec<u8>, UStatus> {
         match self.wire_format {
             FlowWireFormat::Native => {
                 native_payload_bytes(u32::from_le_bytes(*b"UPNF"), sequence, &self.payload)
@@ -224,23 +240,38 @@ pub(crate) async fn run_owned(
     transport: Arc<dyn UOwnedTransport>,
     config: &FlowConfig,
 ) -> Result<(), UStatus> {
+    run_owned_with_ready(transport, config, super::receive::listener_ready).await
+}
+
+pub(crate) async fn run_owned_with_ready(
+    transport: Arc<dyn UOwnedTransport>,
+    config: &FlowConfig,
+    ready: fn(),
+) -> Result<(), UStatus> {
     match config.role {
         FlowRole::PubSender | FlowRole::NotifySender => {
             let payload = config.payload(1, false)?;
-            send_owned_repeated(&transport, config.outbound_metadata()?, &payload, config).await?;
+            send_owned_repeated(
+                &transport,
+                config.outbound_metadata()?,
+                &payload,
+                config.into(),
+            )
+            .await?;
             observed_send(config.role, payload.len());
         }
         FlowRole::PubReceiver | FlowRole::NotifyReceiver => {
             let (source, sink) = config.filters()?;
-            let payload = super::receive::owned_payload(
+            let frame = super::receive::owned_with_ready(
                 &transport,
                 &source,
                 sink.as_ref(),
                 config.timeout_ms,
                 (config.wire_format == FlowWireFormat::Native).then_some(&config.native),
+                ready,
             )
             .await?;
-            observed_receive(config.role, payload.len());
+            observed_receive(config.role, frame.payload_bytes().len());
         }
         FlowRole::RpcClient => {
             let payload = config.payload(1, false)?;
@@ -248,15 +279,29 @@ pub(crate) async fn run_owned(
             let (source, sink) = config.filters()?;
             let response = if config.send_count <= 1 {
                 send_owned(&transport, metadata, &payload).await?;
-                receive_owned_pull(&transport, &source, sink.as_ref(), config).await?
+                receive_owned_pull(
+                    &transport,
+                    &source,
+                    sink.as_ref(),
+                    config.timeout_ms,
+                    (config.wire_format == FlowWireFormat::Native).then_some(&config.native),
+                )
+                .await?
             } else {
                 let sender = Arc::clone(&transport);
                 let bytes = payload.clone();
                 let settings = config.clone();
                 let task = tokio::spawn(async move {
-                    send_owned_repeated(&sender, metadata, &bytes, &settings).await
+                    send_owned_repeated(&sender, metadata, &bytes, (&settings).into()).await
                 });
-                let response = receive_owned_pull(&transport, &source, sink.as_ref(), config).await;
+                let response = receive_owned_pull(
+                    &transport,
+                    &source,
+                    sink.as_ref(),
+                    config.timeout_ms,
+                    (config.wire_format == FlowWireFormat::Native).then_some(&config.native),
+                )
+                .await;
                 task.abort();
                 let _ = task.await;
                 response?
@@ -266,18 +311,19 @@ pub(crate) async fn run_owned(
         }
         FlowRole::RpcServer => {
             let (source, sink) = config.filters()?;
-            let request = super::receive::owned(
+            let request = super::receive::owned_with_ready(
                 &transport,
                 &source,
                 sink.as_ref(),
                 config.timeout_ms,
                 (config.wire_format == FlowWireFormat::Native).then_some(&config.native),
+                ready,
             )
             .await?;
             let payload = request.payload_bytes().to_vec();
             let metadata = config.response_metadata(request.metadata())?;
             tokio::time::sleep(Duration::from_millis(config.rpc_response_delay_ms)).await;
-            send_owned_repeated(&transport, metadata, &payload, config).await?;
+            send_owned_repeated(&transport, metadata, &payload, config.into()).await?;
             observed_receive(config.role, payload.len());
         }
     }
@@ -285,6 +331,19 @@ pub(crate) async fn run_owned(
 }
 
 pub(crate) async fn run_native<T>(transport: Arc<T>, config: &FlowConfig) -> Result<(), UStatus>
+where
+    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
+    T::Tx: UTxBuffer,
+    T::Rx: UZeroCopyRxLease + Send + 'static,
+{
+    run_native_with_ready(transport, config, super::receive::listener_ready).await
+}
+
+pub(crate) async fn run_native_with_ready<T>(
+    transport: Arc<T>,
+    config: &FlowConfig,
+    ready: fn(),
+) -> Result<(), UStatus>
 where
     T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
     T::Tx: UTxBuffer,
@@ -326,18 +385,27 @@ where
     match config.role {
         FlowRole::PubSender | FlowRole::NotifySender => {
             let payload = config.payload(1, false)?;
-            send_native_repeated(&transport, config.outbound_metadata()?, &payload, config).await?;
+            send_native_repeated(
+                &transport,
+                config.outbound_metadata()?,
+                &payload,
+                config.alignment(),
+                config.into(),
+            )
+            .await?;
             observed_send(config.role, payload.len());
         }
         FlowRole::PubReceiver | FlowRole::NotifyReceiver => {
             let (source, sink) = config.filters()?;
-            let payload = super::receive::zero_copy_payload(
+            let frame = super::receive::zero_copy_with_ready(
                 &transport,
                 &source,
                 sink.as_ref(),
                 config.timeout_ms,
+                ready,
             )
             .await?;
+            let payload = super::payloads::copy_payload_bytes(&frame)?;
             observed_receive(config.role, payload.len());
         }
         FlowRole::RpcClient => {
@@ -352,7 +420,14 @@ where
                 let bytes = payload.clone();
                 let settings = config.clone();
                 let task = tokio::spawn(async move {
-                    send_native_repeated(&sender, metadata, &bytes, &settings).await
+                    send_native_repeated(
+                        &sender,
+                        metadata,
+                        &bytes,
+                        settings.alignment(),
+                        (&settings).into(),
+                    )
+                    .await
                 });
                 let response =
                     receive_native_pull(&transport, &source, sink.as_ref(), config.timeout_ms)
@@ -367,13 +442,25 @@ where
         }
         FlowRole::RpcServer => {
             let (source, sink) = config.filters()?;
-            let request =
-                super::receive::zero_copy(&transport, &source, sink.as_ref(), config.timeout_ms)
-                    .await?;
+            let request = super::receive::zero_copy_with_ready(
+                &transport,
+                &source,
+                sink.as_ref(),
+                config.timeout_ms,
+                ready,
+            )
+            .await?;
             let payload = super::payloads::copy_payload_bytes(&request)?;
             let metadata = config.response_metadata(request.metadata())?;
             tokio::time::sleep(Duration::from_millis(config.rpc_response_delay_ms)).await;
-            send_native_repeated(&transport, metadata, &payload, config).await?;
+            send_native_repeated(
+                &transport,
+                metadata,
+                &payload,
+                config.alignment(),
+                config.into(),
+            )
+            .await?;
             observed_receive(config.role, payload.len());
         }
     }
@@ -393,16 +480,19 @@ async fn send_owned(
     .await
 }
 
-async fn send_owned_repeated(
+pub(crate) async fn send_owned_repeated(
     transport: &Arc<dyn UOwnedTransport>,
     metadata: UFrameMetadata,
     payload: &[u8],
-    config: &FlowConfig,
+    options: SendOptions,
 ) -> Result<(), UStatus> {
-    for attempt in 0..config.send_count.max(1) {
+    for attempt in 0..options.count.max(1) {
         send_owned(transport, metadata.clone(), payload).await?;
-        if attempt + 1 < config.send_count.max(1) {
-            tokio::time::sleep(Duration::from_millis(config.send_interval_ms)).await;
+        if let Some(interval) = options
+            .interval
+            .filter(|_| attempt + 1 < options.count.max(1))
+        {
+            tokio::time::sleep(interval).await;
         }
     }
     Ok(())
@@ -425,32 +515,37 @@ where
     super::proof::send_loan(transport.as_ref(), loan).await
 }
 
-async fn send_native_repeated<T>(
+pub(crate) async fn send_native_repeated<T>(
     transport: &Arc<T>,
     metadata: UFrameMetadata,
     payload: &[u8],
-    config: &FlowConfig,
+    alignment: usize,
+    options: SendOptions,
 ) -> Result<(), UStatus>
 where
     T: UZeroCopyTransport + Send + Sync + 'static,
     T::Tx: UTxBuffer,
 {
-    for attempt in 0..config.send_count.max(1) {
-        send_native(transport, metadata.clone(), payload, config.alignment()).await?;
-        if attempt + 1 < config.send_count.max(1) {
-            tokio::time::sleep(Duration::from_millis(config.send_interval_ms)).await;
+    for attempt in 0..options.count.max(1) {
+        send_native(transport, metadata.clone(), payload, alignment).await?;
+        if let Some(interval) = options
+            .interval
+            .filter(|_| attempt + 1 < options.count.max(1))
+        {
+            tokio::time::sleep(interval).await;
         }
     }
     Ok(())
 }
 
-async fn receive_owned_pull(
+pub(crate) async fn receive_owned_pull(
     transport: &Arc<dyn UOwnedTransport>,
     source: &UUri,
     sink: Option<&UUri>,
-    config: &FlowConfig,
+    timeout_ms: u64,
+    native: Option<&NativeContext>,
 ) -> Result<UOwnedFrame, UStatus> {
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(config.timeout_ms);
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         if tokio::time::Instant::now() >= deadline {
             return Err(UStatus::fail_with_code(
@@ -469,10 +564,8 @@ async fn receive_owned_pull(
         match result {
             Ok(frame) => {
                 super::proof::received_frame(&frame);
-                if config.wire_format == FlowWireFormat::Native {
-                    config
-                        .native
-                        .verify_owned(frame.metadata(), frame.payload_bytes())?;
+                if let Some(native) = native {
+                    native.verify_owned(frame.metadata(), frame.payload_bytes())?;
                 }
                 return Ok(frame);
             }
@@ -484,7 +577,7 @@ async fn receive_owned_pull(
     }
 }
 
-async fn receive_native_pull<T>(
+pub(crate) async fn receive_native_pull<T>(
     transport: &Arc<T>,
     source: &UUri,
     sink: Option<&UUri>,

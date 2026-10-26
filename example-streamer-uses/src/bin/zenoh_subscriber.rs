@@ -14,22 +14,18 @@
 //! Receive uProtocol publications using the selected Zenoh endpoint API and wire.
 mod common;
 
-use async_trait::async_trait;
 use clap::{Parser, ValueEnum};
 use common::cli;
-use common::payloads::{NativeContext, NativeLoanVerifier};
+use common::payloads::NativeContext;
 use common::PublishReceiver;
 use std::str::FromStr;
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
-use tokio::sync::mpsc;
 use tracing::info;
 use up_rust::selected_wire_user_api::ProtobufWire;
 use up_rust::UWithNativePrefixWire;
 use up_rust::{
-    UCode, UListener, UOwnedFrame, UOwnedListener, UOwnedTransport, UStatus, UTransport, UUri,
-    UZeroCopyListener, UZeroCopyRxLease, UZeroCopyTransport,
+    UCode, UListener, UOwnedTransport, UStatus, UTransport, UUri, UZeroCopyRxLease,
+    UZeroCopyTransport,
 };
 use up_transport_zenoh::{
     zenoh_config::{Config, EndPoint},
@@ -198,15 +194,7 @@ async fn main() -> Result<(), UStatus> {
         )
         .await;
     }
-    subscriber
-        .register_listener(&source_filter, None, publish_receiver.clone())
-        .await?;
-
-    println!("READY listener_registered");
-
-    loop {
-        thread::park();
-    }
+    common::classic::listen(subscriber.as_ref(), &source_filter, None, publish_receiver).await
 }
 
 async fn run_selected_wire_subscriber(
@@ -280,13 +268,7 @@ async fn run_selected_wire_subscriber(
                     .into_stable_container_transport(args.native.agreement()?.clone()),
             );
             print_selected_wire_ready();
-            receive_zero_copy_payload(
-                &transport,
-                &source_filter,
-                args,
-                Some(NativeContext::verify_loan),
-            )
-            .await?
+            receive_zero_copy_payload(&transport, &source_filter, args).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Protobuf) => {
             let transport = Arc::new(
@@ -295,7 +277,7 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(ProtobufWire),
             );
             print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args, None).await?
+            receive_zero_copy_payload(&transport, &source_filter, args).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Xcdrv2) => {
             let transport = Arc::new(
@@ -304,7 +286,7 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(XcdrV2Wire),
             );
             print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args, None).await?
+            receive_zero_copy_payload(&transport, &source_filter, args).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Arrow) => {
             let transport = Arc::new(
@@ -313,7 +295,7 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(ArrowWire),
             );
             print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args, None).await?
+            receive_zero_copy_payload(&transport, &source_filter, args).await?
         }
         (RouteFamily::CopyMinimized, Encoding::Omgidl) => {
             let transport = Arc::new(
@@ -322,7 +304,7 @@ async fn run_selected_wire_subscriber(
                     .with_selected_wire(OmgIdlWire),
             );
             print_selected_wire_ready();
-            receive_zero_copy_payload(&transport, &source_filter, args, None).await?
+            receive_zero_copy_payload(&transport, &source_filter, args).await?
         }
     };
 
@@ -368,95 +350,39 @@ async fn receive_owned_payload(
     source_filter: &UUri,
     args: &Args,
 ) -> Result<Vec<u8>, UStatus> {
-    let frame = receive_owned_frame(transport, source_filter, args.timeout_ms).await?;
-    if args.encoding == Encoding::Native {
-        args.native
-            .verify_owned(frame.metadata(), frame.payload_bytes())?;
-    }
+    let frame = common::receive::owned_with_ready(
+        transport,
+        source_filter,
+        None,
+        args.timeout_ms,
+        (args.encoding == Encoding::Native).then_some(&args.native),
+        print_zenoh_listener_ready,
+    )
+    .await?;
     Ok(frame.payload_bytes().to_vec())
-}
-
-async fn receive_owned_frame(
-    transport: &Arc<dyn UOwnedTransport>,
-    source_filter: &UUri,
-    timeout_ms: u64,
-) -> Result<UOwnedFrame, UStatus> {
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    transport
-        .register_owned_listener(source_filter, None, Arc::new(OwnedListener(tx)))
-        .await?;
-    print_zenoh_listener_ready();
-    receive(&mut rx, timeout_ms, "owned frame").await
 }
 
 async fn receive_zero_copy_payload<T>(
     transport: &Arc<T>,
     source_filter: &UUri,
     args: &Args,
-    verify_native: Option<NativeLoanVerifier<T::Rx>>,
 ) -> Result<Vec<u8>, UStatus>
 where
-    T: UZeroCopyTransport + Send + Sync + 'static,
-    T::Rx: UZeroCopyRxLease,
+    T: UZeroCopyTransport + up_rust::UHasWire + Send + Sync + 'static,
+    T::Rx: UZeroCopyRxLease + Send + 'static,
 {
-    let (tx, mut rx) = mpsc::unbounded_channel();
-    transport
-        .register_validated_zero_copy_listener(source_filter, None, Arc::new(ZeroCopyListener(tx)))
-        .await?;
-    print_zenoh_listener_ready();
-    let frame = receive(&mut rx, args.timeout_ms, "zero-copy frame").await?;
-    if args.encoding == Encoding::Native {
-        verify_native
-            .ok_or_else(|| invalid_config("native receive requires a typed loan verifier"))?(
-            &args.native,
-            &frame,
-        )?;
-    }
+    let frame = common::receive::zero_copy_with_ready(
+        transport,
+        source_filter,
+        None,
+        args.timeout_ms,
+        print_zenoh_listener_ready,
+    )
+    .await?;
     common::payloads::copy_payload_bytes(&frame)
-}
-
-struct OwnedListener(mpsc::UnboundedSender<UOwnedFrame>);
-
-#[async_trait]
-impl UOwnedListener for OwnedListener {
-    async fn on_receive_owned(&self, frame: UOwnedFrame) {
-        common::proof::received_frame(&frame);
-        let _ = self.0.send(frame);
-    }
-}
-
-struct ZeroCopyListener<Rx>(mpsc::UnboundedSender<Rx>);
-
-#[async_trait]
-impl<Rx> UZeroCopyListener<Rx> for ZeroCopyListener<Rx>
-where
-    Rx: UZeroCopyRxLease + Send + 'static,
-{
-    async fn on_receive_zero_copy(&self, frame: Rx) {
-        common::proof::received_frame(&frame);
-        let _ = self.0.send(frame);
-    }
 }
 
 fn print_zenoh_listener_ready() {
     println!("READY zenoh_listener_registered");
     println!("READY listener_registered");
-}
-
-async fn receive<T>(
-    receiver: &mut mpsc::UnboundedReceiver<T>,
-    timeout_ms: u64,
-    what: &str,
-) -> Result<T, UStatus> {
-    tokio::time::timeout(Duration::from_millis(timeout_ms), receiver.recv())
-        .await
-        .map_err(|_| {
-            UStatus::fail_with_code(
-                UCode::DeadlineExceeded,
-                format!("timed out waiting for {what}"),
-            )
-        })?
-        .ok_or_else(|| {
-            UStatus::fail_with_code(UCode::Unavailable, format!("{what} channel closed"))
-        })
 }
