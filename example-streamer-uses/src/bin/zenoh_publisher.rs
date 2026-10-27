@@ -248,7 +248,7 @@ async fn run_selected_wire_publisher(
             &args.native,
         )
         .await?;
-        send_owned_repeated(&transport, metadata, &payload, args.selected_send_count).await?;
+        send_owned_repeated(&transport, metadata, &payload, args).await?;
     }
 
     println!("FLOW sent_payload_bytes={} role=publisher", payload.len());
@@ -281,7 +281,7 @@ async fn send_owned_repeated(
     transport: &Arc<dyn UOwnedTransport>,
     metadata: UFrameMetadata,
     payload: &[u8],
-    count: usize,
+    args: &Args,
 ) -> Result<(), UStatus> {
     common::startup::wait_for_start().await?;
     common::flow::send_owned_repeated(
@@ -289,11 +289,12 @@ async fn send_owned_repeated(
         metadata,
         payload,
         common::flow::SendOptions {
-            count,
-            interval: None,
+            count: args.selected_send_count,
+            interval: Some(Duration::from_millis(args.send_interval_ms)),
         },
     )
-    .await
+    .await?;
+    common::startup::wait_for_completion().await
 }
 
 async fn send_zero_copy_repeated<T>(
@@ -319,7 +320,8 @@ where
             interval: Some(Duration::from_millis(args.send_interval_ms)),
         },
     )
-    .await
+    .await?;
+    common::startup::wait_for_completion().await
 }
 
 fn selected_payload_encoding(args: &Args) -> Result<PayloadEncoding, UStatus> {

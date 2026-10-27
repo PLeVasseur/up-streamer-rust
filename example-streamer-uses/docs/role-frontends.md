@@ -11,8 +11,9 @@ Controllers must use a fresh file and release only after the passive receiver an
 bridge report readiness. Request factories run after this barrier so setup does
 not consume the new request's TTL.
 
-Controllers can also set `UPROTOCOL_SOURCE_FINISH_FILE` for finite generic owned
-or native publication/notification sources. After the configured sends, the
+Controllers can also set `UPROTOCOL_SOURCE_FINISH_FILE` for finite owned or
+native publication/notification sources, including the custom selected-wire
+Zenoh publisher. After the configured sends, the
 source reports `READY source_complete_waiting` and retains its endpoint until the
 controller atomically writes exactly `STOP` followed by a newline. The controller
 releases this only after observing receiver completion. The wait is bounded by
@@ -20,6 +21,10 @@ releases this only after observing receiver completion. The wait is bounded by
 and is not a substitute for subscriber readiness: successful native publication
 alone does not prove consumption before a publisher is destroyed. Ordinary
 examples omit this variable and retain their normal exit behavior.
+
+Selected-wire Zenoh publishers apply `--send-interval-ms` to both owned-frame
+and copy-minimized sends. Their transport or prepared session remains owned by
+the send helper through the completion barrier.
 
 Prepared native construction uses the shared
 [`PreparedAddress` catalog and `PreparedSession`](../../utils/configurable-streamer-wire-support/docs/prepared.md).

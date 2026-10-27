@@ -9,8 +9,10 @@ Finite controllers can hold the active role's first send with
 `UPROTOCOL_SOURCE_START_FILE`; see [role startup](docs/role-frontends.md) for the
 readiness marker, exact release bytes and timeout. Normal examples omit it.
 The same guide documents `UPROTOCOL_SOURCE_FINISH_FILE`, an optional controller
-barrier retaining a finite generic publisher until receiver completion instead of
-destroying its native endpoint immediately after a successful send.
+barrier retaining a finite owned or prepared publisher, including the custom
+selected-wire Zenoh publisher, until receiver completion instead of destroying
+its native endpoint immediately after a successful send. Both selected-wire
+Zenoh send paths honor `--send-interval-ms`.
 
 The optional `payload-contract-large-fixtures` feature enables full SDK sensor
 representations in explicitly configured native pub/sub worker plans. See
