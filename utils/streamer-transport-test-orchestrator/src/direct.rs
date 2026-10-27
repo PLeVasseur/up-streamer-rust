@@ -167,6 +167,19 @@ fn execute(
         "UPROTOCOL_SOURCE_START_FILE".into(),
         source_start_file.display().to_string(),
     ));
+    let source_finish_file = directory.join("source-finish");
+    let retain_source = retains_finite_source(row);
+    if retain_source {
+        anyhow::ensure!(
+            !source_finish_file.exists(),
+            "source completion marker must be fresh"
+        );
+        prepared.active_env.push((
+            "UPROTOCOL_SOURCE_FINISH_FILE".into(),
+            source_finish_file.display().to_string(),
+        ));
+    }
+
     let zenoh = ZenohConfigPaths::new(directory);
     write_zenoh_router_config(&zenoh.sink_client, ZENOH_SINK_PORT)?;
     write_zenoh_client_config(&zenoh.source_client, ZENOH_SINK_PORT)?;
@@ -295,12 +308,21 @@ fn execute(
         )?;
         allocation::snapshot(directory, "ready-before-first-send", 2)?;
         atomic_write(&source_start_file, b"START\n")?;
-        wait_for_exit(
-            &mut sender,
-            Duration::from_secs(cli.scenario_timeout_secs),
-            cancellation,
-        )?;
-        assert_success(&mut sender)?;
+        if retain_source {
+            wait_for_marker(
+                &mut sender,
+                "READY source_complete_waiting",
+                remaining_timeout(started, cli.scenario_timeout_secs, "direct sends")?,
+                cancellation,
+            )?;
+        } else {
+            wait_for_exit(
+                &mut sender,
+                remaining_timeout(started, cli.scenario_timeout_secs, "direct sender")?,
+                cancellation,
+            )?;
+            assert_success(&mut sender)?;
+        }
         if row.uses_classic() {
             wait_for_any_marker(
                 &receiver.log_path,
@@ -315,6 +337,19 @@ fn execute(
                 cancellation,
             )?;
             assert_success(&mut receiver)?;
+        }
+        if retain_source {
+            atomic_write(&source_finish_file, b"STOP\n")?;
+            wait_for_exit(
+                &mut sender,
+                remaining_timeout(
+                    started,
+                    cli.scenario_timeout_secs,
+                    "direct source completion",
+                )?,
+                cancellation,
+            )?;
+            assert_success(&mut sender)?;
         }
         allocation::snapshot(directory, "completed-direct-peers", 2)?;
         terminate(&mut sender)?;

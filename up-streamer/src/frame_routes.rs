@@ -175,6 +175,39 @@ pub(crate) mod owned {
         UOwnedListener,
     };
 
+    // This observation follows checked SDK projection. It records the actual
+    // token transition, never infers that opaque bytes are a typed value.
+    fn trace_native_projection(
+        route: &str,
+        direction: &str,
+        agreement: Option<&NativeProfileAgreement>,
+        metadata: &up_rust::UFrameMetadata,
+    ) {
+        if !tracing::enabled!(tracing::Level::INFO) {
+            return;
+        }
+        let (Some(agreement), Some(encoding), Some(token)) = (
+            agreement,
+            metadata.payload_encoding(),
+            metadata.native_type_token(),
+        ) else {
+            return;
+        };
+        let profile = agreement.profile();
+        let evidence = serde_json::json!({
+            "route": route,
+            "direction": direction,
+            "domain": profile.domain(),
+            "version": profile.version(),
+            "profile_digest": profile.content_digest(),
+            "encoding_id": encoding.id(),
+            "native_type_token": token.as_u32(),
+            "token_before": (direction == "frame_to_classic").then_some(token.as_u32()),
+            "token_after": (direction == "classic_to_frame").then_some(token.as_u32()),
+        });
+        tracing::info!("NATIVE_PROJECTION_VERIFIED {evidence}");
+    }
+
     pub(crate) trait Destination: Send + 'static {
         fn send(
             &mut self,
@@ -225,6 +258,12 @@ pub(crate) mod owned {
                 )
             }
             .map_err(status)?;
+            trace_native_projection(
+                &self.label,
+                "frame_to_classic",
+                self.agreement.as_ref(),
+                frame.metadata(),
+            );
             let observation = crate::flow_observation::message("egress", &self.label, &message);
             self.endpoint.transport.send(message).await?;
             crate::flow_observation::emit(observation);
@@ -340,6 +379,7 @@ pub(crate) mod owned {
         }
     }
     struct ClassicIngress {
+        label: String,
         inbox: Arc<OwnedInbox>,
         agreement: Option<NativeProfileAgreement>,
     }
@@ -359,6 +399,12 @@ pub(crate) mod owned {
                 )
             }) {
                 Ok(frame) => {
+                    trace_native_projection(
+                        &self.label,
+                        "classic_to_frame",
+                        self.agreement.as_ref(),
+                        frame.metadata(),
+                    );
                     self.inbox.push(frame).await;
                 }
                 Err(error) => tracing::warn!(%error, "classic route projection rejected"),
@@ -486,6 +532,13 @@ pub(crate) mod owned {
     ) -> Result<Box<dyn FrameRouteControl>, UStatus> {
         let worker = OwnedWorker::new(config, destination)?;
         let listener = Arc::new(ClassicIngress {
+            label: format!(
+                "classic:{}@{} -> frame:{}@{}",
+                diagnostic.route.ingress_name,
+                diagnostic.route.ingress_authority,
+                diagnostic.route.egress_name,
+                diagnostic.route.egress_authority,
+            ),
             inbox: Arc::clone(&worker.inbox),
             agreement,
         });
@@ -556,6 +609,161 @@ pub(crate) mod owned {
                 }
                 Err(error) => tracing::warn!(%error, "native route metadata rejected"),
             }
+        }
+    }
+    #[cfg(test)]
+    mod projection_tests {
+        use super::*;
+        use std::sync::Mutex;
+        use tracing::{span, Event, Metadata, Subscriber};
+        use up_rust::{
+            NativeProfile, NativeProfileMode, NativeProfileTable, PayloadEncoding, StablePayload,
+        };
+
+        #[derive(Clone, Default)]
+        struct Capture(Arc<Mutex<Vec<String>>>);
+        impl Subscriber for Capture {
+            fn enabled(&self, _: &Metadata<'_>) -> bool {
+                true
+            }
+            fn new_span(&self, _: &span::Attributes<'_>) -> span::Id {
+                span::Id::from_u64(1)
+            }
+            fn record(&self, _: &span::Id, _: &span::Record<'_>) {}
+            fn record_follows_from(&self, _: &span::Id, _: &span::Id) {}
+            fn event(&self, event: &Event<'_>) {
+                struct Visitor<'a>(&'a mut Vec<String>);
+                impl tracing::field::Visit for Visitor<'_> {
+                    fn record_debug(
+                        &mut self,
+                        field: &tracing::field::Field,
+                        value: &dyn std::fmt::Debug,
+                    ) {
+                        if field.name() == "message" {
+                            self.0.push(format!("{value:?}"));
+                        }
+                    }
+                }
+                event.record(&mut Visitor(&mut self.0.lock().unwrap()));
+            }
+            fn enter(&self, _: &span::Id) {}
+            fn exit(&self, _: &span::Id) {}
+        }
+
+        #[derive(up_rust::StablePayload)]
+        #[repr(C)]
+        #[stable_payload(type_name = "uprotocol.test.ProjectionObservation")]
+        struct Payload {
+            value: u64,
+        }
+
+        fn agreement() -> NativeProfileAgreement {
+            let profile = Arc::new(
+                NativeProfile::new(
+                    "projection-regression",
+                    1,
+                    NativeProfileMode::Table(
+                        NativeProfileTable::new([(
+                            PayloadEncoding::private_use(0xF101),
+                            Payload::native_representation(),
+                        )])
+                        .unwrap(),
+                    ),
+                )
+                .unwrap(),
+            );
+            NativeProfileAgreement::new(profile.clone(), &profile).unwrap()
+        }
+
+        #[derive(Default)]
+        struct ClassicSink(Mutex<Vec<UMessage>>);
+        #[async_trait::async_trait]
+        impl up_rust::UTransport for ClassicSink {
+            async fn send(&self, message: UMessage) -> Result<(), UStatus> {
+                self.0.lock().unwrap().push(message);
+                Ok(())
+            }
+            async fn register_listener(
+                &self,
+                _: &UUri,
+                _: Option<&UUri>,
+                _: Arc<dyn UListener>,
+            ) -> Result<(), UStatus> {
+                unreachable!()
+            }
+            async fn unregister_listener(
+                &self,
+                _: &UUri,
+                _: Option<&UUri>,
+                _: Arc<dyn UListener>,
+            ) -> Result<(), UStatus> {
+                unreachable!()
+            }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn actual_classic_adapters_emit_checked_token_transitions() {
+            let capture = Capture::default();
+            let _subscriber = tracing::subscriber::set_default(capture.clone());
+            let agreement = agreement();
+            let topic = UUri::try_from_parts("projection-source", 0x5BA0, 1, 0x8001).unwrap();
+            let message = up_rust::UMessageBuilder::publish(topic.clone())
+                .build_with_payload(
+                    bytes::Bytes::from_static(&[0; 8]),
+                    PayloadEncoding::private_use(0xF101),
+                )
+                .unwrap();
+            let (sender, mut receiver) = mpsc::channel(1);
+            let ingress = ClassicIngress {
+                inbox: Arc::new(OwnedInbox {
+                    sender,
+                    closed: AtomicBool::new(false),
+                    stop: Notify::new(),
+                }),
+                agreement: Some(agreement.clone()),
+                label: "projection-ingress".into(),
+            };
+            ingress.on_receive(message).await;
+            let frame = receiver.try_recv().unwrap();
+            let token = frame.metadata().native_type_token().unwrap();
+            let sink = Arc::new(ClassicSink::default());
+            let mut destination = ClassicDestination {
+                endpoint: Endpoint::new("classic-sink", "projection-sink", sink.clone()),
+                agreement: Some(agreement),
+                label: "projection-egress".into(),
+            };
+            destination.send(frame).await.unwrap();
+            assert_eq!(sink.0.lock().unwrap().len(), 1);
+            let opaque = up_rust::UMessageBuilder::publish(topic)
+                .build_with_payload(
+                    bytes::Bytes::from_static(b"opaque"),
+                    PayloadEncoding::private_use(0xF102),
+                )
+                .unwrap();
+            ingress.on_receive(opaque).await;
+            let opaque = receiver.try_recv().unwrap();
+            assert!(opaque.metadata().native_type_token().is_none());
+            assert_eq!(opaque.payload_bytes(), b"opaque");
+            let records: Vec<_> = capture
+                .0
+                .lock()
+                .unwrap()
+                .iter()
+                .filter_map(|s| {
+                    s.strip_prefix("NATIVE_PROJECTION_VERIFIED ")
+                        .map(|json| serde_json::from_str::<serde_json::Value>(json).unwrap())
+                })
+                .collect();
+            assert_eq!(records.len(), 2);
+            assert_eq!(records[0]["direction"], "classic_to_frame");
+            assert!(records[0]["token_before"].is_null());
+            assert_eq!(records[0]["token_after"], token.as_u32());
+            assert_eq!(records[1]["direction"], "frame_to_classic");
+            assert_eq!(records[1]["token_before"], token.as_u32());
+            assert!(records[1]["token_after"].is_null());
+            assert!(records
+                .iter()
+                .all(|v| v["domain"] == "projection-regression" && v["encoding_id"] == 0xF101));
         }
     }
 }

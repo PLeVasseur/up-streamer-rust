@@ -23,11 +23,11 @@ const WORKLOAD_ZENOH_POOL_BYTES: usize = 16 * 1024 * 1024;
 /// island receives requests/publications; the sink island transmits them. RPC
 /// additionally reserves the reversed response direction on those same cores.
 pub(super) fn endpoint_catalog(
-    role: super::RoleStyle,
+    row: &MatrixRow,
     side: &str,
 ) -> Vec<configurable_streamer_wire_support::prepared::PreparedAddress> {
     use super::{
-        RoleStyle, AUTHORITY_A, AUTHORITY_B, METHOD_RESOURCE_ID, TOPIC_RESOURCE_ID, UE_ID,
+        role_topic_resource_id, RoleStyle, AUTHORITY_A, AUTHORITY_B, METHOD_RESOURCE_ID, UE_ID,
         UE_VERSION_MAJOR,
     };
     use configurable_streamer_wire_support::prepared::PreparedAddress;
@@ -47,12 +47,13 @@ pub(super) fn endpoint_catalog(
         allow_traceparent: true,
         transmit,
     };
-    match role {
+    let resource = role_topic_resource_id(row);
+    match row.role {
         RoleStyle::PublisherSubscriber => {
-            vec![entry(uri(AUTHORITY_A, TOPIC_RESOURCE_ID), None, to_sink)]
+            vec![entry(uri(AUTHORITY_A, resource), None, to_sink)]
         }
         RoleStyle::NotifierNotifyee => vec![entry(
-            uri(AUTHORITY_A, TOPIC_RESOURCE_ID),
+            uri(AUTHORITY_A, resource),
             Some(uri(AUTHORITY_B, 0)),
             to_sink,
         )],

@@ -4666,6 +4666,21 @@ fn run_row_attempt(
         "UPROTOCOL_SOURCE_START_FILE".into(),
         source_start_file.display().to_string(),
     ));
+    // Native owned/prepared providers must outlive remote observation. The
+    // existing shared role barrier retains the endpoint without extra traffic.
+    let source_finish_file = row_dir.join("source-finish");
+    let retain_source = retains_finite_source(row);
+    if retain_source {
+        anyhow::ensure!(
+            !source_finish_file.exists(),
+            "source completion marker must be fresh"
+        );
+        active_env.push((
+            "UPROTOCOL_SOURCE_FINISH_FILE".into(),
+            source_finish_file.display().to_string(),
+        ));
+    }
+
     let mut streamer = spawn_process(
         bundle,
         "streamer",
@@ -4857,12 +4872,22 @@ fn run_row_attempt(
             });
         }
 
-        let active_completion = wait_for_exit(
-            &mut active,
-            remaining_timeout(started, cli.scenario_timeout_secs, "active")?,
-            cancellation,
-        )
-        .and_then(|()| assert_success(&mut active));
+        let active_completion = if retain_source {
+            wait_for_marker(
+                &mut active,
+                "READY source_complete_waiting",
+                remaining_timeout(started, cli.scenario_timeout_secs, "active sends")?,
+                cancellation,
+            )
+            .map(|_| ())
+        } else {
+            wait_for_exit(
+                &mut active,
+                remaining_timeout(started, cli.scenario_timeout_secs, "active")?,
+                cancellation,
+            )
+            .and_then(|()| assert_success(&mut active))
+        };
         timings.active_us = duration_us(active_started.elapsed());
         active_completion?;
         let passive_started = Instant::now();
@@ -4887,6 +4912,16 @@ fn run_row_attempt(
         };
         timings.passive_observation_or_completion_us = duration_us(passive_started.elapsed());
         passive_completion?;
+        if retain_source {
+            atomic_write(&source_finish_file, b"STOP\n")?;
+            wait_for_exit(
+                &mut active,
+                remaining_timeout(started, cli.scenario_timeout_secs, "source completion")?,
+                cancellation,
+            )?;
+            assert_success(&mut active)?;
+            timings.active_us = duration_us(active_started.elapsed());
+        }
 
         let validation_started = Instant::now();
         let validation = validate_flow_logs(
@@ -5374,6 +5409,7 @@ fn write_config(
         source_lola.as_ref(),
         lola_manifest_path,
         row.role,
+        row,
         native_paths.as_ref(),
     );
     push_endpoint(
@@ -5393,6 +5429,7 @@ fn write_config(
         sink_lola.as_ref(),
         lola_manifest_path,
         row.role,
+        row,
         native_paths.as_ref(),
     );
 
@@ -5508,6 +5545,7 @@ fn push_endpoint(
     lola: Option<&LolaEndpointInfo>,
     lola_manifest_path: Option<&Path>,
     role: RoleStyle,
+    row: &MatrixRow,
     native_paths: Option<&NativeProfilePaths>,
 ) {
     let forwarding_routes = if role != RoleStyle::ClientServerRpc && side == "sink" {
@@ -5530,7 +5568,7 @@ fn push_endpoint(
     }
     if profile.kind == EndpointKind::CopyMinimized {
         value["copy_minimized_payload_alignment"] = json!(8);
-        value["prepared_routes"] = json!(prepared::endpoint_catalog(role, side));
+        value["prepared_routes"] = json!(prepared::endpoint_catalog(row, side));
     }
     if profile.physical == PhysicalTransport::Zenoh {
         value["zenoh_config_file"] = json!(zenoh_config_paths
@@ -6688,6 +6726,18 @@ fn add_lola_args(
         ]);
     }
     Ok(())
+}
+
+fn retains_finite_source(row: &MatrixRow) -> bool {
+    row.role != RoleStyle::ClientServerRpc
+        && matches!(
+            row.source.kind,
+            EndpointKind::OwnedFrame | EndpointKind::CopyMinimized
+        )
+        && matches!(
+            row.source.physical,
+            PhysicalTransport::Iceoryx2 | PhysicalTransport::Lola | PhysicalTransport::Zenoh
+        )
 }
 
 fn role_send_count(_row: &MatrixRow, cli: &Cli) -> usize {
@@ -11131,6 +11181,32 @@ mod tests {
             assert_eq!(source[0].sink.clone().unwrap(), source[1].source);
             assert!(source[1].transmit);
             assert!(!sink[1].transmit);
+        }
+    }
+
+    #[test]
+    fn prepared_catalog_matches_role_addresses_across_the_full_matrix() {
+        for row in matrix_rows() {
+            for side in ["source", "sink"] {
+                let catalog = prepared::endpoint_catalog(&row, side);
+                let first = catalog[0].reservation().unwrap();
+                let resource = if row.role == RoleStyle::ClientServerRpc {
+                    0
+                } else if row.role == RoleStyle::NotifierNotifyee && row.uses_vsomeip() {
+                    NOTIFICATION_RESOURCE_ID
+                } else {
+                    TOPIC_RESOURCE_ID
+                };
+                assert_eq!(first.source.resource_id(), resource, "{} {side}", row.id);
+                assert_eq!(catalog[0].transmit, side == "sink");
+                if row.role == RoleStyle::ClientServerRpc {
+                    assert_eq!(catalog.len(), 2);
+                    let reverse = catalog[1].reservation().unwrap();
+                    assert_eq!(reverse.source, first.sink.unwrap());
+                    assert_eq!(reverse.sink, Some(first.source));
+                    assert_eq!(catalog[1].transmit, side == "source");
+                }
+            }
         }
     }
 

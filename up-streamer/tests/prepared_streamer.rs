@@ -855,9 +855,6 @@ async fn transported_equal_size_foreign_token_id_zero_is_rejected_before_typed_p
             println!("CARRIED_FOREIGN_TOKEN_CONTROL transported=true encoding=0 equal_size=8 typed_rejection=WrongPayloadType");
         }
     }
-    assert_eq!(stats.forwarded.load(Ordering::Acquire), 2);
-    assert_eq!(stats.copied_payload_bytes.load(Ordering::Acquire), 16);
-    assert_eq!(stats.failed.load(Ordering::Acquire), 0);
     carried_observation_barrier(
         "UPROTOCOL_ALLOCATION_COMPLETE_FILE",
         "UPROTOCOL_SOURCE_FINISH_FILE",
@@ -867,5 +864,10 @@ async fn transported_equal_size_foreign_token_id_zero_is_rejected_before_typed_p
         .delete_selected_wire_copy_minimized_route_ref(&left, &right)
         .await
         .unwrap();
+    // Native receive may precede publish returning to the forwarding worker.
+    // Route deletion already waits for that worker to finish its bookkeeping.
+    assert_eq!(stats.forwarded.load(Ordering::Acquire), 2);
+    assert_eq!(stats.copied_payload_bytes.load(Ordering::Acquire), 16);
+    assert_eq!(stats.failed.load(Ordering::Acquire), 0);
     receiver.detach(&mut registration).unwrap();
 }

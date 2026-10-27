@@ -193,3 +193,5 @@ Optional native flow evidence also hashes the actual initialized egress-loan
 payload before native put and records completion, including failed puts. See
 [Optional flow observations](docs/prepared-routing.md#optional-flow-observations)
 for endpoint correlation, presence, cost and disabled-observer behavior.
+
+Native classic/frame bridge projection records follow successful SDK agreement validation and report the actual token addition or removal. They do not claim typed payload validation. See the [native route guide](docs/native_routes.md).

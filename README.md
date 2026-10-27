@@ -211,3 +211,5 @@ When filing regressions, include:
 - the exact repro command
 - `scenario-report.json` and `matrix-summary.json`
 - relevant excerpts from `streamer.log` and endpoint logs
+
+Native classic/frame bridge projection records follow successful SDK agreement validation and report the actual token addition or removal. They do not claim typed payload validation. Prepared validation fixtures reserve the exact addresses used by their roles, including SOME/IP notification resource `0x8000`.

@@ -50,3 +50,7 @@ Control cases have a separate denominator from connectivity and direct-pair rows
 The two small native example representations have equal 272-byte sizes but distinct
 descriptors; size equality never authorizes a typed borrow. Native middleware setup
 and backend storage guarantees remain documented by their respective bindings.
+
+Prepared validation fixtures reserve the exact source/sink addresses used by their roles across all transport pairs. Notifications involving SOME/IP use resource `0x8000`; other notification and publication fixtures use `0x8001`. RPC reserves request and reversed response addresses separately. Native bridge verification requires checked projection records in both applicable directions.
+
+Finite owned/prepared sources on iceoryx2, LoLa and Zenoh keep their native endpoint alive after their last send until the controller observes the passive role, then accept the exact completion marker and exit. This uses the shared role completion barrier without extra publications or a fixed keepalive delay. RPC retains its existing correlated exchange lifetime. Send counts, receive deadlines and scenario deadlines are unchanged.

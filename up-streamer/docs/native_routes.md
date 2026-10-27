@@ -71,3 +71,5 @@ byte count and slice count. It is emitted after the copy, even if the subsequent
 egress send fails. No record is emitted for a failed pre-copy loan; those failures
 remain visible in route diagnostics. The observation never hashes or copies payload
 data itself and is not a wire format or an allocation-free logging claim.
+
+Successful checked classic/frame projection emits `NATIVE_PROJECTION_VERIFIED` at INFO level with the route, full agreement identity, encoding and actual token addition or removal. Rejected projections emit no verified record. Opaque carriage outside the agreed native table remains opaque and does not gain a native token. This diagnostic does not claim typed payload validation or allocation-free logging.
