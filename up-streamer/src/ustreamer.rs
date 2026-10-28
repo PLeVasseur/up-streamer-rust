@@ -67,6 +67,15 @@ impl UStreamer {
         message_queue_size: u16,
         usubscription: Arc<dyn USubscription>,
     ) -> Result<Self, UStatus> {
+        #[cfg(feature = "flow-evidence")]
+        if std::env::var_os(streamer_flow_evidence::OUTPUT_PATH_ENV).is_some() {
+            streamer_flow_evidence::prepare_output_from_env().map_err(|error| {
+                UStatus::fail_with_code(
+                    up_rust::UCode::Internal,
+                    format!("FLOW_EVIDENCE_ERROR {error}"),
+                )
+            })?;
+        }
         let mut streamer = Self {
             name: name.into(),
             route_table: RouteTable::new(),

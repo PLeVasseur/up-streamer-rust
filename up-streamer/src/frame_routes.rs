@@ -183,7 +183,11 @@ pub(crate) mod owned {
         agreement: Option<&NativeProfileAgreement>,
         metadata: &up_rust::UFrameMetadata,
     ) {
-        if !tracing::enabled!(tracing::Level::INFO) {
+        #[cfg(feature = "flow-evidence")]
+        let dedicated = streamer_flow_evidence::dedicated_output_is_prepared();
+        #[cfg(not(feature = "flow-evidence"))]
+        let dedicated = false;
+        if !dedicated && !tracing::enabled!(tracing::Level::INFO) {
             return;
         }
         let (Some(agreement), Some(encoding), Some(token)) = (
@@ -205,6 +209,13 @@ pub(crate) mod owned {
             "token_before": (direction == "frame_to_classic").then_some(token.as_u32()),
             "token_after": (direction == "classic_to_frame").then_some(token.as_u32()),
         });
+        #[cfg(feature = "flow-evidence")]
+        if dedicated {
+            streamer_flow_evidence::emit_json_or_fail("NATIVE_PROJECTION_VERIFIED ", &evidence);
+            return;
+        }
+        // Explicit standalone/default tracing remains available without a
+        // declared structured capture; current acceptance uses the branch above.
         tracing::info!("NATIVE_PROJECTION_VERIFIED {evidence}");
     }
 

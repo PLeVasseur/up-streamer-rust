@@ -2,11 +2,18 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Opt-in observational evidence for integration tests. Never part of a wire format.
 
+mod record_writer;
+pub use record_writer::{
+    dedicated_output_is_prepared, emit_json_or_fail, emit_json_record,
+    emit_native_forward_completed, emit_preencoded_or_fail, emit_preencoded_record,
+    prepare_output_from_env, OUTPUT_PATH_ENV,
+};
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use up_rust::{UCode, UFrameMetadata, UFrameView, UMessage, UStatus, UTxBuffer};
 
-/// Prefix before each JSON observation emitted to standard output.
+/// Prefix before each JSON observation in the declared capture or standalone stdout.
 pub const MARKER: &str = "FLOW_MESSAGE_EVIDENCE ";
 
 /// A successful API operation or actual bridge handoff, scoped to one run/row.
@@ -190,10 +197,7 @@ impl Observation {
     /// Prints one prefixed JSON record, or nothing for a disabled observation.
     pub fn emit(record: Option<Self>) {
         if let Some(record) = record {
-            println!(
-                "{MARKER}{}",
-                serde_json::to_string(&record).expect("serializable evidence")
-            );
+            emit_json_or_fail(MARKER, &record);
         }
     }
 }
@@ -489,10 +493,7 @@ impl PayloadCopyObservation {
     }
     /// Emits one raw copy record; formatting and hashing costs belong to the process.
     pub fn emit(&self) {
-        match serde_json::to_string(self) {
-            Ok(record) => eprintln!("FLOW_PAYLOAD_COPY {record}"),
-            Err(error) => eprintln!("FLOW_EVIDENCE_ERROR {error}"),
-        }
+        emit_json_or_fail("FLOW_PAYLOAD_COPY ", self);
     }
 }
 #[cfg(test)]

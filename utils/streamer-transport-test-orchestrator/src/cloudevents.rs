@@ -110,7 +110,7 @@ pub(super) fn verify(row: &MatrixRow, directory: &Path) -> Result<()> {
     let mut actors = BTreeMap::new();
     for actor in ["active", "passive"] {
         let path = directory.join(format!("{actor}.log"));
-        let text = fs::read_to_string(&path)?;
+        let text = structured_capture::read(&path)?;
         anyhow::ensure!(
             !text.contains("CLOUDEVENT_ERROR") && !text.contains("FLOW_EVIDENCE_ERROR")
         );

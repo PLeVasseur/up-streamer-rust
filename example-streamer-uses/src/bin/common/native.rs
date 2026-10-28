@@ -24,6 +24,12 @@ impl NativeContext {
             .map(Option::unwrap_or_default)
     }
     pub fn load() -> Result<Self, UStatus> {
+        #[cfg(feature = "flow-evidence")]
+        if std::env::var_os(streamer_flow_evidence::OUTPUT_PATH_ENV).is_some() {
+            streamer_flow_evidence::prepare_output_from_env().map_err(|error| {
+                UStatus::fail_with_code(UCode::Internal, format!("FLOW_EVIDENCE_ERROR {error}"))
+            })?;
+        }
         #[cfg(feature = "selected-wire-common")]
         let profile =
             configurable_streamer_wire_support::native_profile::load_native_agreement_from_env()?;

@@ -23,6 +23,7 @@ keywords.workspace = true
 license.workspace = true
 
 [features]
+flow-evidence = ["dep:streamer-flow-evidence"]
 payload-contract-large-fixtures = ["up-rust/payload-contract-large-fixtures", "streamer-native-types/payload-contract-large-fixtures"]
 default = []
 wire-formats = ["dep:up-wire-arrow", "dep:up-wire-omgidl", "dep:up-wire-xcdrv2"]
@@ -37,6 +38,7 @@ lola-owned-frame = ["owned-frame-transport", "dep:up-transport-lola-rust", "up-t
 dds-owned-frame = ["owned-frame-transport", "dep:up-transport-dds"]
 
 [dependencies]
+streamer-flow-evidence = { version = "=0.1.0", path = "../streamer-flow-evidence", optional = true }
 iceoryx2 = { version = "=0.9.2", optional = true }
 streamer-native-types = { path = "../streamer-native-types", version = "=0.1.0" }
 up-native-profile = { workspace = true }

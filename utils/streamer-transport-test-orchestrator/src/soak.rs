@@ -805,7 +805,7 @@ fn prepare(
         .map(|(p, actor)| {
             Ok(LogCursor {
                 actor,
-                reader: BufReader::new(File::open(&p.log_path)?),
+                reader: BufReader::new(File::open(structured_capture::path(&p.log_path)?)?),
             })
         })
         .collect::<Result<_>>()?;
@@ -1273,7 +1273,7 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
             };
             let passive_path = directory.join("passive.log");
             validate_native_worker_log(
-                &fs::read_to_string(&passive_path)?,
+                &structured_capture::diagnostic_text(&passive_path)?,
                 &passive_path,
                 row.sink.kind,
                 &expected,
@@ -1281,7 +1281,7 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
             if row.role == RoleStyle::ClientServerRpc {
                 let active_path = directory.join("active.log");
                 validate_native_worker_log(
-                    &fs::read_to_string(&active_path)?,
+                    &structured_capture::diagnostic_text(&active_path)?,
                     &active_path,
                     row.source.kind,
                     &expected,
@@ -1289,7 +1289,7 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
             }
             validate_native_projection_log(
                 &row,
-                &fs::read_to_string(directory.join("streamer.log"))?,
+                &structured_capture::read(&directory.join("streamer.log"))?,
                 &expected,
             )?;
         }
@@ -1482,7 +1482,7 @@ fn audit_finite_inputs(directory: &Path, inputs: &serde_json::Value) -> Result<(
     let mut offers = Vec::new();
     let mut accepted = BTreeMap::new();
     let mut ids = BTreeSet::new();
-    for line in BufReader::new(File::open(directory.join("active.log"))?).lines() {
+    for line in structured_capture::lines(&directory.join("active.log"))? {
         let line = line?;
         anyhow::ensure!(line.len() <= 65_536, "finite worker log line exceeds bound");
         let Some(body) = line.strip_prefix("OP_EVENT ") else {

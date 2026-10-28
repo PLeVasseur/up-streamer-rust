@@ -4,6 +4,26 @@ Set `UPROTOCOL_FLOW_EVIDENCE_RUN` and `UPROTOCOL_FLOW_EVIDENCE_ACTOR` to label a
 run and the emitting process/role. Capture is opt-in: with no run identity, helpers
 return `None` without hashing payloads. An enabled capture requires an actor.
 `Observation::emit` writes `FLOW_MESSAGE_EVIDENCE ` followed by one JSON record.
+The test launcher supplies `UPROTOCOL_STRUCTURED_EVIDENCE_PATH` for a dedicated
+per-role record file and records that path in the launch environment. Human and
+native diagnostics retain their original console log. The common record writer
+also carries copy/completion, CloudEvents, workload and native proof records;
+schemas and prefixes stay unchanged. Current capture readers require the declared
+file and never substitute console text when it is missing.
+
+The destination is initialized during enabled process setup. A reusable buffer
+and one writer lock keep concurrent records complete, including short writes,
+without allowing foreign console fragments into the proof channel. The buffer
+can grow and does not impose a new record-size limit. Standalone examples without
+an explicit destination retain stdout compatibility; a stdout lock cannot govern
+native/raw descriptor writers, so this fallback does not offer dedicated capture's
+framing guarantee.
+
+Observation-disabled paths do not initialize the writer. Enabled observations
+still incur hashing, metadata, formatting and I/O costs. Whole-process allocation
+and resource measurements include setup, the initial buffer/file, buffer growth,
+warmup, records and cleanup. Initialization before readiness does not exempt these
+costs or establish a zero-allocation observer claim.
 
 The record contains schema version 1, run/actor/stage/optional route, message and
 request UUIDs, kind, source/sink, encoding and payload presence. Its length and

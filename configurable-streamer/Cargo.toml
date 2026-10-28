@@ -23,7 +23,7 @@ keywords.workspace = true
 license.workspace = true
 
 [features]
-flow-evidence = ["up-streamer/flow-evidence"]
+flow-evidence = ["up-streamer/flow-evidence", "dep:streamer-flow-evidence", "configurable-streamer-wire-support/flow-evidence"]
 default = []
 experimental-copy-minimized-routing = ["up-streamer/experimental-copy-minimized-routing"]
 zenoh-zero-copy = ["dep:up-wire-xcdrv2", "up-transport-zenoh/zero-copy", "configurable-streamer-wire-support/zenoh-zero-copy"]
@@ -76,6 +76,7 @@ vsomeip-transport = ["dep:up-transport-vsomeip"]
 bundled-vsomeip = ["up-transport-vsomeip/bundled"]
 
 [dependencies]
+streamer-flow-evidence = { version = "=0.1.0", path = "../utils/streamer-flow-evidence", optional = true }
 async-trait = { workspace = true }
 clap = { workspace = true }
 json5 = { workspace = true }

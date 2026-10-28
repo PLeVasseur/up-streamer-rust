@@ -260,20 +260,20 @@ impl Listener {
         )
         .map_err(failure)?
         .ok_or_else(|| failure("workload evidence is disabled"))?;
-        println!(
-            "OP_EVENT {}",
-            json!({"event": event, "phase": self.phase()?, "sequence": sequence,
+        streamer_flow_evidence::emit_json_or_fail(
+            "OP_EVENT ",
+            &json!({"event": event, "phase": self.phase()?, "sequence": sequence,
             "at_unix_ns": SystemTime::now().duration_since(UNIX_EPOCH).map_err(failure)?.as_nanos().to_string(),
-            "attributes_sha256": format!("{:x}", Sha256::digest(attributes)), "observation": observation})
+            "attributes_sha256": format!("{:x}", Sha256::digest(attributes)), "observation": observation}),
         );
         Ok(())
     }
 
     fn metrics(&self, final_record: bool) -> Result<(), UStatus> {
         let snapshot = self.sender.snapshot();
-        println!(
-            "OP_METRICS {}",
-            json!({"phase": self.phase()?, "final": final_record,
+        streamer_flow_evidence::emit_json_or_fail(
+            "OP_METRICS ",
+            &json!({"phase": self.phase()?, "final": final_record,
             "queue_occupancy": snapshot.queued, "queue_capacity": snapshot.capacity,
             "received": snapshot.received, "processed": snapshot.processed,
             "queue_drops": snapshot.overload_drops,
@@ -281,7 +281,7 @@ impl Listener {
             "live_application_rx_loans": self.loans.rx.load(Ordering::SeqCst), "max_application_rx_loans": self.loans.peak_rx.load(Ordering::SeqCst),
             "live_application_tx_loans": self.loans.tx.load(Ordering::SeqCst), "max_application_tx_loans": self.loans.peak_tx.load(Ordering::SeqCst),
             "live_transient_rx_loans": self.loans.transient_rx.load(Ordering::SeqCst), "max_transient_rx_loans": self.loans.peak_transient_rx.load(Ordering::SeqCst),
-            "live_application_values": snapshot.live_held, "max_application_values": snapshot.peak_held})
+            "live_application_values": snapshot.live_held, "max_application_values": snapshot.peak_held}),
         );
         Ok(())
     }
@@ -336,7 +336,10 @@ impl Listener {
     fn report_error(&self, result: Result<(), UStatus>) {
         if let Err(error) = result {
             self.errors.fetch_add(1, Ordering::SeqCst);
-            println!("OP_ERROR {}", json!({"error": error.to_string()}));
+            streamer_flow_evidence::emit_json_or_fail(
+                "OP_ERROR ",
+                &json!({"error": error.to_string()}),
+            );
         }
     }
 }
@@ -780,18 +783,16 @@ impl<T: PreparedEndpoint> up_rust::FrameSink<<T::Core as PreparedTransportCore>:
             )
             .map_err(failure)?
             .ok_or_else(|| failure("sensor fanout evidence disabled"))?;
-            println!(
-                "NATIVE_FANOUT_OBSERVATION {}",
-                serde_json::to_string(&record).map_err(failure)?
-            );
+            streamer_flow_evidence::emit_json_record("NATIVE_FANOUT_OBSERVATION ", &record)
+                .map_err(failure)?;
             self.received.fetch_add(1, Ordering::SeqCst);
             Ok(())
         })();
         if let Err(error) = result {
             self.errors.fetch_add(1, Ordering::SeqCst);
-            println!(
-                "NATIVE_FANOUT_ERROR {}",
-                json!({"error": error.to_string()})
+            streamer_flow_evidence::emit_json_or_fail(
+                "NATIVE_FANOUT_ERROR ",
+                &json!({"error": error.to_string()}),
             );
         }
     }
@@ -829,11 +830,11 @@ where
             .attach(metadata.source(), None, witness.clone())
             .await
             .map_err(failure)?;
-        println!(
-            "NATIVE_FANOUT_REGISTERED {}",
-            json!({"source": metadata.source().to_uri(false),
+        streamer_flow_evidence::emit_json_or_fail(
+            "NATIVE_FANOUT_REGISTERED ",
+            &json!({"source": metadata.source().to_uri(false),
             "registration": "source-native-fanout-witness", "application_inbox_capacity": 0,
-            "payload_copies": 0})
+            "payload_copies": 0}),
         );
         Some((Arc::clone(&transport), subscription, witness))
     } else {
@@ -864,10 +865,10 @@ where
         session.core().detach(&mut subscription).map_err(failure)?;
         let received = witness.received.load(Ordering::SeqCst);
         let errors = witness.errors.load(Ordering::SeqCst);
-        println!(
-            "NATIVE_FANOUT_FINISH {}",
-            json!({"received": received, "errors": errors,
-            "success": outcome.is_ok() && received > 0 && errors == 0})
+        streamer_flow_evidence::emit_json_or_fail(
+            "NATIVE_FANOUT_FINISH ",
+            &json!({"received": received, "errors": errors,
+            "success": outcome.is_ok() && received > 0 && errors == 0}),
         );
         if outcome.is_ok() && (received == 0 || errors != 0) {
             return Err(failure("sensor native fanout witness failed"));
@@ -906,9 +907,9 @@ where
             "workload evidence context differs from configured role",
         ));
     }
-    println!(
-        "OP_START {}",
-        json!({"actor": actor, "replay": plan.replay})
+    streamer_flow_evidence::emit_json_or_fail(
+        "OP_START ",
+        &json!({"actor": actor, "replay": plan.replay}),
     );
     let (sender, mut receiver) =
         inbox::bounded(plan.replay.queue_capacity as usize).map_err(failure)?;
@@ -952,7 +953,7 @@ where
                     listener.phase.lock().map_err(failure)?.apply(&command).map_err(failure)?;
                     if listener.errors.load(Ordering::SeqCst) != 0 { return Err(failure("workload listener failed")); }
                     if matches!(listener.phase()?, Phase::Drain | Phase::Stop) && source && !drained {
-                        println!("OP_SOURCE_DRAINED {}", json!({"offered": sequence}));
+                        streamer_flow_evidence::emit_json_or_fail("OP_SOURCE_DRAINED ", &json!({"offered": sequence}));
                         drained = true;
                     }
                     if listener.phase()? == Phase::Stop { break; }
@@ -974,7 +975,7 @@ where
                         Ok(()) => listener.emit("accepted", &value, &metadata, Some(sequence))?,
                         Err(error) => {
                             listener.emit("rejected", &value, &metadata, Some(sequence))?;
-                            println!("OP_REJECTION {}", json!({"sequence": sequence, "error": error.to_string()}));
+                            streamer_flow_evidence::emit_json_or_fail("OP_REJECTION ", &json!({"sequence": sequence, "error": error.to_string()}));
                         }
                     }
                     if plan.finite_messages.is_some() {
@@ -1041,10 +1042,10 @@ where
         && snapshot.abandoned == 0
         && snapshot.closed_rejections == 0
         && listener.errors.load(Ordering::SeqCst) == 0;
-    println!(
-        "OP_FINISH {}",
-        json!({"actor": actor, "success": complete,
-        "error": outcome.as_ref().err().or(cleanup.as_ref().err()).or(finalized.as_ref().err()).map(ToString::to_string)})
+    streamer_flow_evidence::emit_json_or_fail(
+        "OP_FINISH ",
+        &json!({"actor": actor, "success": complete,
+        "error": outcome.as_ref().err().or(cleanup.as_ref().err()).or(finalized.as_ref().err()).map(ToString::to_string)}),
     );
     outcome?;
     cleanup?;

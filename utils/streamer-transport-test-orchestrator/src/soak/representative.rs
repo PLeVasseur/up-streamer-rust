@@ -379,7 +379,7 @@ pub(super) fn audit_worker_metrics(directory: &Path, report: &serde_json::Value)
     );
     let mut final_count = 0;
     for actor in ["active", "passive"] {
-        for line in BufReader::new(File::open(directory.join(format!("{actor}.log")))?).lines() {
+        for line in structured_capture::lines(&directory.join(format!("{actor}.log")))? {
             let line = line?;
             let Some(body) = line.strip_prefix("OP_METRICS ") else {
                 continue;

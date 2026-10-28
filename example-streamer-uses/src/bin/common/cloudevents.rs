@@ -133,11 +133,11 @@ fn setup_controls() -> Result<(), UStatus> {
             opaque += 1;
         }
     }
-    println!(
-        "CLOUDEVENT_SETUP {}",
-        serde_json::json!({"schema":1,"rejected_legacy_or_missing_format":rejected,
+    streamer_flow_evidence::emit_json_or_fail(
+        "CLOUDEVENT_SETUP ",
+        &serde_json::json!({"schema":1,"rejected_legacy_or_missing_format":rejected,
             "opaque_presence_cases":opaque,"reserved_ids_received_not_originated":true,
-            "scope":"Local converter admission controls; no test message was offered to a transport"})
+            "scope":"Local converter admission controls; no test message was offered to a transport"}),
     );
     Ok(())
 }
@@ -185,12 +185,12 @@ pub fn message(message: UMessage, stage: &str) -> Result<UMessage, UStatus> {
             "traceparent":value.traceparent()
         })
     };
-    println!(
-        "CLOUDEVENT_PROOF {}",
-        serde_json::json!({"schema":1,"stage":stage,"before":before,"after":after,"semantic_before":semantics(&message),"semantic_after":semantics(&restored),
+    streamer_flow_evidence::emit_json_or_fail(
+        "CLOUDEVENT_PROOF ",
+        &serde_json::json!({"schema":1,"stage":stage,"before":before,"after":after,"semantic_before":semantics(&message),"semantic_after":semantics(&restored),
             "event_proto_hex":hex,"event_proto_bytes":bytes.len(),
             "event_proto_sha256":format!("{:x}",Sha256::digest(&bytes)),
-            "data_property":"binary_data","allocating_application_control":true})
+            "data_property":"binary_data","allocating_application_control":true}),
     );
     Ok(restored)
 }
@@ -256,9 +256,9 @@ pub fn frame(
             "CloudEvents frame semantics/native identity changed",
         ));
     }
-    println!(
-        "CLOUDEVENT_FRAME_WITNESS {}",
-        serde_json::json!({
+    streamer_flow_evidence::emit_json_or_fail(
+        "CLOUDEVENT_FRAME_WITNESS ",
+        &serde_json::json!({
             "schema":1,"stage":stage,"id":metadata.id().to_hyphenated_string(),
             "actor":std::env::var("UPROTOCOL_FLOW_EVIDENCE_ACTOR").ok(),
             "native_token_before":metadata.native_type_token().map(|token| format!("{token:?}")),
@@ -270,7 +270,7 @@ pub fn frame(
             "projected_status":restored_metadata.comm_status().map(|value| value.value()),
             "retained_zero_ttl":metadata.ttl().is_some_and(|value| value.is_zero()),
             "all_other_classic_fields_equal":true
-        })
+        }),
     );
     Ok((metadata.clone(), restored.payload()))
 }

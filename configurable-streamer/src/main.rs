@@ -466,6 +466,13 @@ async fn zenoh_route_wire_endpoints(
                 configured_bytes: bytes,
             })
             .map_err(|error| invalid_config(format!("provider setup receipt: {error}")))?;
+            #[cfg(feature = "flow-evidence")]
+            streamer_flow_evidence::emit_preencoded_record(
+                "NATIVE_SHM_PROVIDER_INITIALIZED ",
+                &receipt,
+            )
+            .map_err(|error| invalid_config(format!("FLOW_EVIDENCE_ERROR {error}")))?;
+            #[cfg(not(feature = "flow-evidence"))]
             println!("NATIVE_SHM_PROVIDER_INITIALIZED {receipt}");
         }
         for route_wire_format in route_wire_formats {
@@ -2115,6 +2122,11 @@ mod tests {
 
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
+    #[cfg(feature = "flow-evidence")]
+    if std::env::var_os(streamer_flow_evidence::OUTPUT_PATH_ENV).is_some() {
+        streamer_flow_evidence::prepare_output_from_env()
+            .map_err(|error| invalid_config(format!("FLOW_EVIDENCE_ERROR {error}")))?;
+    }
     let _ = tracing_subscriber::fmt::try_init();
 
     info!("Started up-linux-streamer-configurable");

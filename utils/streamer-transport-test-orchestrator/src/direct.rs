@@ -359,7 +359,7 @@ fn execute(
             let expected = expected_native_identity(&bundle.manifest.native_profile)?;
             let path = directory.join("passive.log");
             validate_native_worker_log(
-                &fs::read_to_string(&path)?,
+                &structured_capture::diagnostic_text(&path)?,
                 &path,
                 row.sink.kind,
                 &expected,
@@ -367,7 +367,7 @@ fn execute(
             if row.role == RoleStyle::ClientServerRpc {
                 let path = directory.join("active.log");
                 validate_native_worker_log(
-                    &fs::read_to_string(&path)?,
+                    &structured_capture::diagnostic_text(&path)?,
                     &path,
                     row.source.kind,
                     &expected,
@@ -376,13 +376,13 @@ fn execute(
             let manifest: up_native_profile::DeploymentManifest =
                 up_native_profile::read_artifact(&directory.join("native-deployment.json"))?;
             validate_native_startup_log(
-                &fs::read_to_string(directory.join("active.log"))?,
+                &structured_capture::read(&directory.join("active.log"))?,
                 &manifest,
                 &bundle.manifest.native_profile,
                 &[("source", "sink")],
             )?;
             validate_native_startup_log(
-                &fs::read_to_string(directory.join("passive.log"))?,
+                &structured_capture::read(&directory.join("passive.log"))?,
                 &manifest,
                 &bundle.manifest.native_profile,
                 &[("sink", "source")],

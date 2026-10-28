@@ -47,6 +47,27 @@ pub const NATIVE_DEPLOYMENT_MARKER: &str = "NATIVE_DEPLOYMENT_LOADED ";
 /// Per-message identity verification marker.
 pub const NATIVE_VERIFIED_MARKER: &str = "NATIVE_IDENTITY_VERIFIED ";
 
+fn prepare_evidence_output() -> Result<(), UStatus> {
+    #[cfg(feature = "flow-evidence")]
+    if std::env::var_os(streamer_flow_evidence::OUTPUT_PATH_ENV).is_some() {
+        streamer_flow_evidence::prepare_output_from_env()
+            .map_err(|error| invalid(format!("FLOW_EVIDENCE_ERROR {error}")))?;
+    }
+    Ok(())
+}
+
+fn emit_native_record<T: serde::Serialize>(marker: &str, value: &T) -> Result<(), UStatus> {
+    #[cfg(feature = "flow-evidence")]
+    streamer_flow_evidence::emit_json_record(marker, value)
+        .map_err(|error| invalid(format!("FLOW_EVIDENCE_ERROR {error}")))?;
+    #[cfg(not(feature = "flow-evidence"))]
+    println!(
+        "{marker}{}",
+        serde_json::to_string(value).map_err(|error| invalid(error.to_string()))?
+    );
+    Ok(())
+}
+
 /// Startup evidence emitted after manifest, whole-route and local type checks.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -265,6 +286,7 @@ impl NativeDeploymentConfig {
         base: &Path,
         required: &[TypeKey],
     ) -> Result<NativeProfileAgreement, UStatus> {
+        prepare_evidence_output()?;
         self.load_context(base, required)
             .map(|context| context.agreement)
     }
@@ -304,10 +326,7 @@ impl NativeDeploymentConfig {
             domain: artifact.domain.clone(),
             generation: artifact.generation,
         };
-        println!(
-            "{NATIVE_DEPLOYMENT_MARKER}{}",
-            serde_json::to_string(&receipt).map_err(|error| invalid(error.to_string()))?
-        );
+        emit_native_record(NATIVE_DEPLOYMENT_MARKER, &receipt)?;
         let members = loaded
             .manifest()
             .routes
@@ -335,6 +354,7 @@ pub fn load_native_agreement_from_env() -> Result<Option<NativeProfileAgreement>
 /// Loads worker locators and checks the actual linked representation of `T` before admission.
 pub fn load_native_agreement_for_type_from_env<T: StablePayload>(
 ) -> Result<Option<NativeProfileAgreement>, UStatus> {
+    prepare_evidence_output()?;
     if std::env::var_os(LOCAL_PROFILE_ENV).is_some() || std::env::var_os(PEER_PROFILE_ENV).is_some()
     {
         return Err(invalid("legacy native profile paths are unsupported; configure the deployment manifest/root/route/endpoints"));
@@ -550,8 +570,7 @@ impl<T: StablePayload> NativePayloadContext<T> {
                 .as_u32(),
             identity_source: identity_source.to_owned(),
         };
-        let json = serde_json::to_string(&evidence).map_err(|error| invalid(error.to_string()))?;
-        println!("{NATIVE_VERIFIED_MARKER}{json}");
+        emit_native_record(NATIVE_VERIFIED_MARKER, &evidence)?;
         Ok(())
     }
 }

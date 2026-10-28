@@ -6776,6 +6776,7 @@ fn role_binary_suffix(role: RoleStyle, active: bool) -> &'static str {
 
 mod bridge_control;
 mod flow_oracle;
+mod structured_capture;
 
 fn validate_flow_logs(
     row: &MatrixRow,
@@ -6784,8 +6785,8 @@ fn validate_flow_logs(
     streamer_log: &Path,
     native_profile: &NativeProfileDocument,
 ) -> Result<()> {
-    let active = fs::read_to_string(active_log).unwrap_or_default();
-    let passive = fs::read_to_string(passive_log).unwrap_or_default();
+    let active = structured_capture::diagnostic_text(active_log)?;
+    let passive = structured_capture::diagnostic_text(passive_log)?;
     if row.encoding == WireEncoding::Native {
         let paths = NativeProfilePaths::new(
             passive_log
@@ -6808,7 +6809,7 @@ fn validate_flow_logs(
             &[("sink", "streamer-sink")],
         )?;
         let streamer_startup = validate_native_startup_log(
-            &fs::read_to_string(streamer_log)?,
+            &structured_capture::diagnostic_text(streamer_log)?,
             &manifest,
             native_profile,
             &[("streamer-source", "source"), ("streamer-sink", "sink")],
@@ -6821,8 +6822,11 @@ fn validate_flow_logs(
         } else {
             Vec::new()
         };
-        let projections =
-            validate_native_projection_log(row, &fs::read_to_string(streamer_log)?, &expected)?;
+        let projections = validate_native_projection_log(
+            row,
+            &structured_capture::diagnostic_text(streamer_log)?,
+            &expected,
+        )?;
         let path = passive_log
             .parent()
             .context("native worker log has no parent directory")?
@@ -6881,15 +6885,10 @@ fn validate_native_projection_log(
 ) -> Result<Vec<NativeProjection>> {
     let mut projections = Vec::new();
     for line in contents.lines() {
-        let Some((_, json)) = line.split_once("NATIVE_PROJECTION_VERIFIED ") else {
+        let Some(json) = line.strip_prefix("NATIVE_PROJECTION_VERIFIED ") else {
             continue;
         };
-        // tracing may append terminal formatting after the JSON message; decode
-        // one complete JSON value rather than treating color bytes as metadata.
-        let projection = serde_json::Deserializer::from_str(json)
-            .into_iter::<NativeProjection>()
-            .next()
-            .context("empty native projection record")??;
+        let projection: NativeProjection = serde_json::from_str(json)?;
         let tokens_match = match projection.direction.as_str() {
             "classic_to_frame" => {
                 projection.token_before.is_none()
@@ -7227,6 +7226,7 @@ fn spawn_process(
     namespace: Option<&RunningProcess>,
 ) -> Result<RunningProcess> {
     let log_path = artifact_dir.join(format!("{name}.log"));
+    let env = structured_capture::prepare(artifact_dir, name, env)?;
     let stdout = log_file(&log_path)?;
     let stderr = stdout.try_clone()?;
     let observation = allocation::Launch::configured(artifact_dir, name)?;
@@ -7252,7 +7252,7 @@ fn spawn_process(
         .args(args)
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr));
-    configure_matrix_environment(&mut command, env);
+    configure_matrix_environment(&mut command, &env);
     if let Some(observation) = &observation {
         observation.environment(&mut command);
     }
@@ -7269,6 +7269,7 @@ fn spawn_process(
             "executable": executable,
             "args": args,
             "working_directory": workdir,
+            "log_path": &launched.log_path,
             "environment": env,
             "wrapper_executable": command.get_program().to_string_lossy(),
             "wrapper_args": command.get_args().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>(),
@@ -9504,7 +9505,7 @@ mod tests {
         }
         let log = observations
             .into_iter()
-            .map(|value| format!("\u{1b}[32m INFO NATIVE_PROJECTION_VERIFIED {value}\u{1b}[0m\n"))
+            .map(|value| format!("NATIVE_PROJECTION_VERIFIED {value}\n"))
             .collect::<String>();
         assert_eq!(
             validate_native_projection_log(&row, &log, &expected).is_ok(),
@@ -11587,7 +11588,7 @@ mod tests {
 
     #[test]
     fn private_mount_shadow_paths_are_rejected_after_canonicalization() {
-        let canonical = fs::canonicalize(std::env::temp_dir()).expect("canonical temp directory");
+        let canonical = fs::canonicalize("/tmp").expect("canonical private temp directory");
         assert!(reject_private_mount_path("test", &canonical).is_err());
         assert!(reject_private_mount_path("test", Path::new("/dev/shm/input")).is_err());
         assert!(reject_private_mount_path("test", Path::new("/home/input")).is_ok());

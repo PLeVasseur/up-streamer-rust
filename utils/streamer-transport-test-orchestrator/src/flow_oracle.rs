@@ -6,7 +6,7 @@ use super::*;
 use streamer_flow_evidence::{equivalent, validate_leg, Observation, MARKER};
 
 fn records(path: &Path, run: &str, actor: &str) -> Result<Vec<Observation>> {
-    let contents = fs::read_to_string(path)?;
+    let contents = structured_capture::read(path)?;
     if contents.contains("FLOW_EVIDENCE_ERROR") {
         return Err(anyhow!("evidence capture failed in {}", path.display()));
     }
@@ -172,6 +172,7 @@ pub(super) fn verify_direct(row: &MatrixRow, directory: &Path, bundle: &RunBundl
     }
     anyhow::ensure!(
         !directory.join("streamer.log").exists()
+            && !directory.join("streamer.records.jsonl").exists()
             && !directory.join("streamer.launch.json").exists(),
         "direct pair started a bridge"
     );

@@ -246,7 +246,7 @@ pub async fn run_classic(
                     "malformed_samples": health.malformed_samples, "dispatch_drops": health.dispatch_drops,
                     "callback_panics": health.callback_panics, "worker_panics": health.worker_panics,
                     "teardown_errors": health.teardown_errors});
-                println!("OP_TRANSPORT_HEALTH {counters}");
+                streamer_flow_evidence::emit_json_or_fail("OP_TRANSPORT_HEALTH ", &counters);
                 acknowledged?;
                 if counters.as_object().expect("health object").values().any(|value| value.as_u64() != Some(0)) {
                     return Err(invalid("binding health reported a sustained-workload error"));
