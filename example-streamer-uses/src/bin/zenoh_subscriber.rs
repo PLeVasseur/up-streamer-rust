@@ -121,7 +121,7 @@ async fn main() -> Result<(), UStatus> {
             "selected-wire sustained subscriber integration is pending",
         ));
     }
-    args.native = NativeContext::from_env()?;
+    args.native = example_streamer_uses::common::payloads::load_native_context()?;
     if args.encoding == Encoding::Native {
         args.native.identity()?;
     }

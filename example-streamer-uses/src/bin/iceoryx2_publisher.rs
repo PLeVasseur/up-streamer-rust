@@ -148,13 +148,15 @@ async fn main() -> Result<(), UStatus> {
     #[cfg(feature = "payload-contract-large-fixtures")]
     {
         cli.native = match sensor_fixture {
-            Some(fixture) => NativeContext::from_env_for_fixture(fixture)?,
-            None => NativeContext::from_env()?,
+            Some(fixture) => {
+                example_streamer_uses::common::payloads::load_native_context_for_fixture(fixture)?
+            }
+            None => example_streamer_uses::common::payloads::load_native_context()?,
         };
     }
     #[cfg(not(feature = "payload-contract-large-fixtures"))]
     {
-        cli.native = NativeContext::from_env()?;
+        cli.native = example_streamer_uses::common::payloads::load_native_context()?;
     }
     if cli.wire_format == FlowWireFormat::Native {
         cli.native.identity()?;

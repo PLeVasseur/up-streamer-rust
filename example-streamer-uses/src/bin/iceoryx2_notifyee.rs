@@ -101,7 +101,7 @@ async fn main() -> Result<(), UStatus> {
             "iceoryx2 capacity options require the iceoryx2 backend",
         ));
     }
-    cli.native = NativeContext::from_env()?;
+    cli.native = example_streamer_uses::common::payloads::load_native_context()?;
     if cli.wire_format == FlowWireFormat::Native {
         cli.native.identity()?;
     }

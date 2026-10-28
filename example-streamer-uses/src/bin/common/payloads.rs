@@ -16,6 +16,31 @@ pub type NativeContext = configurable_streamer_wire_support::native_profile::Nat
     SelectedWireNativePayload,
 >;
 
+/// Load this application's admitted native context before proof callbacks run.
+///
+/// # Errors
+/// Returns deployment-admission errors or a changed proof agreement.
+pub fn load_native_context() -> Result<NativeContext, UStatus> {
+    prepare_native_control(NativeContext::from_env()?)
+}
+
+/// Load an explicitly selected large fixture before proof callbacks run.
+///
+/// # Errors
+/// Returns deployment-admission errors or a changed proof agreement.
+#[cfg(feature = "payload-contract-large-fixtures")]
+pub fn load_native_context_for_fixture(
+    fixture: configurable_streamer_wire_support::sensor::SensorFixture,
+) -> Result<NativeContext, UStatus> {
+    prepare_native_control(NativeContext::from_env_for_fixture(fixture)?)
+}
+
+fn prepare_native_control(context: NativeContext) -> Result<NativeContext, UStatus> {
+    #[cfg(feature = "flow-evidence")]
+    super::cloudevents::install_native(context.configured_agreement())?;
+    Ok(context)
+}
+
 pub type NativeLoanVerifier<Rx> = fn(&NativeContext, &Rx) -> Result<(), UStatus>;
 pub use configurable_streamer_wire_support::payload_bytes::copy_payload_bytes;
 

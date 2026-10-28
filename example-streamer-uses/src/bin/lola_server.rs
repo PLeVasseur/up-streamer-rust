@@ -76,7 +76,7 @@ struct Cli {
 #[tokio::main]
 async fn main() -> Result<(), UStatus> {
     let mut cli = Cli::parse();
-    cli.native = NativeContext::from_env()?;
+    cli.native = example_streamer_uses::common::payloads::load_native_context()?;
     if cli.wire_format == FlowWireFormat::Native {
         cli.native.identity()?;
     }

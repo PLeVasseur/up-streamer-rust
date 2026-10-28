@@ -216,3 +216,6 @@ up-wire-arrow = { workspace = true, optional = true }
 up-wire-omgidl = { workspace = true, optional = true }
 up-wire-xcdrv2 = { workspace = true, optional = true }
 zenoh = { workspace = true, optional = true }
+
+[dev-dependencies]
+up-native-profile = { workspace = true }

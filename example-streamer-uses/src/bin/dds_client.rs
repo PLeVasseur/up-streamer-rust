@@ -68,7 +68,7 @@ async fn main() -> Result<(), UStatus> {
             "sustained role support currently requires classic pub/sub or RPC",
         ));
     }
-    args.native = NativeContext::from_env()?;
+    args.native = example_streamer_uses::common::payloads::load_native_context()?;
     if args.encoding == Encoding::Native {
         args.native.identity()?;
     }

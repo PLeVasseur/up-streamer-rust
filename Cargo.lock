@@ -1566,6 +1566,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "up-native-profile",
  "up-rust",
  "up-transport-dds",
  "up-transport-iceoryx2-rust",
