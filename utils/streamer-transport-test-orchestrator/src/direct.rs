@@ -67,12 +67,34 @@ pub(super) fn run(cli: &Cli) -> Result<()> {
     }
     let success = results.iter().all(|row| row["result"] == "pass");
     let cleanup = process_cleanup_summary();
+    let metadata_tools = native_libraries::metadata_tool_summary();
+    let matrix_files = bundle
+        .manifest
+        .files
+        .iter()
+        .filter(|file| file.kind == BundleFileKind::MatrixExecutable)
+        .count() as u64;
+    let library_files = bundle
+        .manifest
+        .files
+        .iter()
+        .filter(|file| file.kind == BundleFileKind::NativeLibrary)
+        .count() as u64;
+    // Direct stages once and validates the staged bundle once. Every tool group
+    // remains included in global cleanup, independently of the native actor set.
+    let expected_metadata_groups = 2 * (matrix_files + library_files);
     let success = success
         && cleanup.process_group_leaks == 0
-        && cleanup.process_groups_started == cleanup.process_group_leak_checks;
+        && cleanup.process_groups_started == cleanup.process_group_leak_checks
+        && metadata_tools.started == expected_metadata_groups
+        && metadata_tools.source_executable_inspections == matrix_files
+        && metadata_tools.source_library_inspections == library_files
+        && metadata_tools.bundle_file_inspections == matrix_files + library_files
+        && metadata_tools.started == metadata_tools.cleanup_attempts
+        && metadata_tools.cleanup_failures == 0;
     atomic_write_json(
         &root.join("direct-summary.json"),
-        &json!({"schema":1,"complete":true,"success":success,"candidate_universe":180,"cleanup":cleanup,
+        &json!({"schema":1,"complete":true,"success":success,"candidate_universe":180,"cleanup":cleanup,"metadata_tool_processes":metadata_tools,"expected_metadata_tool_process_groups":expected_metadata_groups,
         "executed_rows":results.len(),"rows":results,"source_commit":git_output(&repo,&["rev-parse","HEAD"]),
         "dependency_sha256":dependency_sha256(&repo)?,"bundle_sha256":sha256_file(&bundle.manifest_path)?}),
     )?;
@@ -287,8 +309,6 @@ fn execute(
             directory,
             Some(&namespace),
         )?;
-        let (marker, _) = passive_readiness_contract(row);
-        wait_for_marker(&mut receiver, marker, Duration::from_secs(10), cancellation)?;
         let mut sender = spawn_process(
             bundle,
             "active",
@@ -299,6 +319,10 @@ fn execute(
             directory,
             Some(&namespace),
         )?;
+        // Native receiver setup may need the peer's already-offered service.
+        // Keep first traffic behind both readiness checks and the start barrier.
+        let (marker, _) = passive_readiness_contract(row);
+        wait_for_marker(&mut receiver, marker, Duration::from_secs(10), cancellation)?;
         let started = Instant::now();
         wait_for_marker(
             &mut sender,

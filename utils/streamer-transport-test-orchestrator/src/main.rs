@@ -90,6 +90,7 @@ mod direct;
 mod lane;
 mod native_controls;
 mod native_generation;
+mod native_libraries;
 mod prepared;
 mod soak;
 use native_generation::NativeGeneration;
@@ -7949,13 +7950,13 @@ fn configure_matrix_environment(command: &mut Command, env: &[(String, String)])
 }
 
 fn detect_vsomeip_lib_dir(target_directory: &Path) -> Result<PathBuf> {
-    if let Ok(ld_library_path) = std::env::var("LD_LIBRARY_PATH") {
-        for path in ld_library_path.split(':') {
-            let candidate = Path::new(path).join("libvsomeip3.so.3");
-            if candidate.is_file() {
-                return Ok(PathBuf::from(path));
-            }
-        }
+    if let Some(root) = std::env::var_os("VSOMEIP_INSTALL_PATH") {
+        let directory = PathBuf::from(root).join("lib");
+        anyhow::ensure!(
+            directory.is_absolute() && directory.join("libvsomeip3.so.3").is_file(),
+            "explicit VSOMEIP_INSTALL_PATH does not provide libvsomeip3.so.3"
+        );
+        return Ok(directory);
     }
     let build_root = target_directory.join("build");
     let candidates = fs::read_dir(&build_root)
@@ -7968,18 +7969,18 @@ fn detect_vsomeip_lib_dir(target_directory: &Path) -> Result<PathBuf> {
         return Ok(path);
     }
     Err(anyhow!(
-        "libvsomeip3.so.3 not found under LD_LIBRARY_PATH or the matrix profile build directory"
+        "libvsomeip3.so.3 not found under VSOMEIP_INSTALL_PATH or the matrix profile build directory"
     ))
 }
 
 fn detect_lola_bridge_lib_dir(target_directory: &Path) -> Result<PathBuf> {
-    if let Ok(ld_library_path) = std::env::var("LD_LIBRARY_PATH") {
-        for path in ld_library_path.split(':') {
-            let candidate = Path::new(path).join("libup_lola_bridge.so");
-            if candidate.is_file() {
-                return Ok(PathBuf::from(path));
-            }
-        }
+    if let Some(root) = std::env::var_os("LOLA_BRIDGE_LIB_DIR") {
+        let directory = PathBuf::from(root);
+        anyhow::ensure!(
+            directory.is_absolute() && directory.join("libup_lola_bridge.so").is_file(),
+            "explicit LOLA_BRIDGE_LIB_DIR does not provide libup_lola_bridge.so"
+        );
+        return Ok(directory);
     }
     let build_root = target_directory.join("build");
     let candidates = fs::read_dir(&build_root)
@@ -7996,7 +7997,7 @@ fn detect_lola_bridge_lib_dir(target_directory: &Path) -> Result<PathBuf> {
         return Ok(path);
     }
     Err(anyhow!(
-        "libup_lola_bridge.so not found under LD_LIBRARY_PATH or the matrix profile build directory"
+        "libup_lola_bridge.so not found under LOLA_BRIDGE_LIB_DIR or the matrix profile build directory"
     ))
 }
 
@@ -8070,28 +8071,14 @@ fn stage_run_bundle_with_workers(
             resolve_executable(name)?,
         ));
     }
-    if rows.iter().any(MatrixRow::uses_lola) {
-        let path = detect_lola_bridge_lib_dir(target_directory)?.join("libup_lola_bridge.so");
-        inputs.push((
-            BundleFileKind::NativeLibrary,
-            "libup_lola_bridge.so".to_string(),
-            path,
-        ));
-    }
-    if rows.iter().any(MatrixRow::uses_vsomeip) {
-        let directory = detect_vsomeip_lib_dir(target_directory)?;
-        for name in [
-            "libvsomeip3.so.3",
-            "libvsomeip3-cfg.so.3",
-            "libvsomeip3-sd.so.3",
-        ] {
-            inputs.push((
-                BundleFileKind::NativeLibrary,
-                name.to_string(),
-                directory.join(name),
-            ));
-        }
-    }
+    // Native link dependencies belong to the actual staged executables, which
+    // can have more features than a selected route when --skip-build is used.
+    let matrix_paths: Vec<_> = inputs
+        .iter()
+        .filter(|(kind, _, _)| *kind == BundleFileKind::MatrixExecutable)
+        .map(|(_, _, source)| source.clone())
+        .collect();
+    inputs.extend(native_libraries::inputs(&matrix_paths, target_directory)?);
 
     let inputs: Vec<_> = inputs
         .into_iter()
@@ -8303,6 +8290,11 @@ fn resolve_executable(name: &str) -> Result<PathBuf> {
 }
 
 fn validate_run_bundle(bundle: &RunBundle) -> Result<()> {
+    validate_run_bundle_storage(bundle)?;
+    native_libraries::validate(bundle)
+}
+
+fn validate_run_bundle_storage(bundle: &RunBundle) -> Result<()> {
     let payload = fs::read(&bundle.manifest_path)
         .with_context(|| format!("unable to read {}", bundle.manifest_path.display()))?;
     let manifest: BundleManifest = serde_json::from_slice(&payload)
@@ -11659,14 +11651,14 @@ mod tests {
             manifest_path,
             manifest,
         };
-        validate_run_bundle(&bundle).expect("fresh bundle validates");
+        validate_run_bundle_storage(&bundle).expect("fresh bundle validates");
 
         fs::write(&source, b"in-place source mutation").expect("mutate source in place");
         assert_eq!(
             fs::read(root.join(&staged.bundle_path)).expect("read isolated bundle file"),
             b"original executable"
         );
-        validate_run_bundle(&bundle).expect("source mutation does not alter bundle");
+        validate_run_bundle_storage(&bundle).expect("source mutation does not alter bundle");
 
         let replacement = base.join("replacement-bin");
         fs::write(&replacement, b"replacement executable").expect("write replacement");
@@ -11675,13 +11667,13 @@ mod tests {
             fs::read(root.join(&staged.bundle_path)).expect("read isolated bundle file"),
             b"original executable"
         );
-        validate_run_bundle(&bundle).expect("source replacement does not alter bundle");
+        validate_run_bundle_storage(&bundle).expect("source replacement does not alter bundle");
 
         let bundled_path = root.join(&staged.bundle_path);
         fs::set_permissions(&bundled_path, fs::Permissions::from_mode(0o644))
             .expect("make bundled file mutable for corruption test");
         fs::write(&bundled_path, b"corrupt").expect("corrupt bundled file");
-        assert!(validate_run_bundle(&bundle)
+        assert!(validate_run_bundle_storage(&bundle)
             .expect_err("bundle mutation must be rejected")
             .to_string()
             .contains("hash/size mismatch"));

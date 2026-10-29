@@ -40,13 +40,16 @@ for Linux/macOS portability targets, explicit metric availability and the curren
 limits of native macOS validation. Offline inventory and criteria generation do not
 require Linux namespaces.
 
-- Linux with `unshare`, `nsenter`, `mount`, `ip`, `kill`, `sha256sum`, and user
-  namespaces.
+- Linux with `unshare`, `nsenter`, `mount`, `ip`, `kill`, `sha256sum`, GNU
+  `readelf` (binutils), and user namespaces.
 - Rust 1.88 or newer for the workspace; Rust 1.95 is used for strict quality
   validation.
 - `mosquitto` for MQTT rows.
-- Native LoLa and vSomeIP libraries for rows using those transports. The build
-  normally produces them; `LD_LIBRARY_PATH` may also supply them.
+- Native LoLa and vSomeIP libraries required by the actual executables, which
+  may include backends outside a selected route when `--skip-build` is used. Set
+  `LOLA_BRIDGE_LIB_DIR` and `VSOMEIP_INSTALL_PATH` for configured installs, or use
+  the native outputs under the selected target/profile. See the
+  [native library bundle contract](docs/native-modes.md#native-library-bundles).
 - Enough space and inodes below `target/`; a complete run retains all row logs,
   generated configs, checkpoints, the immutable run bundle, and the final
   summary.
@@ -246,8 +249,8 @@ enter a bundle. Bundle loading and shard merge reject profile, environment,
 target-directory, or executable source-directory drift across build, bundle,
 identity, and run provenance.
 
-After the single build, every executable used by row supervision and every
-selected LoLa/vSomeIP native library is staged once under
+After the single build, every executable used by row supervision and its managed
+native library closure are staged once under
 `run-bundle/{bin,lib,objects}`. Inputs are copied once into content-and-mode
 addressed objects so the immutable snapshot shares no inode with mutable target
 artifacts; no binary is copied per row. Launch names are read-only hard links or

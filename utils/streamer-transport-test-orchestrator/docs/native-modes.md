@@ -54,3 +54,21 @@ and backend storage guarantees remain documented by their respective bindings.
 Prepared validation fixtures reserve the exact source/sink addresses used by their roles across all transport pairs. Notifications involving SOME/IP use resource `0x8000`; other notification and publication fixtures use `0x8001`. RPC reserves request and reversed response addresses separately. Native bridge verification requires checked projection records in both applicable directions.
 
 Finite owned/prepared sources on iceoryx2, LoLa and Zenoh keep their native endpoint alive after their last send until the controller observes the passive role, then accept the exact completion marker and exit. This uses the shared role completion barrier without extra publications or a fixed keepalive delay. RPC retains its existing correlated exchange lifetime. Send counts, receive deadlines and scenario deadlines are unchanged.
+
+## Native library bundles
+
+The selected routes can use fewer backends than the existing executables contain.
+Staging inspects the actual ELF `DT_NEEDED` entries of every project executable,
+including additional sustained workers, and of the managed libraries themselves.
+vSomeIP configuration and service-discovery plugins accompany its core library.
+GNU `readelf` inspects metadata without executing the inspected file. Inspection
+errors and missing managed dependencies reject the bundle before traffic starts.
+Imported bundles receive the same closure check after storage integrity checks.
+
+`LOLA_BRIDGE_LIB_DIR` selects the LoLa bridge directory;
+`VSOMEIP_INSTALL_PATH/lib` selects the vSomeIP libraries. An explicit directory
+that is incomplete is an error. Without an explicit install, staging searches the
+native build outputs under the selected target/profile. Ambient `LD_LIBRARY_PATH`
+does not choose these managed inputs. Row workers continue to use only the
+bundle library directory in `LD_LIBRARY_PATH`. Standard host ABI libraries,
+including vSomeIP's supported Boost components, remain host prerequisites.

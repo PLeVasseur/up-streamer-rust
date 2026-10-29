@@ -13,9 +13,19 @@ connection, MQTT broker, LoLa primary/response service or SOME/IP routing networ
 Native manifests name only the two peers. Each listener still owns its native
 subscriber and receive lease; no payload copy or ownership shortcut is introduced.
 
+Both peer processes start before the controller waits for listener registration.
+Prepared receivers can therefore discover the service offered by their peer,
+including the RPC response provider. First traffic remains blocked until the
+passive listener and active first-send barrier are both ready; no warm-up message
+is sent.
+
 Raw Tx/Rx evidence must match payload bytes, encoding, presence, addressing and
 bounded multiplicity; RPC responses must correlate with the requests at both peers.
 Only the SOME/IP binding's explicit UUID reconstruction changes ID matching. The
 output records actual failures and zero retries; absent bridge observations are
 not synthesized. This lane checks finite first-delivery connectivity, not whole-
 window losslessness or endurance. Backend capabilities/setup remain binding-owned.
+
+Cleanup accounts for metadata inspection tools as well as namespaces, brokers and
+role processes. `metadata_tool_processes` reports the inspection groups separately;
+success still requires every started group to be checked and zero leaked groups.
