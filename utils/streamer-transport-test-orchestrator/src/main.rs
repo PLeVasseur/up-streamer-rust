@@ -41,7 +41,8 @@ use std::time::{Duration, Instant};
 use std::{io::ErrorKind, thread};
 use streamer_transport_test_orchestrator::platform::HostOs;
 use streamer_transport_test_orchestrator::supervision::{
-    cleanup_summary as process_cleanup_summary, reset_cleanup_counters, RunningProcess,
+    cleanup_summary as process_cleanup_summary, reset_cleanup_counters, ExitContract,
+    RunningProcess,
 };
 use up_rust::StablePayload;
 
@@ -4936,13 +4937,15 @@ fn run_row_attempt(
         validation?;
         allocation::snapshot(&row_dir, "completed-before-cleanup", 3)?;
         let teardown_started = Instant::now();
-        terminate(&mut passive)?;
-        terminate(&mut active)?;
+        // Tear down both peers before reporting, so each records its exit evidence.
+        let passive_teardown = terminate(&mut passive);
+        let active_teardown = terminate(&mut active);
         timings.teardown_us = duration_us(teardown_started.elapsed());
-        Ok(())
+        passive_teardown.and(active_teardown)
     })();
 
     let teardown_started = Instant::now();
+    // Owned Streamer, broker and namespace exits are checked, not only cleanup.
     let mut cleanup_result = terminate(&mut streamer);
     if let Some(broker) = &mut mqtt_broker {
         if let Err(error) = terminate(broker) {
@@ -7685,8 +7688,22 @@ fn assert_success(process: &mut RunningProcess) -> Result<()> {
     }
 }
 
+/// Tears down an owned role: bounded group cleanup, then its exit-status contract.
+///
+/// Cleanup and application success stay separate facts. The leader's status and
+/// the supervisor signals that preceded it are always recorded beside the role
+/// log as `<role>.exit.json`; a cleanup failure is reported before the contract.
 fn terminate(process: &mut RunningProcess) -> Result<()> {
-    process.terminate()
+    let cleanup = process.terminate();
+    let exit = verify_exit(process, ExitContract::OwnedRole);
+    cleanup.and(exit)
+}
+
+/// Records `<role>.exit.json` beside the role log and enforces `contract`.
+fn verify_exit(process: &mut RunningProcess, contract: ExitContract) -> Result<()> {
+    let evidence = process.exit_evidence(contract)?;
+    atomic_write_json(&process.log_path.with_extension("exit.json"), &evidence)?;
+    evidence.ensure_expected(&process.log_path)
 }
 
 fn remaining_timeout(started: Instant, timeout_secs: u64, phase: &str) -> Result<Duration> {
@@ -11879,5 +11896,407 @@ mod tests {
         assert_ne!(ids[0], ids[2]);
         assert_ne!(ids[1], ids[2]);
         assert!(ids.into_iter().all(|id| id < u32::MAX));
+    }
+}
+
+#[cfg(test)]
+mod owned_role_exit_tests {
+    //! Synthetic owned roles (this test binary) emit real structured flow evidence
+    //! and markers, then drive the production row helpers in the order used by
+    //! `run_row_attempt` for a classic row: readiness, start barrier, active exit,
+    //! passive observation, flow-log validation, peer teardown, Streamer and
+    //! launcher teardown, the post-teardown flow oracle and the classification.
+    use super::*;
+    use signal_hook::consts::{SIGINT, SIGTERM, SIGUSR1};
+    use test_case::test_case;
+
+    const MODE: &str = "UPROTOCOL_PRIVATE_OWNED_EXIT_CHILD";
+    const CHILD: &str = "owned_role_exit_tests::owned_role_child";
+    const MESSAGE_ID: &str = "01a18931-702a-701d-ac83-2b39c4870076";
+    const ROUTE: &str = "classic:zenoh-classic -> classic:dds-classic";
+
+    /// Mode `<actor>:<ending>`. After its evidence the role ends by `exit=N`, or
+    /// waits for supervisor teardown: `default` (no handler, dies by SIGINT),
+    /// `int=N` (exits N on SIGINT), `term=N` (ignores SIGINT, exits N on SIGTERM)
+    /// or `crash` (on SIGINT dies by SIGUSR1, a signal the supervisor never sends).
+    #[test]
+    fn owned_role_child() {
+        let Ok(mode) = std::env::var(MODE) else {
+            println!("OWNED_ROLE_EXIT_CHILD_STUB_NO_CREDIT");
+            return;
+        };
+        let (actor, ending) = mode.split_once(':').expect("owned role child mode");
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let terminated = Arc::new(AtomicBool::new(false));
+        if ending != "default" && !ending.starts_with("exit=") {
+            signal_hook::flag::register(SIGINT, Arc::clone(&interrupted)).unwrap();
+            signal_hook::flag::register(SIGTERM, Arc::clone(&terminated)).unwrap();
+        }
+        streamer_flow_evidence::prepare_output_from_env().unwrap();
+        match actor {
+            "streamer" => println!("{READY_STREAMER_CONFIGURED}\n{READY_STREAMER}"),
+            "passive" => println!("{READY_LISTENER}"),
+            _ => println!("{READY_SOURCE_WAITING}"),
+        }
+        let start = PathBuf::from(std::env::var("UPROTOCOL_SOURCE_START_FILE").unwrap());
+        while !start.exists() {
+            thread::sleep(Duration::from_millis(10));
+        }
+        let message = up_rust::UMessageBuilder::publish(
+            up_rust::UUri::try_from("//authority-a/5BA0/1/8001").unwrap(),
+        )
+        .with_message_id(MESSAGE_ID.parse().unwrap())
+        .build_with_payload(vec![7_u8; 272], up_rust::PayloadEncoding::RAW)
+        .unwrap();
+        let emit = |stage: &str, route: Option<&str>| {
+            streamer_flow_evidence::Observation::emit(
+                streamer_flow_evidence::Observation::message(stage, route, &message).unwrap(),
+            );
+        };
+        match actor {
+            "streamer" => {
+                emit("ingress", Some(ROUTE));
+                emit("egress", Some(ROUTE));
+            }
+            "passive" => {
+                emit("rx", None);
+                println!("FLOW observed_payload_bytes=272 role=subscriber");
+            }
+            _ => {
+                emit("tx", None);
+                println!("FLOW sent_payload_bytes=272 role=publisher");
+            }
+        }
+        if let Some(code) = ending.strip_prefix("exit=") {
+            std::process::exit(code.parse().unwrap());
+        }
+        loop {
+            if interrupted.load(Ordering::SeqCst) {
+                if let Some(code) = ending.strip_prefix("int=") {
+                    std::process::exit(code.parse().unwrap());
+                }
+                if ending == "crash" {
+                    signal_hook::low_level::raise(SIGUSR1).unwrap();
+                }
+            }
+            if terminated.load(Ordering::SeqCst) {
+                if let Some(code) = ending.strip_prefix("term=") {
+                    std::process::exit(code.parse().unwrap());
+                }
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    struct Outcome {
+        result: RowResult,
+        directory: PathBuf,
+        bundle: RunBundle,
+        row: MatrixRow,
+    }
+
+    impl Outcome {
+        fn exit(&self, role: &str) -> serde_json::Value {
+            let path = self.directory.join(format!("{role}.exit.json"));
+            let bytes = fs::read(&path).unwrap_or_else(|error| {
+                panic!("missing owned exit evidence {}: {error}", path.display())
+            });
+            serde_json::from_slice(&bytes).unwrap()
+        }
+
+        fn assert_classified(&self, expected: RowClassification) {
+            assert_eq!(
+                self.result.classification, expected,
+                "row classified {:?}, expected {expected:?}; reason: {}",
+                self.result.classification, self.result.reason
+            );
+        }
+    }
+
+    impl Drop for Outcome {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.directory);
+        }
+    }
+
+    fn classic_row(label: &str, streamer_ending: &str, passive_ending: &str) -> Outcome {
+        let directory = std::env::temp_dir().join(format!(
+            "streamer-owned-exit-{label}-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_nanos_opt().unwrap()
+        ));
+        fs::create_dir(&directory).unwrap();
+        let bundle = RunBundle {
+            root: directory.clone(),
+            manifest_path: directory.join("unused.json"),
+            manifest: BundleManifest {
+                schema_version: BUNDLE_SCHEMA_VERSION.to_string(),
+                created_at: String::new(),
+                target_directory: String::new(),
+                cargo_profile: matrix_cargo_profile(),
+                orchestrator_commit: None,
+                dependency_sha256: "dependencies".to_string(),
+                native_profile: matrix_table_profile_document(),
+                native_generation: NativeGeneration::fixture(),
+                files: Vec::new(),
+            },
+        };
+        let row = matrix_rows()
+            .into_iter()
+            .find(|row| {
+                row.source.physical == PhysicalTransport::Zenoh
+                    && row.sink.physical == PhysicalTransport::Dds
+                    && row.source.kind == EndpointKind::Classic
+                    && row.sink.kind == EndpointKind::Classic
+                    && row.role == RoleStyle::PublisherSubscriber
+                    && row.encoding == WireEncoding::Protobuf
+            })
+            .expect("classic Zenoh to DDS publication row");
+        let cancellation = Cancellation::default();
+        let timeout = Duration::from_secs(30);
+        let source_start_file = directory.join("source-start");
+        let child = std::env::current_exe().unwrap();
+        let child_args = ["--exact", CHILD, "--nocapture"].map(String::from);
+        let path = ("PATH".to_string(), "/usr/bin:/bin".to_string());
+        let spawn = |name: &str, ending: &str| {
+            let mut env = vec![
+                path.clone(),
+                (
+                    "UPROTOCOL_FLOW_EVIDENCE_RUN".to_string(),
+                    format!("{}::{}", bundle.root.display(), row.id),
+                ),
+                (
+                    "UPROTOCOL_FLOW_EVIDENCE_ACTOR".to_string(),
+                    name.to_string(),
+                ),
+                (
+                    "UPROTOCOL_SOURCE_START_FILE".to_string(),
+                    source_start_file.display().to_string(),
+                ),
+                (MODE.to_string(), format!("{name}:{ending}")),
+            ];
+            if let Ok(libraries) = std::env::var("LD_LIBRARY_PATH") {
+                env.push(("LD_LIBRARY_PATH".to_string(), libraries));
+            }
+            spawn_process(
+                &bundle,
+                name,
+                &child,
+                &child_args,
+                &directory,
+                &env,
+                &directory,
+                None,
+            )
+            .unwrap()
+        };
+        // Namespace-holder stand-in: like `exec sleep infinity`, dies by our SIGINT.
+        let mut namespace = spawn_process(
+            &bundle,
+            "namespace-holder",
+            Path::new("/bin/sh"),
+            &["-c".to_string(), "exec sleep 30".to_string()],
+            &directory,
+            std::slice::from_ref(&path),
+            &directory,
+            None,
+        )
+        .unwrap();
+        let mut streamer = spawn("streamer", streamer_ending);
+        let result = (|| -> Result<()> {
+            wait_for_marker(
+                &mut streamer,
+                READY_STREAMER_CONFIGURED,
+                timeout,
+                &cancellation,
+            )?;
+            let mut passive = spawn("passive", passive_ending);
+            let mut active = spawn("active", "exit=0");
+            wait_for_marker(&mut passive, READY_LISTENER, timeout, &cancellation)?;
+            for (process, marker) in [
+                (&mut active, READY_SOURCE_WAITING),
+                (&mut streamer, READY_STREAMER),
+            ] {
+                wait_for_marker(process, marker, timeout, &cancellation)?;
+            }
+            atomic_write(&source_start_file, b"START\n")?;
+            wait_for_exit(&mut active, timeout, &cancellation)
+                .and_then(|()| assert_success(&mut active))?;
+            wait_for_any_marker(
+                &passive.log_path,
+                passive_observation_markers(&row),
+                timeout,
+                &cancellation,
+            )?;
+            validate_flow_logs(
+                &row,
+                &active.log_path,
+                &passive.log_path,
+                &streamer.log_path,
+                &bundle.manifest.native_profile,
+            )?;
+            // The row snapshots allocation counters here; a role failing right
+            // after its evidence has exited before the supervisor's teardown.
+            thread::sleep(Duration::from_millis(500));
+            let passive_teardown = terminate(&mut passive);
+            let active_teardown = terminate(&mut active);
+            passive_teardown.and(active_teardown)
+        })();
+        let mut cleanup_result = terminate(&mut streamer);
+        if let Err(error) = terminate(&mut namespace) {
+            cleanup_result = cleanup_result.and(Err(error));
+        }
+        let result = result
+            .and(cleanup_result)
+            .and_then(|()| flow_oracle::verify(&row, &directory, &bundle));
+        let (classification, reason) = match result {
+            Ok(()) => (
+                RowClassification::Pass,
+                "payload proof completed".to_string(),
+            ),
+            Err(error) => (RowClassification::Failed, error.to_string()),
+        };
+        let result = row_result(
+            &row,
+            classification,
+            reason,
+            Some(directory.clone()),
+            None,
+            None,
+            BTreeMap::new(),
+        );
+        Outcome {
+            result,
+            directory,
+            bundle,
+            row,
+        }
+    }
+
+    #[test]
+    fn classic_passive_nonzero_exit_after_complete_evidence_fails_the_row() {
+        let outcome = classic_row("passive-exit", "int=0", "exit=42");
+        outcome.assert_classified(RowClassification::Failed);
+        assert!(
+            outcome.result.reason.contains(
+                "process passive exited with exit status: 42 before any supervisor signal"
+            ),
+            "{}",
+            outcome.result.reason
+        );
+        // The evidence itself was complete: only the exit status fails the row.
+        flow_oracle::verify(&outcome.row, &outcome.directory, &outcome.bundle).unwrap();
+        let passive = outcome.exit("passive");
+        assert_eq!(passive["observed"], "before_supervisor_signal");
+        assert_eq!(passive["supervisor_signals"], json!([]));
+        assert_eq!(passive["exit_code"], 42);
+        assert_eq!(passive["group_cleanup_complete"], true);
+        assert_eq!(passive["classification"], "unexpected_exit");
+        assert_eq!(passive["expected"], false);
+        assert_eq!(outcome.exit("active")["classification"], "success");
+        assert_eq!(outcome.exit("streamer")["expected"], true);
+    }
+
+    #[test]
+    fn streamer_nonzero_exit_after_forwarding_fails_the_row() {
+        let outcome = classic_row("streamer-exit", "exit=42", "default");
+        outcome.assert_classified(RowClassification::Failed);
+        assert!(
+            outcome.result.reason.contains(
+                "process streamer exited with exit status: 42 before any supervisor signal"
+            ),
+            "{}",
+            outcome.result.reason
+        );
+        flow_oracle::verify(&outcome.row, &outcome.directory, &outcome.bundle).unwrap();
+        let streamer = outcome.exit("streamer");
+        assert_eq!(streamer["observed"], "before_supervisor_signal");
+        assert_eq!(streamer["exit_code"], 42);
+        assert_eq!(streamer["classification"], "unexpected_exit");
+        // The classic passive died by the SIGINT the supervisor sent: expected.
+        let passive = outcome.exit("passive");
+        assert_eq!(passive["signals_before_exit"], json!(["SIGINT"]));
+        assert_eq!(passive["signal"], SIGINT);
+        assert_eq!(passive["classification"], "supervisor_terminated");
+        assert_eq!(passive["expected"], true);
+    }
+
+    #[test_case("int=3", "unexpected_exit"; "shutdown error after sigint")]
+    #[test_case("crash", "unexpected_signal"; "shutdown crash after sigint")]
+    fn streamer_failure_during_supervisor_teardown_fails_the_row(
+        ending: &str,
+        classification: &str,
+    ) {
+        let outcome = classic_row("streamer-teardown", ending, "default");
+        outcome.assert_classified(RowClassification::Failed);
+        let streamer = outcome.exit("streamer");
+        let status = streamer["status"].as_str().unwrap();
+        assert!(
+            outcome.result.reason.contains(&format!(
+                "process streamer exited with {status} after supervisor SIGINT"
+            )),
+            "{}",
+            outcome.result.reason
+        );
+        flow_oracle::verify(&outcome.row, &outcome.directory, &outcome.bundle).unwrap();
+        assert_eq!(streamer["observed"], "after_supervisor_signal");
+        assert_eq!(streamer["signals_before_exit"], json!(["SIGINT"]));
+        assert_eq!(streamer["classification"], classification);
+        assert_eq!(streamer["group_cleanup_complete"], true);
+    }
+
+    #[test]
+    fn documented_supervisor_terminations_keep_classic_rows_passing() {
+        // The passive dies by our SIGINT; the Streamer ignores SIGINT and exits
+        // 143 after our SIGTERM escalation. Both follow supervisor action.
+        let outcome = classic_row("benign-escalation", "term=143", "default");
+        outcome.assert_classified(RowClassification::Pass);
+    }
+
+    #[test]
+    fn owned_role_exit_evidence_records_status_and_supervisor_timing() {
+        let outcome = classic_row("benign-evidence", "int=0", "int=130");
+        outcome.assert_classified(RowClassification::Pass);
+        for (role, observed, code, signal, classification) in [
+            (
+                "active",
+                "before_supervisor_signal",
+                json!(0),
+                json!(null),
+                "success",
+            ),
+            (
+                "streamer",
+                "after_supervisor_signal",
+                json!(0),
+                json!(null),
+                "success",
+            ),
+            (
+                "passive",
+                "after_supervisor_signal",
+                json!(130),
+                json!(null),
+                "supervisor_terminated",
+            ),
+            (
+                "namespace-holder",
+                "after_supervisor_signal",
+                json!(null),
+                json!(SIGINT),
+                "supervisor_terminated",
+            ),
+        ] {
+            let exit = outcome.exit(role);
+            assert_eq!(exit["schema"], 1, "{role}");
+            assert_eq!(exit["role"], role, "{role}");
+            assert_eq!(exit["contract"], "owned_role", "{role}");
+            assert_eq!(exit["group_cleanup_complete"], true, "{role}");
+            assert_eq!(exit["observed"], observed, "{role}");
+            assert_eq!(exit["exit_code"], code, "{role}");
+            assert_eq!(exit["signal"], signal, "{role}");
+            assert_eq!(exit["classification"], classification, "{role}");
+            assert_eq!(exit["expected"], true, "{role}");
+        }
     }
 }

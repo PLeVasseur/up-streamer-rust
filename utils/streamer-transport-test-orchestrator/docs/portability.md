@@ -17,8 +17,11 @@ The crate's library currently exposes shared Unix process supervision and explic
 OS memory/isolation operations. The matrix executable uses that supervisor for
 normal workers and namespace holders. It preserves bounded SIGINT, SIGTERM and
 SIGKILL escalation and reports surviving groups, including descendants whose leader
-has already exited. This uses POSIX APIs available on both Linux and macOS, without
-depending on `/proc` or a virtual machine.
+has already exited. Cleanup reaps an exited leader before each signal and records
+which supervisor signals preceded its status; `RunningProcess::exit_evidence`
+reports that, separately from group cleanup, against an explicit `ExitContract`.
+This uses POSIX APIs available on both Linux and macOS, without depending on
+`/proc` or a virtual machine.
 
 ## Present execution support
 

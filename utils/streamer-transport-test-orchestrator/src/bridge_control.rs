@@ -108,8 +108,12 @@ pub(super) fn verify(
             cancellation,
         )?;
         verify_bridge_off_proof(row, &active, &passive)?;
-        terminate(&mut passive)?;
-        terminate(&mut active)?;
+        // Negative-control peers report their own deadline with an exit code; a
+        // signal death is unexpected. Group cleanup remains a separate check.
+        for process in [&mut passive, &mut active] {
+            process.terminate()?;
+            verify_exit(process, ExitContract::SelfExitWithCode)?;
+        }
         atomic_write_json(
             &row_dir.join("bridge-control.json"),
             &json!({

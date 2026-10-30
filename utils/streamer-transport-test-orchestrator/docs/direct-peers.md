@@ -29,3 +29,7 @@ window losslessness or endurance. Backend capabilities/setup remain binding-owne
 Cleanup accounts for metadata inspection tools as well as namespaces, brokers and
 role processes. `metadata_tool_processes` reports the inspection groups separately;
 success still requires every started group to be checked and zero leaked groups.
+`direct-cleanup.json` `success` remains group cleanup only. Each peer, broker and
+namespace holder also records `<role>.exit.json`, and a status outside the
+[owned-process exit contract](../README.md#owned-process-exit-contract) fails the
+row.

@@ -268,6 +268,31 @@ leader, verify that no group descendants remain, and expose cleanup/leak counts
 in the summary. Both SIGINT and SIGTERM set the same cooperative cancellation
 flag.
 
+### Owned-process exit contract
+
+Process-group cleanup and application success are separate facts. Before each
+signal, cleanup reaps a leader that already exited, so an exit that preceded
+supervisor action is never attributed to it. Every explicitly torn-down owned
+process (Streamer, active and passive roles, broker and namespace holder in
+matrix, direct and soak rows) writes `<role>.exit.json` beside its log: exit code
+or signal, every signal the supervisor delivered, the signals that preceded the
+reaped status (`observed` is `before_supervisor_signal` or
+`after_supervisor_signal`), group cleanup, classification and contract.
+
+Under the owned-role contract the leader must exit with code 0, or, after the
+supervisor signalled its group, be terminated by a signal the supervisor had
+already delivered or exit with 128 plus that signal number. A classic listener
+killed by the teardown SIGINT, or a role exiting 143 after SIGTERM escalation, is
+`supervisor_terminated`. A nonzero code or any signal before supervisor action
+(`unexpected_exit`/`unexpected_signal`), or any other status after it (a
+shutdown error or crash), fails the row even when its flow evidence is complete.
+The SIGINT 2 s, SIGTERM 1 s, SIGKILL 2 s policy is unchanged and any escalation
+remains visible in the evidence. Soak rows additionally keep requiring the
+Streamer to exit 0 after SIGINT. Bridge-off negative-control peers report their
+own deadline: they must exit before any supervisor signal with an exit code,
+never by a signal. Cleanup counters and `direct-cleanup.json` `success` still
+describe group cleanup only.
+
 ## Scheduling Policy
 
 Runnable rows use policy `deterministic_weighted_transport_role_lane_fair_v1`.

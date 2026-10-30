@@ -376,8 +376,10 @@ fn execute(
             assert_success(&mut sender)?;
         }
         allocation::snapshot(directory, "completed-direct-peers", 2)?;
-        terminate(&mut sender)?;
-        terminate(&mut receiver)?;
+        // Tear down both peers before reporting, so each records its exit evidence.
+        let sender_teardown = terminate(&mut sender);
+        let receiver_teardown = terminate(&mut receiver);
+        sender_teardown.and(receiver_teardown)?;
         flow_oracle::verify_direct(row, directory, bundle)?;
         if row.encoding == WireEncoding::Native {
             let expected = expected_native_identity(&bundle.manifest.native_profile)?;
@@ -414,11 +416,16 @@ fn execute(
         }
         Ok(())
     })();
+    // `direct-cleanup.json` success stays group cleanup only; launcher exit
+    // statuses are a separate fact recorded in `<role>.exit.json`.
     let mut cleanup = Ok(());
+    let mut exits = Ok(());
     if let Some(broker) = &mut broker {
-        cleanup = terminate(broker);
+        cleanup = broker.terminate();
+        exits = verify_exit(broker, ExitContract::OwnedRole);
     }
-    cleanup = cleanup.and(terminate(&mut namespace));
+    cleanup = cleanup.and(namespace.terminate());
+    exits = exits.and(verify_exit(&mut namespace, ExitContract::OwnedRole));
     let after = process_cleanup_summary();
     if after.process_group_leaks != before.process_group_leaks
         || after.process_groups_started - before.process_groups_started
@@ -434,5 +441,5 @@ fn execute(
         "leaks":after.process_group_leaks-before.process_group_leaks,
         "active_args":active.args,"passive_args":passive.args}),
     )?;
-    result.and(cleanup)
+    result.and(cleanup).and(exits)
 }

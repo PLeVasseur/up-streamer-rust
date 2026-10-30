@@ -172,12 +172,13 @@ pub(super) fn run(cli: &Cli) -> Result<()> {
                 break status;
             }
             if Instant::now() >= deadline {
-                terminate(&mut process)?;
+                process.terminate()?;
                 return Err(anyhow!("{name}: control deadline expired"));
             }
             thread::sleep(Duration::from_millis(20));
         };
-        terminate(&mut process)?;
+        // Group cleanup only: this driver's exit contract is checked explicitly below.
+        process.terminate()?;
         anyhow::ensure!(
             !streamer_transport_test_orchestrator::supervision::process_group_exists(
                 process.process_group()
