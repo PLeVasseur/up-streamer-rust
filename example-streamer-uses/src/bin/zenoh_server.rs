@@ -128,7 +128,7 @@ async fn main() -> Result<(), UStatus> {
             physical
                 .connect
                 .endpoints
-                .set(vec![endpoint])
+                .set(vec![endpoint.into()])
                 .map_err(|error| flow::invalid(format!("{error:?}")))?;
             physical
         } else {

@@ -214,12 +214,16 @@ fn default_zenoh_client_config() -> Result<ZenohConfig, UStatus> {
             format!("Unable to parse Zenoh selected-wire client endpoint: {e:?}"),
         )
     })?;
-    config.connect.endpoints.set(vec![endpoint]).map_err(|e| {
-        UStatus::fail_with_code(
-            UCode::InvalidArgument,
-            format!("Unable to configure Zenoh selected-wire client endpoint: {e:?}"),
-        )
-    })?;
+    config
+        .connect
+        .endpoints
+        .set(vec![endpoint.into()])
+        .map_err(|e| {
+            UStatus::fail_with_code(
+                UCode::InvalidArgument,
+                format!("Unable to configure Zenoh selected-wire client endpoint: {e:?}"),
+            )
+        })?;
     Ok(config)
 }
 

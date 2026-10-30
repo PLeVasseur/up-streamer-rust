@@ -406,7 +406,7 @@ fn zenoh_config_from_endpoint(endpoint: &str) -> Config {
         zenoh_config
             .connect
             .endpoints
-            .set(vec![ipv4_endpoint])
+            .set(vec![ipv4_endpoint.into()])
             .expect("Unable to set Zenoh Config");
     }
     zenoh_config
