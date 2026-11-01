@@ -15,6 +15,9 @@ prints `READY streamer_configured`, the controller launches both peers before
 waiting for their matching checks. The finite active role waits on a fresh,
 controller-owned `source-start` file. The controller releases it only after the
 passive listener, active first-send barrier and final bridge readiness are observed.
+The passive receives the same file as `UPROTOCOL_RECEIVE_START_FILE`, so its
+bounded receive window opens at that release rather than at its own readiness and
+controller work in between cannot consume it.
 Each boundary is recorded separately; no application message is used as warm-up.
 Configured stabilization gates precede release. Sustained workers instead use
 their existing phase-control file, with all three actors ready before warm-up.

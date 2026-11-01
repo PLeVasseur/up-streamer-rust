@@ -589,6 +589,7 @@ pub async fn receive_owned_pull(
     timeout_ms: u64,
     native: Option<&NativeContext>,
 ) -> Result<UOwnedFrame, UStatus> {
+    super::startup::receive_window().await?;
     let deadline = tokio::time::Instant::now() + Duration::from_millis(timeout_ms);
     loop {
         if tokio::time::Instant::now() >= deadline {

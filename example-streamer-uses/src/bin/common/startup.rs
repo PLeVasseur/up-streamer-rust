@@ -22,8 +22,32 @@ pub async fn wait_for_start() -> Result<(), UStatus> {
         .map(|_| ())
 }
 
+/// Names the controller's source-release file for a passive (receiving) role.
+pub const RECEIVE_START_ENV: &str = "UPROTOCOL_RECEIVE_START_FILE";
+
+/// Opens a passive role's receive window, once per process. With
+/// [`RECEIVE_START_ENV`], waits for the controller's source release (exact
+/// marker, same 30 second bound as the source barrier), so controller work
+/// after this role reported readiness, such as starting the other peers and
+/// stabilization gates, cannot consume a bounded receive window. Frames
+/// delivered meanwhile stay queued in the registration; later receives start
+/// at once. Ordinary examples omit the variable; the window opens at once.
+pub async fn receive_window() -> Result<(), UStatus> {
+    static OPENED: tokio::sync::OnceCell<()> = tokio::sync::OnceCell::const_new();
+    OPENED
+        .get_or_try_init(|| async {
+            let Some(path) = std::env::var_os(RECEIVE_START_ENV) else {
+                return Ok(());
+            };
+            let path = Path::new(&path);
+            wait_for_marker(path, Duration::from_secs(30), b"START\n", "receive release").await
+        })
+        .await
+        .map(|_| ())
+}
+
 async fn wait_for_release(path: &Path, timeout: Duration) -> Result<(), UStatus> {
-    wait_for_marker(path, timeout, b"START\n").await
+    wait_for_marker(path, timeout, b"START\n", "source barrier").await
 }
 
 /// Retains the finite source endpoint after publication until its controller
@@ -34,18 +58,27 @@ pub async fn wait_for_completion() -> Result<(), UStatus> {
         return Ok(());
     };
     println!("READY source_complete_waiting");
-    wait_for_marker(Path::new(&path), Duration::from_secs(30), b"STOP\n").await
+    wait_for_marker(
+        Path::new(&path),
+        Duration::from_secs(30),
+        b"STOP\n",
+        "source barrier",
+    )
+    .await
 }
 
+/// `what` names the barrier in errors, so a passive's release wait is not
+/// mistaken for the source's start barrier in logs.
 async fn wait_for_marker<const N: usize>(
     path: &Path,
     timeout: Duration,
     expected: &[u8; N],
+    what: &str,
 ) -> Result<(), UStatus> {
     let deadline = tokio::time::Instant::now()
         .checked_add(timeout)
         .ok_or_else(|| {
-            UStatus::fail_with_code(UCode::InvalidArgument, "source barrier deadline overflow")
+            UStatus::fail_with_code(UCode::InvalidArgument, format!("{what} deadline overflow"))
         })?;
     loop {
         match std::fs::File::open(path) {
@@ -58,7 +91,7 @@ async fn wait_for_marker<const N: usize>(
                 {
                     return Err(UStatus::fail_with_code(
                         UCode::InvalidArgument,
-                        "invalid source barrier marker",
+                        format!("invalid {what} marker"),
                     ));
                 }
                 return Ok(());
@@ -67,14 +100,14 @@ async fn wait_for_marker<const N: usize>(
             Err(error) => {
                 return Err(UStatus::fail_with_code(
                     UCode::Unavailable,
-                    format!("source barrier marker: {error}"),
+                    format!("{what} marker: {error}"),
                 ))
             }
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(UStatus::fail_with_code(
                 UCode::DeadlineExceeded,
-                "source barrier timed out",
+                format!("{what} timed out"),
             ));
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -134,7 +167,12 @@ mod tests {
     #[tokio::test]
     async fn finite_source_lifetime_requires_the_exact_completion_marker() {
         let marker = Marker::new();
-        let waiting = wait_for_marker(&marker.0, Duration::from_secs(1), b"STOP\n");
+        let waiting = wait_for_marker(
+            &marker.0,
+            Duration::from_secs(1),
+            b"STOP\n",
+            "source barrier",
+        );
         tokio::pin!(waiting);
         assert!(
             tokio::time::timeout(Duration::from_millis(20), &mut waiting)
@@ -145,10 +183,15 @@ mod tests {
         waiting.await.unwrap();
         std::fs::write(&marker.0, b"START\n").unwrap();
         assert_eq!(
-            wait_for_marker(&marker.0, Duration::from_secs(1), b"STOP\n")
-                .await
-                .unwrap_err()
-                .code(),
+            wait_for_marker(
+                &marker.0,
+                Duration::from_secs(1),
+                b"STOP\n",
+                "source barrier"
+            )
+            .await
+            .unwrap_err()
+            .code(),
             UCode::InvalidArgument
         );
     }

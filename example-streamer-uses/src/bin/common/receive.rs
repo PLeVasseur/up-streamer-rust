@@ -55,6 +55,19 @@ impl Drop for OwnedWait<'_> {
 
 struct OwnedChannel(Arc<OwnedInbox>);
 
+/// Deadline of a bounded passive receive, shared by the owned and native
+/// receptions: the window opens at the controller's source release when one is
+/// configured ([`super::startup::receive_window`]), otherwise at once.
+async fn passive_deadline(
+    timeout_ms: u64,
+    overflow: &'static str,
+) -> Result<tokio::time::Instant, UStatus> {
+    super::startup::receive_window().await?;
+    tokio::time::Instant::now()
+        .checked_add(Duration::from_millis(timeout_ms))
+        .ok_or_else(|| UStatus::fail_with_code(UCode::InvalidArgument, overflow))
+}
+
 pub fn listener_ready() {
     println!("READY listener_registered");
 }
@@ -105,12 +118,9 @@ impl OwnedReception {
         drop(previous);
     }
 
+    /// Bounded receive; `passive_deadline` decides when its window opens.
     pub async fn receive(&mut self, timeout_ms: u64) -> Result<UOwnedFrame, UStatus> {
-        let deadline = tokio::time::Instant::now()
-            .checked_add(Duration::from_millis(timeout_ms))
-            .ok_or_else(|| {
-                UStatus::fail_with_code(UCode::InvalidArgument, "owned receive deadline overflow")
-            })?;
+        let deadline = passive_deadline(timeout_ms, "owned receive deadline overflow").await?;
         self.receive_until(deadline).await
     }
 
@@ -241,12 +251,9 @@ pub struct NativeReception<T: PreparedEndpoint> {
     sink: Option<UUri>,
 }
 impl<T: PreparedEndpoint> NativeReception<T> {
+    /// Bounded receive; `passive_deadline` decides when its window opens.
     pub async fn receive(&mut self, timeout_ms: u64) -> Result<NativeFrame<T>, UStatus> {
-        let deadline = tokio::time::Instant::now()
-            .checked_add(Duration::from_millis(timeout_ms))
-            .ok_or_else(|| {
-                UStatus::fail_with_code(UCode::InvalidArgument, "native receive deadline overflow")
-            })?;
+        let deadline = passive_deadline(timeout_ms, "native receive deadline overflow").await?;
         self.receive_until(deadline).await
     }
     pub async fn receive_until(
@@ -670,5 +677,125 @@ mod tests {
         control.removal_release.notify_one();
         notified(&control.removed).await;
         assert_eq!(control.removals.load(Ordering::SeqCst), 1);
+    }
+
+    const WINDOW_CHILD: &str = "EXAMPLE_STREAMER_USES_RECEIVE_WINDOW_CHILD";
+    const WINDOW_MS: u64 = 1000;
+
+    /// Child half of the receive-window regression; a no-op unless launched by
+    /// it. A passive registers, reports readiness and receives with a bounded
+    /// window; the source sends only after the controller's release.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn receive_window_child() {
+        let Some(release) = std::env::var_os(WINDOW_CHILD) else {
+            return;
+        };
+        // Start a fresh line after libtest's unterminated "test ... " prefix.
+        println!();
+        let release = std::path::PathBuf::from(release);
+        let release_path = release.clone();
+        let control = Controlled::new(false, false);
+        let transport: Arc<dyn UOwnedTransport> = control.clone();
+        let source = UUri::try_from("//window-test/5ba0/1/8001").unwrap();
+        let sender = {
+            let control = Arc::clone(&control);
+            let source = source.clone();
+            tokio::spawn(async move {
+                while !release.exists() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                let listener = control.listener.lock().unwrap().clone();
+                let metadata = UFrameMetadata::publish(source)
+                    .with_payload_encoding(PayloadEncoding::RAW)
+                    .build()
+                    .unwrap();
+                listener
+                    .expect("registered listener")
+                    .on_receive_owned(
+                        UOwnedFrame::with_payload(metadata, b"released".to_vec()).unwrap(),
+                    )
+                    .await;
+            })
+        };
+        let frame = owned_with_ready(&transport, &source, None, WINDOW_MS, None, || {
+            println!("READY listener_registered");
+        })
+        .await
+        .expect("passive receive window must cover the controller's release");
+        assert_eq!(frame.payload_bytes(), b"released");
+        sender.await.unwrap();
+        // The window opens once per process: a later receive starts at once even
+        // after the controller's file is gone.
+        std::fs::remove_file(&release_path).unwrap();
+        let later = {
+            let control = Arc::clone(&control);
+            let source = source.clone();
+            tokio::spawn(async move {
+                let listener = loop {
+                    if let Some(listener) = control.listener.lock().unwrap().clone() {
+                        break listener;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                };
+                let metadata = UFrameMetadata::publish(source)
+                    .with_payload_encoding(PayloadEncoding::RAW)
+                    .build()
+                    .unwrap();
+                listener
+                    .on_receive_owned(
+                        UOwnedFrame::with_payload(metadata, b"later".to_vec()).unwrap(),
+                    )
+                    .await;
+            })
+        };
+        let frame = owned_with_ready(&transport, &source, None, WINDOW_MS, None, || {})
+            .await
+            .expect("a later passive receive must not wait for the release again");
+        assert_eq!(frame.payload_bytes(), b"later");
+        later.await.unwrap();
+    }
+
+    /// A contended controller can need longer than a passive's whole receive
+    /// window to start the other peers after the passive reports readiness.
+    #[test]
+    fn passive_receive_window_opens_at_controller_release() {
+        use std::io::{BufRead, BufReader};
+        let release =
+            std::env::temp_dir().join(format!("receive-window-release-{}", std::process::id()));
+        let _ = std::fs::remove_file(&release);
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "common::receive::tests::receive_window_child",
+                "--nocapture",
+                "--test-threads",
+                "1",
+            ])
+            .env(WINDOW_CHILD, &release)
+            .env("UPROTOCOL_RECEIVE_START_FILE", &release)
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut output = Vec::new();
+        for line in lines.by_ref() {
+            let line = line.unwrap();
+            let ready = line.ends_with("READY listener_registered");
+            output.push(line);
+            if ready {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(2 * WINDOW_MS));
+        let staged = release.with_extension("staged");
+        std::fs::write(&staged, b"START\n").unwrap();
+        std::fs::rename(&staged, &release).unwrap();
+        output.extend(lines.map(Result::unwrap));
+        let status = child.wait().unwrap();
+        let _ = std::fs::remove_file(&release);
+        assert!(
+            status.success(),
+            "the passive receive window must open at the controller's release, not at readiness: {status:?} {output:#?}"
+        );
     }
 }

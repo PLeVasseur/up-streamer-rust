@@ -6,8 +6,10 @@ the same endpoints; see [workload workers](docs/sustained-workloads.md) for uniq
 identity, pacing and receiver drain behavior.
 The generic native worker frontend also honors `RUST_LOG` for backend diagnostics.
 Finite controllers can hold the active role's first send with
-`UPROTOCOL_SOURCE_START_FILE`; see [role startup](docs/role-frontends.md) for the
-readiness marker, exact release bytes and timeout. Normal examples omit it.
+`UPROTOCOL_SOURCE_START_FILE`, and open a passive role's receive window at the
+same release with `UPROTOCOL_RECEIVE_START_FILE`; see
+[role startup](docs/role-frontends.md) for the readiness marker, exact release
+bytes and timeout. Normal examples omit both.
 The same guide documents `UPROTOCOL_SOURCE_FINISH_FILE`, an optional controller
 barrier retaining a finite owned or prepared publisher, including the custom
 selected-wire Zenoh publisher, until receiver completion instead of destroying

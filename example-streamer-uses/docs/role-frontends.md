@@ -11,6 +11,15 @@ Controllers must use a fresh file and release only after the passive receiver an
 bridge report readiness. Request factories run after this barrier so setup does
 not consume the new request's TTL.
 
+Controllers may pass the same file to the passive role as
+`UPROTOCOL_RECEIVE_START_FILE`. Its bounded receive (`--timeout-ms`) then opens
+when the controller releases the source rather than at passive readiness, so
+controller work in between, such as starting the other peers and stabilization
+gates, cannot consume the window. Frames delivered meanwhile stay queued in the
+registration. The wait checks the same exact marker within the same 30 second
+bound, prints no readiness marker and happens once per process; later receives
+start at once. Ordinary examples omit the variable and open the window at once.
+
 Controllers can also set `UPROTOCOL_SOURCE_FINISH_FILE` for finite owned or
 native publication/notification sources, including the custom selected-wire
 Zenoh publisher. After the configured sends, the
@@ -139,9 +148,14 @@ role-specific URI/payload policies. Shared backend factories and wire selectors
 construct their endpoints, while the existing flows handle messages:
 
 - `common/classic.rs` owns delayed classic send iteration, timer payloads and
-  admitted listeners awaiting process shutdown. Passive classic roles await
-  shutdown without parking a Tokio worker thread. Entry-specific bounded versus
-  unbounded counts and final waits stay explicit.
+  admitted listeners serving until the supervisor's SIGINT, awaited without
+  parking a Tokio worker thread. The signal closes admission, awaits deliveries
+  already admitted (a reply still being sent completes with its evidence) and
+  then ends the process by SIGINT with its default disposition: under the
+  default dispositions supervised roles start with, the exit status is
+  unchanged, no destructors run and later deliveries are not observed. A second
+  SIGINT abandons a stalled drain; SIGTERM keeps its default disposition.
+  Entry-specific bounded versus unbounded counts and final waits stay explicit.
 - `common/flow.rs` owns finite owned/native sends and the generic notification/
   RPC-server flows; `common/receive.rs` owns registered receive and cleanup.
   Zenoh-specific readiness markers follow successful registration. Receivers

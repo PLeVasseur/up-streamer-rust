@@ -282,7 +282,8 @@ reaped status (`observed` is `before_supervisor_signal` or
 Under the owned-role contract the leader must exit with code 0, or, after the
 supervisor signalled its group, be terminated by a signal the supervisor had
 already delivered or exit with 128 plus that signal number. A classic listener
-killed by the teardown SIGINT, or a role exiting 143 after SIGTERM escalation, is
+ending by the teardown SIGINT, after completing the deliveries it had already
+admitted, or a role exiting 143 after SIGTERM escalation, is
 `supervisor_terminated`. A nonzero code or any signal before supervisor action
 (`unexpected_exit`/`unexpected_signal`), or any other status after it (a
 shutdown error or crash), fails the row even when its flow evidence is complete.
@@ -562,7 +563,14 @@ CloudEvents operation coverage and raw-log hashes are checked after row process
 teardown. Classic receivers can append middleware shutdown output after their
 first observed message; the recorded hashes therefore bind the complete final
 logs, including shutdown, rather than an earlier live prefix. Every conversion
-and frame witness in those final logs remains subject to the same checks.
+and frame witness in those final logs remains subject to the same checks. A
+classic listener served by `common::classic::listen` (the MQTT5, SOME/IP and
+Zenoh classic sinks) completes each operation it admitted before the teardown
+SIGINT, such as a reply to a repeated request that is still being sent, so its
+conversions keep their operation evidence. Not covered: DDS classic sinks keep
+their own listener until they exit; a drain that outlasts the 2 s SIGINT grace
+ends by SIGTERM; and a failed send leaves its conversion without an operation
+record and fails the role.
 
 Prepared validation fixtures reserve the exact source/sink addresses used by their roles across all transport pairs. Notifications involving SOME/IP use resource `0x8000`; other notification and publication fixtures use `0x8001`. RPC reserves request and reversed response addresses separately. Native bridge verification requires checked projection records in both applicable directions.
 

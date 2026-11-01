@@ -185,10 +185,11 @@ fn execute(
         !source_start_file.exists(),
         "source start marker must be fresh"
     );
-    prepared.active_env.push((
-        "UPROTOCOL_SOURCE_START_FILE".into(),
-        source_start_file.display().to_string(),
-    ));
+    add_release_environment(
+        &mut prepared.active_env,
+        &mut prepared.passive_env,
+        &source_start_file,
+    );
     let source_finish_file = directory.join("source-finish");
     let retain_source = retains_finite_source(row);
     if retain_source {

@@ -1557,6 +1557,7 @@ dependencies = [
  "configurable-streamer-wire-support",
  "hello-world-protos",
  "json5",
+ "libc",
  "protobuf",
  "serde",
  "serde_json",

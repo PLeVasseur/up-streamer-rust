@@ -430,6 +430,8 @@ async fn receive<T>(
     duration: Duration,
     what: &str,
 ) -> Result<T, UStatus> {
+    // Passive roles: the window opens at the controller's source release.
+    startup::receive_window().await?;
     tokio::time::timeout(duration, receiver.recv())
         .await
         .map_err(|_| {

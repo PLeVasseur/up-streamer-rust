@@ -4573,7 +4573,7 @@ fn run_row_attempt(
         lola_manifest_path,
         process_env,
         mut active_env,
-        passive_env,
+        mut passive_env,
         native_library_paths,
     } = prepared::prepare_row(artifacts_root, bundle, row, cli, iteration, attempt)?;
     let mut logs = BTreeMap::new();
@@ -4664,10 +4664,7 @@ fn run_row_attempt(
         !source_start_file.exists(),
         "source start marker must be fresh"
     );
-    active_env.push((
-        "UPROTOCOL_SOURCE_START_FILE".into(),
-        source_start_file.display().to_string(),
-    ));
+    add_release_environment(&mut active_env, &mut passive_env, &source_start_file);
     // Native owned/prepared providers must outlive remote observation. The
     // existing shared role barrier retains the endpoint without extra traffic.
     let source_finish_file = row_dir.join("source-finish");
@@ -6730,6 +6727,20 @@ fn add_lola_args(
         ]);
     }
     Ok(())
+}
+
+/// The finite active holds its first send on the controller's fresh
+/// `source-start` file. The passive opens its bounded receive window on the same
+/// release, so controller work after passive readiness (starting the active,
+/// stabilization gates and readiness checks) cannot consume that window.
+fn add_release_environment(
+    active_env: &mut Vec<(String, String)>,
+    passive_env: &mut Vec<(String, String)>,
+    source_start_file: &Path,
+) {
+    let marker = source_start_file.display().to_string();
+    active_env.push(("UPROTOCOL_SOURCE_START_FILE".into(), marker.clone()));
+    passive_env.push(("UPROTOCOL_RECEIVE_START_FILE".into(), marker));
 }
 
 fn retains_finite_source(row: &MatrixRow) -> bool {
@@ -9260,6 +9271,21 @@ impl MatrixRow {
 mod tests {
     use super::*;
     use test_case::test_case;
+
+    #[test]
+    fn release_environment_opens_the_passive_window_at_the_source_release() {
+        let (mut active, mut passive) = (Vec::new(), Vec::new());
+        add_release_environment(&mut active, &mut passive, Path::new("/row/source-start"));
+        let marker = "/row/source-start".to_string();
+        assert_eq!(
+            active,
+            [("UPROTOCOL_SOURCE_START_FILE".to_string(), marker.clone())]
+        );
+        assert_eq!(
+            passive,
+            [("UPROTOCOL_RECEIVE_START_FILE".to_string(), marker)]
+        );
+    }
 
     #[test_case(EndpointKind::Classic, "agreed_classic_encoding"; "classic recovery")]
     #[test_case(EndpointKind::OwnedFrame, "carried_frame"; "owned native frame")]
