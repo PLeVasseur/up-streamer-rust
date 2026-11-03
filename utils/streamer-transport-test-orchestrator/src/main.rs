@@ -5817,28 +5817,30 @@ fn write_lola_manifest(
         .with_context(|| format!("unable to write {}", path.display()))
 }
 
+fn zenoh_router_config(port: u16) -> serde_json::Value {
+    json!({
+        "mode": "router", "listen": {"endpoints": [format!("tcp/0.0.0.0:{port}")]},
+        "scouting": {"multicast": {"enabled": false}, "gossip": {"enabled": false}}
+    })
+}
+
 fn write_zenoh_router_config(path: &Path, port: u16) -> Result<()> {
-    atomic_write_json(
-        path,
-        &json!({
-            "mode": "router", "listen": {"endpoints": [format!("tcp/0.0.0.0:{port}")]},
-            "scouting": {"multicast": {"enabled": false}, "gossip": {"enabled": false}}
-        }),
-    )
+    atomic_write_json(path, &zenoh_router_config(port))
+}
+
+fn zenoh_client_config(port: u16) -> serde_json::Value {
+    json!({
+        "mode": "client", "connect": {
+            "endpoints": [format!("tcp/127.0.0.1:{port}")],
+            "timeout_ms": ROLE_READINESS_TIMEOUT_MS,
+            "exit_on_failure": true
+        },
+        "scouting": {"multicast": {"enabled": false}, "gossip": {"enabled": false}}
+    })
 }
 
 fn write_zenoh_client_config(path: &Path, port: u16) -> Result<()> {
-    atomic_write_json(
-        path,
-        &json!({
-            "mode": "client", "connect": {
-                "endpoints": [format!("tcp/127.0.0.1:{port}")],
-                "timeout_ms": ROLE_READINESS_TIMEOUT_MS,
-                "exit_on_failure": true
-            },
-            "scouting": {"multicast": {"enabled": false}, "gossip": {"enabled": false}}
-        }),
-    )
+    atomic_write_json(path, &zenoh_client_config(port))
 }
 
 fn push_lola_manifest_entry(

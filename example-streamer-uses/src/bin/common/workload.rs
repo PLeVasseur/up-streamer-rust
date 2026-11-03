@@ -199,6 +199,8 @@ impl Drop for LoanGuard {
 struct Listener {
     admission: up_rust::ListenerAdmission,
     sender: inbox::Sender<Packet>,
+    /// An RPC client completes its responses in this listener rather than queueing them.
+    inline: bool,
     phase: Arc<Mutex<PhaseTracker>>,
     native: NativeContext,
     maximum: usize,
@@ -317,11 +319,20 @@ impl Listener {
 
     fn enqueue(&self, packet: Packet) -> Result<(), UStatus> {
         self.emit_bytes("receive", &packet.metadata, packet.bytes(), None)?;
-        match self.sender.try_send_with_admission(packet, |packet| {
+        let admit = |packet: &mut Packet| {
             if let Payload::Loan(loan) = &mut packet.payload {
                 loan.admit();
             }
-        }) {
+        };
+        // A binding may deliver a burst of responses in one pass while the drive task is not
+        // scheduled, so an RPC client completes each one here instead of queueing it.
+        if self.inline {
+            return match self.sender.admit_inline(packet, admit) {
+                Ok(delivery) => complete_response(self, delivery),
+                Err(_) => Err(failure("workload receiver closed before listener quiesced")),
+            };
+        }
+        match self.sender.try_send_with_admission(packet, admit) {
             Ok(()) => Ok(()),
             Err(tokio::sync::mpsc::error::TrySendError::Full(item)) => {
                 let packet = item.value();
@@ -877,6 +888,16 @@ where
     outcome
 }
 
+/// Records an RPC client's response as processed and releases it.
+fn complete_response(
+    listener: &Listener,
+    delivery: inbox::Delivery<Packet>,
+) -> Result<(), UStatus> {
+    let packet = delivery.value();
+    listener.emit_bytes("processed", &packet.metadata, packet.bytes(), None)?;
+    delivery.complete().map_err(failure)
+}
+
 /// Runs application traffic over the role's existing classic SDK endpoint.
 #[allow(clippy::too_many_arguments)]
 async fn drive<F, G>(
@@ -916,6 +937,7 @@ where
     let listener = Arc::new(Listener {
         admission: up_rust::ListenerAdmission::new(),
         sender,
+        inline: source,
         phase: Arc::new(Mutex::new(
             PhaseTracker::new(&plan.replay.plan_sha256).map_err(failure)?,
         )),
@@ -982,14 +1004,15 @@ where
                         offers.reset_after(Duration::from_millis(50));
                     }
                 }
-                delivery = receiver.recv(), if filters.is_some() => {
+                // Only a sink consumes the inbox: an RPC client's listener completes its responses.
+                delivery = receiver.recv(), if filters.is_some() && !source => {
                     let delivery = delivery.ok_or_else(|| failure("workload receiver disconnected"))?;
-                    if !source && listener.phase()? == Phase::Slow {
+                    if listener.phase()? == Phase::Slow {
                         tokio::time::sleep(Duration::from_millis(plan.consumer_delay_ms)).await;
                     }
                     let packet = delivery.value();
                     listener.emit_bytes("processed", &packet.metadata, packet.bytes(), None)?;
-                    if !source && plan.replay.role == Role::ClientServerRpc {
+                    if plan.replay.role == Role::ClientServerRpc {
                         let mut builder = UMessageBuilder::response(packet.metadata.source().clone(), packet.metadata.id().clone(),
                             packet.metadata.sink().ok_or_else(|| failure("request sink missing"))?.clone());
                         builder.with_comm_status(UCode::Ok);
@@ -1087,4 +1110,226 @@ pub async fn finite_sink(
     )
     .await?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod rpc_burst_tests {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use up_rust::{PayloadEncoding, UUID};
+
+    /// Selects the child run; its value is the scratch directory.
+    const BURST_CHILD: &str = "UPROTOCOL_TEST_RPC_BURST_CHILD";
+    const RUN: &str = "5f1c2ab0e7d94e0f8d0a7b3c6e9f1a2b4c5d6e7f8091a2b3c4d5e6f708192a3b";
+    const PLAN: &str = "0d6b1c3a5e7f9012a4c6e8f0b2d4f6a8c0e2a4c6e8f0b2d4f6a8c0e2a4c6e8f0";
+    const CAPACITY: usize = 4;
+    /// Two more responses than the inbox holds, like the bursts that follow a first-message stall.
+    const BURST: usize = CAPACITY + 2;
+    const CLIENT: &str = "//burst-client/5BA0/1/0";
+    const METHOD: &str = "//burst-server/5BA0/1/1000";
+
+    fn uri(value: &str) -> UUri {
+        UUri::try_from(value).unwrap()
+    }
+
+    fn response(index: usize) -> UMessage {
+        let mut builder = UMessageBuilder::response(uri(CLIENT), UUID::build(), uri(METHOD));
+        builder.with_comm_status(UCode::Ok);
+        builder
+            .build_with_payload(
+                format!("response {index}").into_bytes(),
+                PayloadEncoding::RAW,
+            )
+            .unwrap()
+    }
+
+    struct Unregister;
+
+    #[async_trait]
+    impl Registration for Unregister {
+        async fn close(&self) -> Result<(), UStatus> {
+            Ok(())
+        }
+    }
+
+    /// The first request's send delivers a burst of `BURST` responses back to back through the
+    /// registered listener before it returns, as a binding delivers a burst in one pass: the
+    /// drive task that awaits the send cannot consume anything in between.
+    struct BurstEndpoint {
+        listener: Mutex<Option<Arc<Listener>>>,
+        sends: AtomicU64,
+        burst_delivered: AtomicBool,
+    }
+
+    #[async_trait]
+    impl Endpoint for BurstEndpoint {
+        async fn send(&self, _: UMessage) -> Result<(), UStatus> {
+            if self.sends.fetch_add(1, Ordering::SeqCst) == 0 {
+                let listener = self
+                    .listener
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .expect("registered listener");
+                for index in 0..BURST {
+                    listener.on_receive(response(index)).await;
+                }
+                self.burst_delivered.store(true, Ordering::SeqCst);
+            }
+            Ok(())
+        }
+
+        async fn register(
+            &self,
+            listener: Arc<Listener>,
+            _: UUri,
+            _: Option<UUri>,
+        ) -> Result<Box<dyn Registration>, UStatus> {
+            *self.listener.lock().unwrap() = Some(listener);
+            Ok(Box::new(Unregister))
+        }
+    }
+
+    fn write_phase(control: &Path, phase: &str) {
+        let staged = control.with_extension("staged");
+        std::fs::write(
+            &staged,
+            json!({"plan_sha256": PLAN, "phase": phase}).to_string(),
+        )
+        .unwrap();
+        std::fs::rename(&staged, control).unwrap();
+    }
+
+    /// Child half of `rpc_client_completes_a_response_burst_its_drive_task_cannot_consume`:
+    /// drives a real RPC client worker against `BurstEndpoint`, then stops it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn rpc_client_burst_child() {
+        let Some(directory) = std::env::var_os(BURST_CHILD) else {
+            return;
+        };
+        let control = PathBuf::from(directory).join("control.json");
+        write_phase(&control, "warmup");
+        let plan: WorkerPlan = serde_json::from_value(json!({
+            "replay": {"run": RUN, "source_identity": PLAN, "plan_sha256": PLAN, "role": "client-server-rpc",
+                       "queue_capacity": CAPACITY, "pending_limit": 4096, "require_fifo": false},
+            "control_file": control, "offered_per_second": 10, "consumer_delay_ms": 250,
+            "maximum_payload_bytes": 8192, "deadline_seconds": 30
+        }))
+        .unwrap();
+        let endpoint = Arc::new(BurstEndpoint {
+            listener: Mutex::new(None),
+            sends: AtomicU64::new(0),
+            burst_delivered: AtomicBool::new(false),
+        });
+        let stopper = {
+            let endpoint = Arc::clone(&endpoint);
+            let control = control.clone();
+            tokio::spawn(async move {
+                // Stop once every burst response is accounted for, completed or dropped, so the
+                // parent sees final counts however slowly the worker runs (bounded at 10 s).
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+                loop {
+                    let listener = endpoint.listener.lock().unwrap().clone();
+                    let settled = listener.is_some_and(|listener| {
+                        let counts = listener.sender.snapshot();
+                        endpoint.burst_delivered.load(Ordering::SeqCst)
+                            && counts.processed + counts.overload_drops == BURST as u64
+                    });
+                    if settled || tokio::time::Instant::now() >= deadline {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                write_phase(&control, "stop");
+            })
+        };
+        struct Shared(Arc<BurstEndpoint>);
+        #[async_trait]
+        impl Endpoint for Shared {
+            async fn send(&self, message: UMessage) -> Result<(), UStatus> {
+                self.0.send(message).await
+            }
+            async fn register(
+                &self,
+                listener: Arc<Listener>,
+                source: UUri,
+                sink: Option<UUri>,
+            ) -> Result<Box<dyn Registration>, UStatus> {
+                self.0.register(listener, source, sink).await
+            }
+        }
+        drive(
+            Box::new(Shared(Arc::clone(&endpoint))),
+            NativeContext::default(),
+            plan,
+            true,
+            Some((uri(METHOD), Some(uri(CLIENT)))),
+            |sequence| {
+                UMessageBuilder::request(uri(METHOD), uri(CLIENT), 5000)
+                    .build_with_payload(
+                        format!("request {sequence}").into_bytes(),
+                        PayloadEncoding::RAW,
+                    )
+                    .map_err(failure)
+            },
+            || Ok(()),
+            Arc::new(Loans::default()),
+        )
+        .await
+        .expect("RPC client worker completes");
+        stopper.await.unwrap();
+        assert!(endpoint.burst_delivered.load(Ordering::SeqCst));
+    }
+
+    /// The bounded inbox holds `CAPACITY` and the burst is `CAPACITY + 2`: every response must
+    /// still be processed, although the drive task cannot run while the burst arrives.
+    #[test]
+    fn rpc_client_completes_a_response_burst_its_drive_task_cannot_consume() {
+        let directory = std::env::temp_dir().join(format!("rpc-burst-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).unwrap();
+        let records = directory.join("records.jsonl");
+        std::fs::write(&records, b"").unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "common::workload::rpc_burst_tests::rpc_client_burst_child",
+                "--nocapture",
+                "--test-threads",
+                "1",
+            ])
+            .env(BURST_CHILD, &directory)
+            .env(streamer_flow_evidence::OUTPUT_PATH_ENV, &records)
+            .env("UPROTOCOL_FLOW_EVIDENCE_RUN", RUN)
+            .env("UPROTOCOL_FLOW_EVIDENCE_ACTOR", "source")
+            .output()
+            .unwrap();
+        let mut events = std::collections::BTreeMap::<String, usize>::new();
+        for line in std::fs::read_to_string(&records).unwrap().lines() {
+            if let Some(body) = line.strip_prefix("OP_EVENT ") {
+                let value: serde_json::Value = serde_json::from_str(body).unwrap();
+                *events
+                    .entry(value["event"].as_str().unwrap().to_owned())
+                    .or_default() += 1;
+            }
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+        assert!(
+            output.status.success(),
+            "RPC client worker child failed: {:?}\n{}\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            events.get("queue_drop"),
+            None,
+            "an RPC client must complete every response of a burst its drive task cannot consume: {events:?}"
+        );
+        assert_eq!(
+            events.get("processed"),
+            Some(&BURST),
+            "every burst response is processed: {events:?}"
+        );
+    }
 }

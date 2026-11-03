@@ -12,6 +12,42 @@ use streamer_flow_evidence::Observation;
 #[path = "oracle_tests.rs"]
 mod tests;
 
+/// A retired message id, kept compactly: a canonical lowercase hyphenated UUID as its 16 bytes,
+/// any other string verbatim, so two ids share a key exactly when they are the same string. Each
+/// row keeps up to twice its pending limit of retired ids, and that memory counts toward a soak
+/// cohort's aggregate memory bound.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum RetiredId {
+    Uuid([u8; 16]),
+    Other(Box<str>),
+}
+
+impl RetiredId {
+    fn new(id: &str) -> Self {
+        let mut bytes = [0u8; 16];
+        let mut digits = 0;
+        let canonical = id.len() == 36
+            && id.bytes().enumerate().all(|(index, byte)| {
+                if matches!(index, 8 | 13 | 18 | 23) {
+                    return byte == b'-';
+                }
+                let nibble = match byte {
+                    b'0'..=b'9' => byte - b'0',
+                    b'a'..=b'f' => byte - b'a' + 10,
+                    _ => return false,
+                };
+                bytes[digits / 2] |= nibble << if digits % 2 == 0 { 4 } else { 0 };
+                digits += 1;
+                true
+            });
+        if canonical {
+            Self::Uuid(bytes)
+        } else {
+            Self::Other(id.into())
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Fact {
     observation: Observation,
@@ -65,8 +101,8 @@ pub(crate) struct Oracle {
     role: Role,
     run: String,
     pending: BTreeMap<String, Entry>,
-    retired: BTreeSet<String>,
-    retired_order: VecDeque<String>,
+    retired: BTreeSet<RetiredId>,
+    retired_order: VecDeque<RetiredId>,
     receive_order: [VecDeque<(String, Option<String>)>; 2],
     last_received: [u64; 2],
     sequence: u64,
@@ -437,7 +473,10 @@ impl Oracle {
                 "complete attribute hash missing"
             );
         }
-        ensure!(!self.retired.contains(&id), "duplicate completed message");
+        ensure!(
+            !self.retired.contains(&RetiredId::new(&id)),
+            "duplicate completed message"
+        );
         let fact = Fact {
             reconstructed_sink,
             observation,
@@ -560,8 +599,9 @@ impl Oracle {
 
     fn retire(&mut self, id: &str) {
         self.pending.remove(id);
-        self.retired.insert(id.into());
-        self.retired_order.push_back(id.into());
+        let key = RetiredId::new(id);
+        self.retired.insert(key.clone());
+        self.retired_order.push_back(key);
         if self.retired_order.len() > self.limit * 2 {
             if let Some(old) = self.retired_order.pop_front() {
                 self.retired.remove(&old);

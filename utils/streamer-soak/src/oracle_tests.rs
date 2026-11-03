@@ -487,3 +487,54 @@ fn someip_finite_rejects_missing_or_extra_delivery() {
         .collect();
     assert!(someip_evaluate(events, true).is_err());
 }
+
+#[test]
+fn retired_ids_are_exact_and_compact() {
+    // Canonical lowercase UUIDs are kept as 16 bytes and every other string verbatim, so two ids
+    // share a key exactly when they are the same string; a key is no larger than a 64-bit String.
+    assert!(std::mem::size_of::<RetiredId>() <= 24);
+    let canonical = "0192f3c4-5d6e-7f80-91a2-b3c4d5e6f708";
+    assert_eq!(
+        RetiredId::new(canonical),
+        RetiredId::Uuid([
+            0x01, 0x92, 0xf3, 0xc4, 0x5d, 0x6e, 0x7f, 0x80, 0x91, 0xa2, 0xb3, 0xc4, 0xd5, 0xe6,
+            0xf7, 0x08
+        ])
+    );
+    for other in [
+        canonical.to_uppercase(),
+        canonical.replacen('f', "F", 1),
+        canonical.replacen('c', "g", 1),
+        canonical.replacen('9', "-", 1),
+        format!("{}\u{e9}", &canonical[..34]),
+        format!("{{{canonical}}}"),
+        canonical.replace('-', ""),
+        canonical.replacen('-', "_", 1),
+        "one".to_owned(),
+    ] {
+        assert_eq!(
+            RetiredId::new(&other),
+            RetiredId::Other(other.as_str().into())
+        );
+    }
+    // A completed message with a UUID id is still rejected when it is observed again.
+    let mut values = publish(canonical, 1, false);
+    values.push(values[4].clone());
+    let error = evaluate(values, Role::PublisherSubscriber).unwrap_err();
+    assert!(
+        error.to_string().contains("duplicate completed message"),
+        "{error}"
+    );
+    // The bounded window forgets the oldest ids first, in retirement order rather than key order
+    // (the verbatim "two" sorts after both UUIDs but was retired first).
+    let mut oracle = Oracle::new(Role::PublisherSubscriber, "fixture".into(), 32, 1);
+    let ids = ["two", canonical, "0192f3c4-5d6e-7f80-91a2-b3c4d5e6f709"];
+    for id in ids {
+        oracle.retire(id);
+    }
+    assert_eq!((oracle.retired_order.len(), oracle.retired.len()), (2, 2));
+    assert!(!oracle.retired.contains(&RetiredId::new(ids[0])));
+    assert!(ids[1..]
+        .iter()
+        .all(|id| oracle.retired.contains(&RetiredId::new(id))));
+}

@@ -39,6 +39,10 @@ messages are offered only in traffic phases. The slow consumer retains its origi
 message while delayed; listener admission uses the shared bounded inbox. Exact full-
 queue drops are journalled separately from closed-listener errors and abandoned work.
 RPC processing echoes the received payload with the original request correlation.
+An RPC client's listener completes each response itself, admitted inline outside the
+bounded inbox and still counted by it: a binding can deliver a burst of responses in
+one pass (after a first-message stall, or when a backlog is released) while the
+client's drive task is not scheduled, so completion never waits on that task.
 The sustained Protobuf generator encodes an actual `HelloRequest`; other encodings
 reuse the existing application payload generators with a per-message sequence.
 
@@ -81,7 +85,9 @@ their separately declared queue limits; no finite application drop is permitted.
 
 Worker metrics report admitted RX loans, transient callback-held RX loans and TX
 loans independently. Admission transitions occur after reserving queue capacity
-and before exposing the lease to the consumer. Rejected full-queue samples remain
+and before exposing the lease to the consumer; an RPC client's inline admission
+makes the transition without a queue slot, before its listener completes the
+response. Rejected full-queue samples remain
 transient until their drop record is emitted; they cannot inflate admitted counts.
 
 ## Large native sensor fixtures

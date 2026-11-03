@@ -3,7 +3,8 @@
 //! Bounded application receive queues retaining the supplied message or storage lease.
 //!
 //! Transport listeners use nonblocking admission; consumers retain a delivery while
-//! applying their configured processing delay. No payload copy, transport-specific
+//! applying their configured processing delay. An inline admission instead hands the
+//! delivery to the admitting listener to complete. No payload copy, transport-specific
 //! capacity allocation or middleware shutdown is performed by this queue.
 use anyhow::{ensure, Result};
 use serde::Serialize;
@@ -184,6 +185,42 @@ impl<T> Sender<T> {
         })
     }
 
+    /// Admits a value whose consumer completes it on the admitting thread, outside the queue.
+    ///
+    /// The delivery is counted and retained like a queued one (`received`, `live_held`, then
+    /// `processed` on completion or `abandoned` on drop), but it takes no queue slot, so it is
+    /// never rejected for overload. For short processing that must not wait for the consumer
+    /// task to be scheduled, such as an RPC client completing its own responses: a binding may
+    /// deliver a burst of them in one pass. After the receiver closes, the value is rejected
+    /// and counted in `closed_rejections`, as `try_send` does.
+    pub fn admit_inline(
+        &self,
+        mut value: T,
+        admitted: impl FnOnce(&mut T),
+    ) -> std::result::Result<Delivery<T>, Delivery<T>> {
+        self.counters.received.fetch_add(1, Ordering::SeqCst);
+        let live = self.counters.live.fetch_add(1, Ordering::SeqCst) + 1;
+        self.counters.peak.fetch_max(live, Ordering::SeqCst);
+        let closed = self.inner.is_closed();
+        if closed {
+            self.counters
+                .closed_rejections
+                .fetch_add(1, Ordering::SeqCst);
+        } else {
+            admitted(&mut value);
+        }
+        let item = Delivery {
+            value: Some(value),
+            counters: self.counters.clone(),
+            accounted: closed,
+        };
+        if closed {
+            Err(item)
+        } else {
+            Ok(item)
+        }
+    }
+
     /// Samples queue occupancy and handle counters. Final reconciliation requires quiescence.
     #[must_use]
     pub fn snapshot(&self) -> Snapshot {
@@ -314,6 +351,57 @@ mod tests {
         );
         assert_eq!(final_state.live_held, 0);
         assert_eq!(released.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn inline_admission_is_accounted_like_queued_work_but_never_overloads() {
+        let released = Arc::new(AtomicU64::new(0));
+        let (sender, mut receiver) = bounded(1).unwrap();
+        // The queue is full, yet inline deliveries are admitted beside it and none takes a slot.
+        sender.try_send(Lease(released.clone())).unwrap();
+        for _ in 0..3 {
+            let mut admitted = false;
+            let delivery = sender
+                .admit_inline(Lease(released.clone()), |_| admitted = true)
+                .unwrap();
+            assert!(admitted);
+            assert_eq!(sender.snapshot().queued, 1);
+            delivery.complete().unwrap();
+        }
+        assert_eq!(sender.snapshot().overload_drops, 0);
+        receiver.try_recv().unwrap().complete().unwrap();
+        drop(
+            sender
+                .admit_inline(Lease(released.clone()), |_| {})
+                .unwrap(),
+        );
+        receiver.close();
+        drop(
+            sender
+                .admit_inline(Lease(released.clone()), |_| {
+                    panic!("closed queue cannot admit")
+                })
+                .unwrap_err(),
+        );
+        let final_state = sender.snapshot();
+        assert_eq!(
+            (
+                final_state.received,
+                final_state.processed,
+                final_state.abandoned
+            ),
+            (6, 4, 1)
+        );
+        assert_eq!(
+            (
+                final_state.overload_drops,
+                final_state.closed_rejections,
+                final_state.live_held,
+                final_state.peak_held
+            ),
+            (0, 1, 0, 2)
+        );
+        assert_eq!(released.load(Ordering::SeqCst), 6);
     }
 
     #[test]

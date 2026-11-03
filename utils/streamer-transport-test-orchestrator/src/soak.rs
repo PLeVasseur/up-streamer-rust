@@ -523,21 +523,11 @@ fn prepare(
     } else {
         None
     };
-    write_zenoh_router_config(&zenoh.source_router, ZENOH_SOURCE_PORT)?;
-    write_zenoh_router_config(&zenoh.sink_router, ZENOH_SINK_PORT)?;
-    write_zenoh_client_config(&zenoh.source_client, ZENOH_SOURCE_PORT)?;
-    write_zenoh_client_config(&zenoh.sink_client, ZENOH_SINK_PORT)?;
-    for path in [
-        &zenoh.source_router,
-        &zenoh.sink_router,
-        &zenoh.source_client,
-        &zenoh.sink_client,
-    ] {
-        let mut configuration: serde_json::Value = read(path)?;
-        configuration["qos"] = json!({"publication": [{"key_exprs": ["**"],
-            "config": {"congestion_control": "block", "reliability": "reliable"}}]});
-        atomic_write_json(path, &configuration)?;
-    }
+    // Each configuration is written once with its publication policy (each write syncs file and directory).
+    write_soak_zenoh_config(&zenoh.source_router, zenoh_router_config(ZENOH_SOURCE_PORT))?;
+    write_soak_zenoh_config(&zenoh.sink_router, zenoh_router_config(ZENOH_SINK_PORT))?;
+    write_soak_zenoh_config(&zenoh.source_client, zenoh_client_config(ZENOH_SOURCE_PORT))?;
+    write_soak_zenoh_config(&zenoh.sink_client, zenoh_client_config(ZENOH_SINK_PORT))?;
     let config = row_dir.join("configurable-streamer.json");
     write_config(
         repo,
@@ -936,7 +926,7 @@ fn execute(cli: &Cli, mode: Mode, rows: &[MatrixRow], repo: &Path, root: &Path) 
             .soak_calibration_root
             .as_ref()
             .context("acceptance requires concurrent calibration")?;
-        let proof = audit(previous)?;
+        let proof = audit_in_child(previous)?;
         let previous_plan: Plan = read(&previous.join("soak-plan.json"))?;
         anyhow::ensure!(
             previous_plan.mode == Mode::Calibration
@@ -1197,8 +1187,7 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
             "acceptance lacks calibration"
         );
     }
-    let mut reports = Vec::new();
-    for id in &plan.rows {
+    let audit_row = |id: &String| -> Result<serde_json::Value> {
         anyhow::ensure!(
             !id.contains('/') && !id.contains(".."),
             "invalid row locator"
@@ -1354,8 +1343,12 @@ fn audit_evidence(root: &Path) -> Result<serde_json::Value> {
                 "{id}: phase loss/progress violation"
             );
         }
-        reports.push(json!({"row": id, "report": report, "journal_sha256": sha256_file(&directory.join("journal-manifest.json"))?}));
-    }
+        Ok(
+            json!({"row": id, "report": report, "journal_sha256": sha256_file(&directory.join("journal-manifest.json"))?}),
+        )
+    };
+    // Rows replay independently; the replay is CPU-bound and counts against the plan's maximum.
+    let reports = ordered_parallel(&plan.rows, AUDIT_WORKERS, audit_row)?;
     let mut samples = 0;
     let mut windows: BTreeMap<String, (f64, f64, u64, u64)> = BTreeMap::new();
     let mut previous_time = 0.0;
@@ -1572,6 +1565,53 @@ fn audit_publication_inputs(directory: &Path, inputs: &serde_json::Value) -> Res
     Ok(())
 }
 
+/// Upper bound on concurrent row replays during the cohort audit.
+const AUDIT_WORKERS: usize = 8;
+
+/// Applies `f` to every item on up to `workers` threads and returns the results in item order.
+/// The error returned is the first in item order, as a serial loop would return it.
+fn ordered_parallel<T: Sync, R: Send>(
+    items: &[T],
+    workers: usize,
+    f: impl Fn(&T) -> Result<R> + Sync,
+) -> Result<Vec<R>> {
+    let slots: Vec<Mutex<Option<Result<R>>>> = items.iter().map(|_| Mutex::new(None)).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let workers = workers
+        .min(thread::available_parallelism().map_or(1, usize::from))
+        .clamp(1, items.len().max(1));
+    thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some(item) = items.get(index) else {
+                    break;
+                };
+                let result = f(item);
+                *slots[index].lock().expect("unpoisoned result slot") = Some(result);
+            });
+        }
+    });
+    slots
+        .into_iter()
+        .map(|slot| {
+            slot.into_inner()
+                .expect("unpoisoned result slot")
+                .expect("every item processed")
+        })
+        .collect()
+}
+
+fn soak_zenoh_qos() -> serde_json::Value {
+    json!({"publication": [{"key_exprs": ["**"],
+        "config": {"congestion_control": "block", "reliability": "reliable"}}]})
+}
+
+fn write_soak_zenoh_config(path: &Path, mut configuration: serde_json::Value) -> Result<()> {
+    configuration["qos"] = soak_zenoh_qos();
+    atomic_write_json(path, &configuration)
+}
+
 pub(super) fn audit(root: &Path) -> Result<serde_json::Value> {
     let summary: serde_json::Value = read(&root.join("soak-summary.json"))?;
     let plan: Plan = read(&root.join("soak-plan.json"))?;
@@ -1592,6 +1632,25 @@ pub(super) fn audit(root: &Path) -> Result<serde_json::Value> {
         first_audit_difference(&result, &saved, "$")
     );
     Ok(result)
+}
+
+/// Runs `audit` in a child `--replay-soak` process. The replay's worker threads leave their
+/// allocator arenas resident after they finish, and this process's resident memory counts
+/// toward the cohort's aggregate memory bound; a child returns that memory when it exits.
+fn audit_in_child(root: &Path) -> Result<serde_json::Value> {
+    let output = std::process::Command::new(std::env::current_exe()?)
+        .arg("--replay-soak")
+        .arg(root)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .context("start the calibration replay")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "calibration replay failed ({}): {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    serde_json::from_slice(&output.stdout).context("calibration replay output")
 }
 
 fn first_audit_difference(
@@ -1640,5 +1699,62 @@ mod audit_tests {
         let changed = json!({"bytes_per_minute": -20226.82118746941_f64});
         assert_ne!(actual, changed);
         assert!(first_audit_difference(&actual, &changed, "$").starts_with("$.bytes_per_minute:"));
+    }
+
+    #[test]
+    fn ordered_parallel_returns_results_in_item_order() {
+        let items: Vec<u64> = (0..64).collect();
+        let doubled = ordered_parallel(&items, 8, |item| {
+            thread::sleep(Duration::from_millis((64 - item) % 5));
+            Ok(item * 2)
+        })
+        .unwrap();
+        assert_eq!(
+            doubled,
+            items.iter().map(|item| item * 2).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn ordered_parallel_reports_the_first_failure_in_item_order() {
+        let items: Vec<u64> = (0..16).collect();
+        let error = ordered_parallel(&items, 8, |item| match item {
+            3 => {
+                thread::sleep(Duration::from_millis(50));
+                anyhow::bail!("row {item} failed")
+            }
+            12 => anyhow::bail!("row {item} failed"),
+            _ => Ok(*item),
+        })
+        .unwrap_err();
+        assert_eq!(error.to_string(), "row 3 failed");
+    }
+
+    #[test]
+    fn soak_zenoh_configs_written_once_keep_the_previous_bytes() {
+        let directory =
+            std::env::temp_dir().join(format!("soak-zenoh-config-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&directory);
+        fs::create_dir_all(&directory).unwrap();
+        for (name, configuration) in [
+            ("router", zenoh_router_config(ZENOH_SOURCE_PORT)),
+            ("client", zenoh_client_config(ZENOH_SINK_PORT)),
+        ] {
+            // The previous sequence: write the base configuration, then rewrite it with the policy.
+            let previous = directory.join(format!("{name}-previous.json5"));
+            atomic_write_json(&previous, &configuration).unwrap();
+            let mut rewritten: serde_json::Value = read(&previous).unwrap();
+            rewritten["qos"] = json!({"publication": [{"key_exprs": ["**"],
+                "config": {"congestion_control": "block", "reliability": "reliable"}}]});
+            atomic_write_json(&previous, &rewritten).unwrap();
+            let once = directory.join(format!("{name}-once.json5"));
+            write_soak_zenoh_config(&once, configuration).unwrap();
+            assert_eq!(
+                fs::read(&previous).unwrap(),
+                fs::read(&once).unwrap(),
+                "{name}"
+            );
+        }
+        let _ = fs::remove_dir_all(&directory);
     }
 }
