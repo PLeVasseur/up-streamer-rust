@@ -25,12 +25,12 @@ use tracing::{info, trace, warn};
 use up_rust::{PayloadEncoding, UCode, UMessageBuilder, UStatus, UTransport};
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
-const DEFAULT_UENTITY: &str = "0x5678";
+const DEFAULT_UENTITY: &str = "0x15678";
 const DEFAULT_UVERSION: &str = "0x1";
 const DEFAULT_RESOURCE: &str = "0x0";
 
 const DEFAULT_TARGET_AUTHORITY: &str = "authority-b";
-const DEFAULT_TARGET_UENTITY: &str = "0x1236";
+const DEFAULT_TARGET_UENTITY: &str = "0x11236";
 const DEFAULT_TARGET_UVERSION: &str = "0x1";
 const DEFAULT_TARGET_RESOURCE: &str = "0x0421";
 
@@ -39,7 +39,7 @@ const DEFAULT_VSOMEIP_CONFIG: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/vsomeip-configs/someip_client.json"
 );
-const DEFAULT_UENTITY_NUM: u32 = 0x5678;
+const DEFAULT_UENTITY_NUM: u32 = 0x0001_5678;
 
 const REQUEST_TTL: u32 = 1000;
 const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"SCLI");

@@ -45,11 +45,11 @@ use up_wire_xcdrv2::XcdrV2Wire;
 
 const DEFAULT_ENDPOINT: &str = "tcp/127.0.0.1:7447";
 const DEFAULT_UAUTHORITY: &str = "authority-b";
-const DEFAULT_UENTITY: &str = "0x1236";
+const DEFAULT_UENTITY: &str = "0x11236";
 const DEFAULT_UVERSION: &str = "0x1";
 const DEFAULT_RESOURCE: &str = "0x0";
 const DEFAULT_TARGET_AUTHORITY: &str = "authority-a";
-const DEFAULT_TARGET_UENTITY: &str = "0x4321";
+const DEFAULT_TARGET_UENTITY: &str = "0x14321";
 const DEFAULT_TARGET_UVERSION: &str = "0x1";
 const DEFAULT_TARGET_RESOURCE: &str = "0x0421";
 

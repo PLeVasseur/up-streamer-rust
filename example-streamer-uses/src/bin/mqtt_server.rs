@@ -23,7 +23,7 @@ use up_rust::{UListener, UStatus, UTransport, UUri};
 use up_transport_mqtt5::{Mqtt5TransportOptions, MqttClientOptions};
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
-const DEFAULT_UENTITY: &str = "0x4321";
+const DEFAULT_UENTITY: &str = "0x14321";
 const DEFAULT_UVERSION: &str = "0x1";
 const DEFAULT_RESOURCE: &str = "0x0421";
 const DEFAULT_BROKER_URI: &str = "localhost:1883";

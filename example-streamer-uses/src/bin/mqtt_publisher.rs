@@ -25,7 +25,7 @@ use up_rust::{PayloadEncoding, UCode, UMessageBuilder, UStatus, UTransport};
 use up_transport_mqtt5::{Mqtt5TransportOptions, MqttClientOptions};
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
-const DEFAULT_UENTITY: &str = "0x5BA0";
+const DEFAULT_UENTITY: &str = "0x15BA0";
 const DEFAULT_UVERSION: &str = "0x1";
 const DEFAULT_RESOURCE: &str = "0x8001";
 const DEFAULT_BROKER_URI: &str = "localhost:1883";

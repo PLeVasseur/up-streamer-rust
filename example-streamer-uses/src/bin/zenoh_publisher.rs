@@ -41,7 +41,7 @@ use up_wire_xcdrv2::XcdrV2Wire;
 
 const DEFAULT_ENDPOINT: &str = "tcp/127.0.0.1:7447";
 const DEFAULT_UAUTHORITY: &str = "authority-b";
-const DEFAULT_UENTITY: &str = "0x3039";
+const DEFAULT_UENTITY: &str = "0x13039";
 const DEFAULT_UVERSION: &str = "0x1";
 const DEFAULT_RESOURCE: &str = "0x8001";
 const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"ZPUB");

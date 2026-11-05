@@ -23,11 +23,11 @@ use tracing::{trace, warn};
 use up_rust::{PayloadEncoding, UListener, UStatus, UTransport};
 
 const DEFAULT_UAUTHORITY: &str = "authority-b";
-const DEFAULT_UENTITY: &str = "0x5BB0";
+const DEFAULT_UENTITY: &str = "0x15BB0";
 const DEFAULT_UVERSION: &str = "0x1";
 const DEFAULT_RESOURCE: &str = "0x0";
 const DEFAULT_SOURCE_AUTHORITY: &str = "authority-b";
-const DEFAULT_SOURCE_UENTITY: &str = "0x3039";
+const DEFAULT_SOURCE_UENTITY: &str = "0x13039";
 const DEFAULT_SOURCE_UVERSION: &str = "0x1";
 const DEFAULT_SOURCE_RESOURCE: &str = "0x8001";
 const DEFAULT_REMOTE_AUTHORITY: &str = "authority-b";
@@ -35,7 +35,7 @@ const DEFAULT_VSOMEIP_CONFIG: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/vsomeip-configs/someip_subscriber.json"
 );
-const DEFAULT_UENTITY_NUM: u32 = 0x5BB0;
+const DEFAULT_UENTITY_NUM: u32 = 0x0001_5BB0;
 
 #[derive(Debug, Parser)]
 #[command(version, about, long_about = None)]

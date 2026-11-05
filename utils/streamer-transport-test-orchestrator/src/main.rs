@@ -6574,7 +6574,7 @@ fn zenoh_args(
             "--uauthority".into(),
             local_authority.into(),
             "--uentity".into(),
-            "0x5BB0".into(),
+            "0x15BB0".into(),
             "--uversion".into(),
             "0x1".into(),
             "--resource".into(),
@@ -10869,6 +10869,67 @@ mod tests {
     }
 
     #[test]
+    fn runnable_role_commands_use_explicit_entity_instances() {
+        let directory = Path::new("/unused/role-command-identities");
+        let cli = Cli::try_parse_from(["orchestrator"]).unwrap();
+        let mut checked_rows = 0;
+        let mut checked_entities = 0;
+        for row in matrix_rows()
+            .into_iter()
+            .filter(|row| support_status(row).classification == RowClassification::Pass)
+        {
+            for active in [true, false] {
+                let command = role_command(
+                    &row,
+                    active,
+                    &ZenohConfigPaths::new(directory),
+                    &VsomeipConfigPaths::new(directory),
+                    Some(Path::new("/unused/manifest.json")),
+                    "unused",
+                    &cli,
+                )
+                .unwrap();
+                let mut role_entities = 0;
+                for pair in command.args.windows(2).filter(|pair| {
+                    matches!(
+                        pair[0].as_str(),
+                        "--uentity"
+                            | "--source-uentity"
+                            | "--target-uentity"
+                            | "--sink-uentity"
+                            | "--ue-id"
+                    )
+                }) {
+                    let value = &pair[1];
+                    let entity = if let Some(hex) = value.strip_prefix("0x") {
+                        u32::from_str_radix(hex, 16).unwrap()
+                    } else {
+                        value.parse::<u32>().unwrap()
+                    };
+                    up_rust::UUri::try_from_parts("role-command", entity, 1, 0).unwrap_or_else(
+                        |error| panic!("{} active={active} {}={value}: {error}", row.id, pair[0]),
+                    );
+                    role_entities += 1;
+                }
+                let physical = if active {
+                    row.source.physical
+                } else {
+                    row.sink.physical
+                };
+                assert!(
+                    role_entities > 0 || physical == PhysicalTransport::Dds,
+                    "{} active={active}",
+                    row.id
+                );
+                checked_entities += role_entities;
+            }
+            checked_rows += 1;
+        }
+        assert_eq!(checked_rows, 1980);
+        assert!(checked_entities >= checked_rows);
+    }
+
+    #[test]
     fn vsomeip_generated_client_ids_preserve_role_source_entity() {
         let base = std::env::temp_dir().join(format!(
             "streamer-vsomeip-identity-{}-{}",
@@ -10918,7 +10979,8 @@ mod tests {
                 applications[0]["id"].as_str().unwrap().to_ascii_lowercase(),
                 format!(
                     "0x{:x}",
-                    u32::from_str_radix(source_entity.trim_start_matches("0x"), 16).unwrap() & 0xffff
+                    u32::from_str_radix(source_entity.trim_start_matches("0x"), 16).unwrap()
+                        & 0xffff
                 ),
                 "SOME/IP client identity must preserve the source entity type: {}",
                 row.id

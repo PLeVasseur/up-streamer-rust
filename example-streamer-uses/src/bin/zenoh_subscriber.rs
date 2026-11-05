@@ -36,11 +36,11 @@ use up_wire_xcdrv2::XcdrV2Wire;
 
 const DEFAULT_ENDPOINT: &str = "tcp/127.0.0.1:7447";
 const DEFAULT_UAUTHORITY: &str = "authority-b";
-const DEFAULT_UENTITY: &str = "0x5BB0";
+const DEFAULT_UENTITY: &str = "0x15BB0";
 const DEFAULT_UVERSION: &str = "0x1";
 const DEFAULT_RESOURCE: &str = "0x0";
 const DEFAULT_SOURCE_AUTHORITY: &str = "authority-a";
-const DEFAULT_SOURCE_UENTITY: &str = "0x5BA0";
+const DEFAULT_SOURCE_UENTITY: &str = "0x15BA0";
 const DEFAULT_SOURCE_UVERSION: &str = "0x1";
 const DEFAULT_SOURCE_RESOURCE: &str = "0x8001";
 

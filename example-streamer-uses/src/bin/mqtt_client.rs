@@ -26,12 +26,12 @@ use up_rust::{PayloadEncoding, UCode, UMessageBuilder, UStatus, UTransport};
 use up_transport_mqtt5::{Mqtt5TransportOptions, MqttClientOptions};
 
 const DEFAULT_UAUTHORITY: &str = "authority-a";
-const DEFAULT_UENTITY: &str = "0x4321";
+const DEFAULT_UENTITY: &str = "0x14321";
 const DEFAULT_UVERSION: &str = "0x1";
 const DEFAULT_RESOURCE: &str = "0x0";
 
 const DEFAULT_TARGET_AUTHORITY: &str = "authority-b";
-const DEFAULT_TARGET_UENTITY: &str = "0x1236";
+const DEFAULT_TARGET_UENTITY: &str = "0x11236";
 const DEFAULT_TARGET_UVERSION: &str = "0x1";
 const DEFAULT_TARGET_RESOURCE: &str = "0x0421";
 

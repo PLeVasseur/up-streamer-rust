@@ -125,12 +125,21 @@ mod tests {
 
     #[test]
     fn build_uuri_from_parts() {
-        let uuri = build_uuri("authority-a", 0x5BA0, 0x1, 0x8001).unwrap();
+        let uuri = build_uuri("authority-a", 0x0001_5BA0, 0x1, 0x8001).unwrap();
         assert_eq!(uuri.authority_name(), "authority-a");
-        assert_eq!(uuri.uentity_instance_id(), 0);
+        assert_eq!(uuri.uentity_instance_id(), 1);
         assert_eq!(uuri.uentity_type_id(), 0x5BA0);
         assert_eq!(uuri.uentity_major_version(), 0x1);
         assert_eq!(uuri.resource_id(), 0x8001);
+    }
+
+    #[test]
+    fn build_uuri_rejects_zero_entity_instance() {
+        let error = build_uuri("authority-a", 0x5BA0, 0x1, 0x8001).unwrap_err();
+        assert_eq!(error.code(), UCode::InvalidArgument);
+        assert!(error
+            .to_string()
+            .contains("entity instance ID must not be zero"));
     }
 
     #[derive(Debug, Parser)]
@@ -138,7 +147,7 @@ mod tests {
     struct RepresentativeHelpArgs {
         #[arg(long, default_value = "authority-a")]
         uauthority: String,
-        #[arg(long, default_value = "0x5BA0")]
+        #[arg(long, default_value = "0x15BA0")]
         uentity: String,
         #[arg(long, default_value = "0x1")]
         uversion: String,
@@ -154,7 +163,7 @@ mod tests {
         assert!(help.contains("--uauthority <UAUTHORITY>"));
         assert!(help.contains("authority-a"));
         assert!(help.contains("--uentity <UENTITY>"));
-        assert!(help.contains("0x5BA0"));
+        assert!(help.contains("0x15BA0"));
         assert!(help.contains("--uversion <UVERSION>"));
         assert!(help.contains("--resource <RESOURCE>"));
     }
