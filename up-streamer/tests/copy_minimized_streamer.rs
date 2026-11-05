@@ -25,10 +25,10 @@ use up_streamer::{
 };
 
 fn topic() -> UUri {
-    UUri::try_from_parts("authority-a", 0x5BA0, 1, 0x8001).unwrap()
+    UUri::try_from_parts("authority-a", 0x0001_5BA0, 1, 0x8001).unwrap()
 }
 fn topic_two() -> UUri {
-    UUri::try_from_parts("authority-a", 0x5BA0, 1, 0x8002).unwrap()
+    UUri::try_from_parts("authority-a", 0x0001_5BA0, 1, 0x8002).unwrap()
 }
 struct Subscriptions;
 #[async_trait::async_trait]
@@ -53,7 +53,7 @@ impl USubscription for Subscriptions {
             .map(|topic| {
                 SubscriptionInfo::new(
                     topic,
-                    UUri::try_from_parts("authority-b", 0x5678, 1, 0).unwrap(),
+                    UUri::try_from_parts("authority-b", 0x0001_5678, 1, 0).unwrap(),
                     SubscriptionStatus::Subscribed,
                     None,
                     None,

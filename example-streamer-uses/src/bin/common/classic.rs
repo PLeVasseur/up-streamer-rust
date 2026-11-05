@@ -139,8 +139,8 @@ mod tests {
 
     fn request() -> UMessage {
         UMessageBuilder::request(
-            UUri::try_from("//authority-b/5BA0/1/421").unwrap(),
-            UUri::try_from("//authority-a/5BA0/1/0").unwrap(),
+            UUri::try_from("//authority-b/5BA0/1/1/421").unwrap(),
+            UUri::try_from("//authority-a/5BA0/1/1/0").unwrap(),
             10_000,
         )
         .build_with_payload(b"interrupted".to_vec(), PayloadEncoding::RAW)
@@ -271,15 +271,15 @@ mod interrupt_tests {
         let serving = tokio::spawn({
             let transport = Arc::clone(&transport);
             async move {
-                let sink = UUri::try_from("//authority-b/5BA0/1/421").unwrap();
+                let sink = UUri::try_from("//authority-b/5BA0/1/1/421").unwrap();
                 listen(transport.as_ref(), &UUri::any(), Some(&sink), responder).await
             }
         });
         transport.registered.notified().await;
         let listener = transport.listener.lock().unwrap().clone().unwrap();
         let request = UMessageBuilder::request(
-            UUri::try_from("//authority-b/5BA0/1/421").unwrap(),
-            UUri::try_from("//authority-a/5BA0/1/0").unwrap(),
+            UUri::try_from("//authority-b/5BA0/1/1/421").unwrap(),
+            UUri::try_from("//authority-a/5BA0/1/1/0").unwrap(),
             10_000,
         )
         .build_with_payload(b"interrupted".to_vec(), PayloadEncoding::RAW)

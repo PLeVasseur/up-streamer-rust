@@ -104,7 +104,7 @@ mod tests {
         encoding: Option<u32>,
         payload: Option<&[u8]>,
     ) {
-        let source = UUri::try_from_parts("source", 0x5BA0, 1, 0x8001).unwrap();
+        let source = UUri::try_from_parts("source", 0x0001_5BA0, 1, 0x8001).unwrap();
         let mut builder = UMessageBuilder::publish(source);
         let message = match (encoding, payload) {
             (Some(id), Some(bytes)) => builder

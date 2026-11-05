@@ -230,8 +230,8 @@ mod tests {
     #[test]
     fn same_subscriber_different_topics_coexist() {
         let cache = SubscriptionCache::new(vec![
-            subscription("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234"),
-            subscription("//authority-a/5BA1/1/8001", "//authority-b/5678/1/1234"),
+            subscription("//authority-a/5BA0/1/1/8001", "//authority-b/5678/1/1/1234"),
+            subscription("//authority-a/5BA1/1/1/8001", "//authority-b/5678/1/1/1234"),
         ])
         .expect("cache should build");
 
@@ -240,25 +240,25 @@ mod tests {
         assert_eq!(topics.len(), 2);
         assert_eq!(
             topics[0],
-            UUri::from_str("//authority-a/5BA0/1/8001").unwrap()
+            UUri::from_str("//authority-a/5BA0/1/1/8001").unwrap()
         );
         assert_eq!(
             topics[1],
-            UUri::from_str("//authority-a/5BA1/1/8001").unwrap()
+            UUri::from_str("//authority-a/5BA1/1/1/8001").unwrap()
         );
     }
 
     #[test]
     fn rebuild_reflects_removed_rows() {
         let initial_cache = SubscriptionCache::new(vec![
-            subscription("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234"),
-            subscription("//authority-a/5BA1/1/8001", "//authority-b/5678/1/1234"),
+            subscription("//authority-a/5BA0/1/1/8001", "//authority-b/5678/1/1/1234"),
+            subscription("//authority-a/5BA1/1/1/8001", "//authority-b/5678/1/1/1234"),
         ])
         .expect("initial cache should build");
 
         let rebuilt_cache = SubscriptionCache::new(vec![subscription(
-            "//authority-a/5BA1/1/8001",
-            "//authority-b/5678/1/1234",
+            "//authority-a/5BA1/1/1/8001",
+            "//authority-b/5678/1/1/1234",
         )])
         .expect("rebuilt cache should build");
 
@@ -268,15 +268,15 @@ mod tests {
         assert_eq!(rebuilt_topics.len(), 1);
         assert_eq!(
             rebuilt_topics[0],
-            UUri::from_str("//authority-a/5BA1/1/8001").unwrap()
+            UUri::from_str("//authority-a/5BA1/1/1/8001").unwrap()
         );
     }
 
     #[test]
     fn wildcard_lookup_merges_exact_and_wildcard_rows() {
         let cache = SubscriptionCache::new(vec![
-            subscription("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234"),
-            subscription("//authority-a/5BA0/1/8002", "//*/5678/1/1234"),
+            subscription("//authority-a/5BA0/1/1/8001", "//authority-b/5678/1/1/1234"),
+            subscription("//authority-a/5BA0/1/1/8002", "//*/5678/1/1/1234"),
         ])
         .expect("cache should build");
 

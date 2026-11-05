@@ -27,7 +27,7 @@ use payloads::{
     arrow_payload_bytes, native_payload_bytes, omgidl_payload_bytes, xcdrv2_payload_bytes,
 };
 
-const ENTITY_ID: u32 = 0x5BA0;
+const ENTITY_ID: u32 = 0x0001_5BA0;
 const ENTITY_VERSION: u8 = 1;
 const NATIVE_PAYLOAD_MAGIC: u32 = u32::from_le_bytes(*b"DDSR");
 

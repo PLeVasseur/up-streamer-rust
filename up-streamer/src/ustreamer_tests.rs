@@ -85,8 +85,8 @@ fn subscription(topic: &str, subscriber: &str) -> SubscriptionInfo {
 }
 fn valid_snapshot() -> Vec<SubscriptionInfo> {
     vec![subscription(
-        "//authority-a/5BA0/1/8001",
-        "//authority-b/5678/1/1234",
+        "//authority-a/5BA0/1/1/8001",
+        "//authority-b/5678/1/1/1234",
     )]
 }
 

@@ -367,8 +367,8 @@ mod tests {
 
     #[test]
     fn uri_projection_key_owned_and_borrowed_conversion_match() {
-        let uri =
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).expect("URI should build");
+        let uri = UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
+            .expect("URI should build");
 
         let key_from_borrowed = super::UriProjectionKey::from(&uri);
         let key_from_owned = super::UriProjectionKey::from(uri.clone());
@@ -378,8 +378,8 @@ mod tests {
 
     #[test]
     fn uri_projection_key_uses_canonical_major_and_resource_semantics() {
-        let uri =
-            UUri::try_from_parts("authority-a", 0x5BA0, 0xFF, 0x8001).expect("URI should build");
+        let uri = UUri::try_from_parts("authority-a", 0x0001_5BA0, 0xFF, 0x8001)
+            .expect("URI should build");
 
         let key = super::UriProjectionKey::from(&uri);
 
@@ -393,19 +393,19 @@ mod tests {
     async fn fetch_subscribers_dedupes_duplicate_subscribers_after_topic_normalization() {
         let static_path = write_static_config(
             r#"{
-                "//authority-a/5BA0/1/8001": [
-                    "//authority-b/5678/1/1234",
-                    "//authority-b/5678/1/1234",
-                    "//authority-c/5678/1/1234"
+                "//authority-a/5BA0/1/1/8001": [
+                    "//authority-b/5678/1/1/1234",
+                    "//authority-b/5678/1/1/1234",
+                    "//authority-c/5678/1/1/1234"
                 ],
-                "//authority-a/5BA0/1/8002": [
-                    "//authority-z/5678/1/1234"
+                "//authority-a/5BA0/1/1/8002": [
+                    "//authority-z/5678/1/1/1234"
                 ]
             }"#,
         );
 
         let backend = USubscriptionStaticFile::new(static_path.to_string_lossy().to_string());
-        let topic = UUri::from_str("//authority-a/5BA0/1/FFFF").expect("valid topic");
+        let topic = UUri::from_str("//authority-a/5BA0/1/1/FFFF").expect("valid topic");
 
         let response = backend
             .fetch_subscribers(&topic)
@@ -420,16 +420,16 @@ mod tests {
             .collect();
 
         assert_eq!(subscriber_uris.len(), 3);
-        assert!(subscriber_uris.contains("//authority-b/5678/1/1234"));
-        assert!(subscriber_uris.contains("//authority-c/5678/1/1234"));
-        assert!(subscriber_uris.contains("//authority-z/5678/1/1234"));
+        assert!(subscriber_uris.contains("//authority-b/5678/1/1/1234"));
+        assert!(subscriber_uris.contains("//authority-c/5678/1/1/1234"));
+        assert!(subscriber_uris.contains("//authority-z/5678/1/1/1234"));
     }
 
     #[tokio::test]
     async fn cache_on_first_read_reuses_snapshot_until_cache_is_cleared() {
         let static_path = write_static_config(
             r#"{
-                "//authority-a/5BA0/1/8001": ["//authority-b/5678/1/1234"]
+                "//authority-a/5BA0/1/1/8001": ["//authority-b/5678/1/1/1234"]
             }"#,
         );
         let backend = USubscriptionStaticFile::with_reload_strategy(
@@ -468,7 +468,7 @@ mod tests {
     async fn always_reload_strategy_reads_updated_file_contents() {
         let static_path = write_static_config(
             r#"{
-                "//authority-a/5BA0/1/8001": ["//authority-b/5678/1/1234"]
+                "//authority-a/5BA0/1/1/8001": ["//authority-b/5678/1/1/1234"]
             }"#,
         );
         let backend = USubscriptionStaticFile::new(static_path.to_string_lossy().to_string());
@@ -482,9 +482,9 @@ mod tests {
         fs::write(
             &static_path,
             r#"{
-                "//authority-a/5BA0/1/8001": [
-                    "//authority-b/5678/1/1234",
-                    "//authority-c/5678/1/1234"
+                "//authority-a/5BA0/1/1/8001": [
+                    "//authority-b/5678/1/1/1234",
+                    "//authority-c/5678/1/1/1234"
                 ]
             }"#,
         )

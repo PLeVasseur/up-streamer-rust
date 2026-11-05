@@ -37,25 +37,25 @@ fn subscription(topic: UUri, subscriber: UUri) -> SubscriptionInfo {
 }
 
 fn topic_uri(authority: Option<&str>, index: usize) -> UUri {
-    let ue_id = 0x5BA0 + (index as u32 % 0x1F0);
+    let ue_id = 0x0001_5BA0 + (index as u32 % 0x1F0);
     let resource_id = 0x8001 + (index as u16 % 0x01F0);
 
     match authority {
         Some(authority) => UUri::try_from_parts(authority, ue_id, 0x1, resource_id)
             .expect("topic URI should build"),
-        None => UUri::from_str(&format!("//*/{ue_id:X}/1/{resource_id:X}"))
+        None => UUri::from_str(&format!("//*/{:X}/1/1/{resource_id:X}", ue_id & 0xffff))
             .expect("wildcard topic URI should parse"),
     }
 }
 
 fn subscriber_uri(authority: Option<&str>, index: usize) -> UUri {
-    let ue_id = 0x7000 + (index as u32 % 0x200);
+    let ue_id = 0x0001_7000 + (index as u32 % 0x200);
     let resource_id = 0x9000 + (index as u16 % 0x200);
 
     match authority {
         Some(authority) => UUri::try_from_parts(authority, ue_id, 0x1, resource_id)
             .expect("subscriber URI should build"),
-        None => UUri::from_str(&format!("//*/{ue_id:X}/1/{resource_id:X}"))
+        None => UUri::from_str(&format!("//*/{:X}/1/1/{resource_id:X}", ue_id & 0xffff))
             .expect("wildcard subscriber URI should parse"),
     }
 }
@@ -324,7 +324,7 @@ pub async fn run_single_route_dispatch_once() -> usize {
     let dispatch_transport = Arc::new(CountingDispatchTransport::default());
     let out_transport: Arc<dyn UTransport> = dispatch_transport.clone();
     let message = UMessageBuilder::publish(
-        UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001)
+        UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
             .expect("benchmark publish URI should build"),
     )
     .build()

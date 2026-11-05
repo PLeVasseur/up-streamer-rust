@@ -1125,8 +1125,8 @@ mod rpc_burst_tests {
     const CAPACITY: usize = 4;
     /// Two more responses than the inbox holds, like the bursts that follow a first-message stall.
     const BURST: usize = CAPACITY + 2;
-    const CLIENT: &str = "//burst-client/5BA0/1/0";
-    const METHOD: &str = "//burst-server/5BA0/1/1000";
+    const CLIENT: &str = "//burst-client/5BA0/1/1/0";
+    const METHOD: &str = "//burst-server/5BA0/1/1/1000";
 
     fn uri(value: &str) -> UUri {
         UUri::try_from(value).unwrap()

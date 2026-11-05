@@ -168,7 +168,7 @@ mod tests {
 
     #[test]
     fn resolver_blocks_mismatched_topic_authority() {
-        let topic = UUri::from_str("//authority-a/5BA0/1/8001").expect("valid topic UUri");
+        let topic = UUri::from_str("//authority-a/5BA0/1/1/8001").expect("valid topic UUri");
 
         let source = PublishRouteResolver::derive_source_filter_for_topic(
             "authority-c",
@@ -181,7 +181,7 @@ mod tests {
 
     #[test]
     fn resolver_allows_wildcard_topic_authority() {
-        let topic = UUri::from_str("//*/5BA0/1/8001").expect("valid wildcard topic UUri");
+        let topic = UUri::from_str("//*/5BA0/1/1/8001").expect("valid wildcard topic UUri");
 
         let source = PublishRouteResolver::derive_source_filter_for_topic(
             "authority-c",
@@ -203,17 +203,17 @@ mod tests {
     #[test]
     fn resolver_dedupes_sources_across_subscribers() {
         let subscribers = subscription_lookup(vec![
-            subscription_info("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234"),
-            subscription_info("//authority-a/5BA0/1/8001", "//authority-b/5679/1/1234"),
-            subscription_info("//authority-z/5BA0/1/8001", "//authority-b/567A/1/1234"),
+            subscription_info("//authority-a/5BA0/1/1/8001", "//authority-b/5678/1/1/1234"),
+            subscription_info("//authority-a/5BA0/1/1/8001", "//authority-b/5679/1/1/1234"),
+            subscription_info("//authority-z/5BA0/1/1/8001", "//authority-b/567A/1/1/1234"),
         ]);
 
         let filters =
             PublishRouteResolver::derive_source_filters("authority-a", "authority-b", &subscribers);
 
         assert_eq!(filters.len(), 1);
-        let expected =
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).expect("expected source uri");
+        let expected = UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
+            .expect("expected source uri");
         assert!(filters
             .values()
             .any(|source_filter| source_filter == &expected));

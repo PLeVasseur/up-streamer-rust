@@ -175,7 +175,7 @@ fn isolated(name: &str, kind: FixtureKind, body: fn()) {
 }
 
 fn topic() -> UUri {
-    UUri::try_from("//cloudevents-setup/1234/1/8001").unwrap()
+    UUri::try_from("//cloudevents-setup/1234/1/1/8001").unwrap()
 }
 
 fn selected_frame(context: &payloads::NativeContext) -> UOwnedFrame {

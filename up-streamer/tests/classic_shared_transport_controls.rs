@@ -22,7 +22,7 @@ impl UListener for Collect {
 }
 
 fn uri(authority: &str, resource: u16) -> UUri {
-    UUri::try_from_parts(authority, 0x1234, 1, resource).unwrap()
+    UUri::try_from_parts(authority, 0x0001_1234, 1, resource).unwrap()
 }
 
 fn notification(source: &str, sink: &str, sequence: u8) -> UMessage {
@@ -210,7 +210,7 @@ async fn fixture_publish_matching_and_unregister_preserve_full_filter_identity()
     bus.register_listener(&UUri::any(), Some(&uri("control", 0)), control.clone())
         .await
         .unwrap();
-    let source_a = UUri::try_from_parts("source-a", 0x1234, 1, 0xFFFF).unwrap();
+    let source_a = UUri::try_from_parts("source-a", 0x0001_1234, 1, 0xFFFF).unwrap();
     let source_b = uri("source-b", 0x8001);
     bus.register_listener(&source_a, None, listener.clone())
         .await

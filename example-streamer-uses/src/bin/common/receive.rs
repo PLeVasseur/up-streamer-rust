@@ -497,7 +497,7 @@ mod tests {
         let transport: Arc<dyn UOwnedTransport> = Arc::new(ImmediateDelivery {
             removed: removed.clone(),
         });
-        let source = UUri::try_from_parts("ready-test", 0x5BA0, 1, 0x8001).unwrap();
+        let source = UUri::try_from_parts("ready-test", 0x0001_5BA0, 1, 0x8001).unwrap();
         let frame = owned(&transport, &source, None, 1000, None).await.unwrap();
         assert_eq!(frame.payload_bytes(), b"first frame");
         assert_eq!(removed.load(Ordering::SeqCst), 1);
@@ -536,7 +536,7 @@ mod tests {
     #[tokio::test]
     async fn rejected_registration_never_announces_endpoint_readiness() {
         let transport: Arc<dyn UOwnedTransport> = Arc::new(RejectedRegistration);
-        let source = UUri::try_from_parts("ready-test", 0x5BA0, 1, 0x8001).unwrap();
+        let source = UUri::try_from_parts("ready-test", 0x0001_5BA0, 1, 0x8001).unwrap();
         let error = owned_with_ready(&transport, &source, None, 1000, None, || {
             panic!("readiness must follow successful registration");
         })
@@ -619,7 +619,7 @@ mod tests {
         let caller = tokio::spawn(async move {
             owned(
                 &transport,
-                &UUri::try_from("//ready-test/5ba0/1/8001").unwrap(),
+                &UUri::try_from("//ready-test/5BA0/1/1/8001").unwrap(),
                 None,
                 1000,
                 None,
@@ -644,7 +644,7 @@ mod tests {
         let caller = tokio::spawn(async move {
             owned_with_ready(
                 &transport,
-                &UUri::try_from("//ready-test/5ba0/1/8001").unwrap(),
+                &UUri::try_from("//ready-test/5BA0/1/1/8001").unwrap(),
                 None,
                 1000,
                 None,
@@ -665,7 +665,7 @@ mod tests {
         let transport: Arc<dyn UOwnedTransport> = control.clone();
         let receiver = register_owned(
             &transport,
-            &UUri::try_from("//ready-test/5ba0/1/8001").unwrap(),
+            &UUri::try_from("//ready-test/5BA0/1/1/8001").unwrap(),
             None,
         )
         .await
@@ -696,7 +696,7 @@ mod tests {
         let release_path = release.clone();
         let control = Controlled::new(false, false);
         let transport: Arc<dyn UOwnedTransport> = control.clone();
-        let source = UUri::try_from("//window-test/5ba0/1/8001").unwrap();
+        let source = UUri::try_from("//window-test/5BA0/1/1/8001").unwrap();
         let sender = {
             let control = Arc::clone(&control);
             let source = source.clone();

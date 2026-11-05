@@ -117,11 +117,12 @@ mod tests {
             assert_eq!(bytes.len(), expected_len);
             let representation = fixtures::stable_payload_representation(fixture.case()).unwrap();
             let identity = agreement.identity_for(&representation).unwrap();
-            let metadata =
-                UFrameMetadata::publish(UUri::try_from_parts("sensor", 0x4210, 1, 0x9001).unwrap())
-                    .with_native_payload_identity(identity)
-                    .build()
-                    .unwrap();
+            let metadata = UFrameMetadata::publish(
+                UUri::try_from_parts("sensor", 0x0001_4210, 1, 0x9001).unwrap(),
+            )
+            .with_native_payload_identity(identity)
+            .build()
+            .unwrap();
             fixture.validate(&metadata, &bytes, &agreement).unwrap();
             assert!(fixture
                 .validate(&metadata, &bytes[..bytes.len() - 1], &agreement)

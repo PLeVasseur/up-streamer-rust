@@ -62,8 +62,8 @@ mod tests {
 
     #[test]
     fn owned_and_borrowed_projection_are_identical() {
-        let uri =
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8001).expect("URI should build");
+        let uri = UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x01, 0x8001)
+            .expect("URI should build");
 
         let key_from_borrowed = UriIdentityKey::from(&uri);
         let key_from_owned = UriIdentityKey::from(uri.clone());
@@ -73,8 +73,8 @@ mod tests {
 
     #[test]
     fn projection_uses_canonical_major_and_resource_semantics() {
-        let uri =
-            UUri::try_from_parts("authority-a", 0x5BA0, 0xFF, 0x8001).expect("URI should build");
+        let uri = UUri::try_from_parts("authority-a", 0x0001_5BA0, 0xFF, 0x8001)
+            .expect("URI should build");
 
         let key = UriIdentityKey::from(&uri);
 
@@ -86,9 +86,9 @@ mod tests {
 
     #[test]
     fn projection_key_hashing_dedupes_equal_projected_uris() {
-        let normalized =
-            UUri::try_from_parts("authority-a", 0x5BA0, 0xFF, 0x8001).expect("URI should build");
-        let parsed = "//authority-a/5BA0/FF/8001"
+        let normalized = UUri::try_from_parts("authority-a", 0x0001_5BA0, 0xFF, 0x8001)
+            .expect("URI should build");
+        let parsed = "//authority-a/5BA0/1/FF/8001"
             .parse::<UUri>()
             .expect("URI should parse");
 

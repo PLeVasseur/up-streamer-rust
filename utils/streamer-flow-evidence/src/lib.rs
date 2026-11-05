@@ -294,7 +294,7 @@ mod tests {
             id: "id".into(),
             reqid: None,
             kind: "Publish".into(),
-            source: "//a/1/1/8001".into(),
+            source: "//a/1/1/1/8001".into(),
             sink: None,
             encoding: Some(1),
             present: true,
@@ -405,7 +405,7 @@ mod borrowed_header_tests {
                 Some(&b"opaque"[..]),
             ),
         ] {
-            let source = UUri::try_from_parts("source", 0x1234, 1, 0x8001).unwrap();
+            let source = UUri::try_from_parts("source", 0x0001_1234, 1, 0x8001).unwrap();
             let mut builder = UFrameMetadata::publish(source);
             if let Some(encoding) = encoding {
                 builder = builder.with_payload_encoding(encoding);

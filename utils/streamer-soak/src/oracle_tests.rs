@@ -22,8 +22,8 @@ fn leg_events(id: &str, sequence: u64, request: Option<&str>, rpc: bool, drop: b
             let observation = json!({"schema": 1, "run": "fixture", "actor": actor, "stage": stage,
                 "route": if actor == "bridge" { Some(if response { "reverse" } else { "forward" }) } else { None },
                 "id": id, "reqid": request, "kind": if response { "Response" } else if rpc { "Request" } else { "Publish" },
-                "source": if response { "//b/2/1/11" } else { "//a/1/1/0" },
-                "sink": if response { Some("//a/1/1/0") } else if rpc { Some("//b/2/1/11") } else { None },
+                "source": if response { "//b/2/1/1/11" } else { "//a/1/1/1/0" },
+                "sink": if response { Some("//a/1/1/1/0") } else if rpc { Some("//b/2/1/1/11") } else { None },
                 "encoding": 1, "present": true, "length": 3, "sha256": "a".repeat(64)});
             if actor == "bridge" {
                 (actor.into(), "FLOW_MESSAGE_EVIDENCE".into(), observation)
@@ -243,7 +243,7 @@ fn validates_complete_rpc_and_endpoint_reversal() {
 }
 
 #[test_case("reqid", "foreign"; "wrong_correlation")]
-#[test_case("source", "//foreign/1/1/0"; "wrong_responder")]
+#[test_case("source", "//foreign/1/1/1/0"; "wrong_responder")]
 #[test_case("sha256", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"; "changed_echo")]
 fn rejects_rpc_mutation(field: &str, replacement: &str) {
     let mut values = rpc();

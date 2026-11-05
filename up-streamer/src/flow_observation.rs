@@ -184,7 +184,7 @@ mod record_writer_regression_tests {
     fn actual_emitters_child() {
         if std::env::var_os(CHILD_ENV).is_none() { return }
         let message = UMessageBuilder::publish(
-            UUri::try_from_parts("record-test", 0x1234, 1, 0x8001).unwrap(),
+            UUri::try_from_parts("record-test", 0x0001_1234, 1, 0x8001).unwrap(),
         ).build_with_payload(&b"abc"[..], PayloadEncoding::RAW).unwrap();
         let record = Observation::message("ingress", Some("source -> sink"), &message)
             .unwrap().unwrap();

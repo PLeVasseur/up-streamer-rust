@@ -78,7 +78,7 @@ mod tests {
         declared: usize,
         accepted: bool,
     ) {
-        let source = UUri::try_from_parts("segments", 0x5BA0, 1, 0x8001).unwrap();
+        let source = UUri::try_from_parts("segments", 0x0001_5BA0, 1, 0x8001).unwrap();
         let view = Segmented {
             metadata: UFrameMetadata::publish(source)
                 .with_payload_encoding(PayloadEncoding::RAW)

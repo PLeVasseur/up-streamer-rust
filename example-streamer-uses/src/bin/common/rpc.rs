@@ -249,8 +249,8 @@ mod tests {
             fail_on,
         });
         let transport: Arc<dyn UOwnedTransport> = raw.clone();
-        let method = UUri::try_from("//rpc-role/2/1/1").unwrap();
-        let reply = UUri::try_from("//rpc-role/1/1/0").unwrap();
+        let method = UUri::try_from("//rpc-role/2/1/1/1").unwrap();
+        let reply = UUri::try_from("//rpc-role/1/1/1/0").unwrap();
         let options = ClientOptions {
             response_source: method.clone(),
             response_sink: reply.clone(),

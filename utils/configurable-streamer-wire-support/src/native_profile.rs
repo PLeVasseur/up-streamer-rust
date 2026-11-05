@@ -596,7 +596,7 @@ mod tests {
     }
 
     fn topic() -> UUri {
-        UUri::try_from_parts("native-test", 0x5BA0, 1, 0x8001).unwrap()
+        UUri::try_from_parts("native-test", 0x0001_5BA0, 1, 0x8001).unwrap()
     }
 
     struct DeploymentFixture {

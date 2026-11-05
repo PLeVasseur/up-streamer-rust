@@ -240,7 +240,7 @@ pub(super) fn configure_endpoints(
         .map_err(|e| anyhow!("{e}"))?;
     let expected = expected_identity(row, document)?;
     let message = up_rust::UMessageBuilder::publish(
-        up_rust::UUri::try_from_parts(AUTHORITY_A, 0x5BA0, 1, 0x8001)
+        up_rust::UUri::try_from_parts(AUTHORITY_A, 0x0001_5BA0, 1, 0x8001)
             .map_err(|e| anyhow!("{e}"))?,
     )
     .build_with_payload(

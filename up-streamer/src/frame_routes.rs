@@ -717,7 +717,7 @@ pub(crate) mod owned {
             let capture = Capture::default();
             let _subscriber = tracing::subscriber::set_default(capture.clone());
             let agreement = agreement();
-            let topic = UUri::try_from_parts("projection-source", 0x5BA0, 1, 0x8001).unwrap();
+            let topic = UUri::try_from_parts("projection-source", 0x0001_5BA0, 1, 0x8001).unwrap();
             let message = up_rust::UMessageBuilder::publish(topic.clone())
                 .build_with_payload(
                     bytes::Bytes::from_static(&[0; 8]),

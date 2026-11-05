@@ -101,7 +101,7 @@ impl FlowConfig {
     // The existing examples use one fixture entity independently of the backend's
     // local registration URI. Keep that distinction when sharing their flow.
     pub fn uri(&self, authority: &str, resource: u16) -> Result<UUri, UStatus> {
-        UUri::try_from_parts(authority, 0x5BA0, 1, resource)
+        UUri::try_from_parts(authority, 0x0001_5BA0, 1, resource)
             .map_err(|error| invalid(error.to_string()))
     }
 
@@ -748,7 +748,7 @@ mod tests {
         let metadata = settings.outbound_metadata().unwrap();
         assert_eq!(
             metadata.source(),
-            &UUri::try_from_parts("source", 0x5BA0, 1, 0x9001).unwrap()
+            &UUri::try_from_parts("source", 0x0001_5BA0, 1, 0x9001).unwrap()
         );
         settings.role = FlowRole::PubReceiver;
         settings.local_authority = "sink".into();
@@ -825,7 +825,7 @@ mod tests {
             );
             assert_eq!(
                 frame.metadata().sink(),
-                Some(&UUri::try_from_parts("sink", 0x5BA0, 1, 0).unwrap())
+                Some(&UUri::try_from_parts("sink", 0x0001_5BA0, 1, 0).unwrap())
             );
         }
     }

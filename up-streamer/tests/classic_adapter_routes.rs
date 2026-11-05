@@ -58,7 +58,7 @@ impl USubscription for EmptySubscription {
     ) -> Result<Vec<SubscriptionInfo>, UStatus> {
         Ok(vec![SubscriptionInfo::new(
             topic(),
-            UUri::try_from_parts("authority-b", 0x5678, 1, 0).unwrap(),
+            UUri::try_from_parts("authority-b", 0x0001_5678, 1, 0).unwrap(),
             SubscriptionStatus::Subscribed,
             None,
             None,
@@ -230,7 +230,7 @@ impl UOwnedTransportImpl for RecordingOwnedTransport {
 }
 
 fn topic() -> UUri {
-    UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8001).expect("topic")
+    UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x01, 0x8001).expect("topic")
 }
 
 fn xcdr_encoding() -> PayloadEncoding {

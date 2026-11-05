@@ -30,10 +30,22 @@ pub fn remote_authority_b() -> String {
 
 /// Builds a local fixture URI with the given entity ID, major version 1 and resource 2.
 pub fn local_client_uuri(id: u32) -> UUri {
-    UUri::try_from_parts(&local_authority(), id, 1, 2).expect("local client URI should build")
+    UUri::try_from_parts(
+        &local_authority(),
+        0x0001_0000 | u32::from(u16::try_from(id).expect("fixture entity type fits")),
+        1,
+        2,
+    )
+    .expect("local client URI should build")
 }
 
 /// Builds a remote fixture URI with the supplied authority/entity, major version 1 and resource 2.
 pub fn remote_client_uuri(authority: String, id: u32) -> UUri {
-    UUri::try_from_parts(&authority, id, 1, 2).expect("remote client URI should build")
+    UUri::try_from_parts(
+        &authority,
+        0x0001_0000 | u32::from(u16::try_from(id).expect("fixture entity type fits")),
+        1,
+        2,
+    )
+    .expect("remote client URI should build")
 }

@@ -718,7 +718,7 @@ mod tests {
     fn two_bus_config(namespace_a: &str, namespace_b: &str) -> Config {
         json5::from_str(&format!(r#"{{
             up_streamer_config: {{ message_queue_size: 32 }},
-            streamer_uuri: {{ authority: "bridge", ue_id: 1, ue_version_major: 1 }},
+            streamer_uuri: {{ authority: "bridge", ue_id: 65537, ue_version_major: 1 }},
             usubscription_config: {{ file_path: "subscriptions.json" }},
             transports: {{ zenoh: {{config_file:"unused", endpoints:[]}}, mqtt: {{config_file:"unused", endpoints:[]}},
                 iceoryx2: {{ endpoints: [
@@ -804,7 +804,7 @@ mod tests {
         format!(
             r#"{{
                 up_streamer_config: {{ message_queue_size: 4 }},
-                streamer_uuri: {{ authority: "authority-streamer", ue_id: 1, ue_version_major: 1 }},
+                streamer_uuri: {{ authority: "authority-streamer", ue_id: 65537, ue_version_major: 1 }},
                 usubscription_config: {{ mode: "static_file", file_path: "subscriptions.json" }},
                 transports: {{
                     zenoh: {{
@@ -843,7 +843,7 @@ mod tests {
         let config: Config = json5::from_str(
             r#"{
                 up_streamer_config: { message_queue_size: 4 },
-                streamer_uuri: { authority: "authority-streamer", ue_id: 1, ue_version_major: 1 },
+                streamer_uuri: { authority: "authority-streamer", ue_id: 65537, ue_version_major: 1 },
                 usubscription_config: { mode: "static_file", file_path: "subscriptions.json" },
                 transports: {
                     zenoh: {
@@ -1035,7 +1035,7 @@ mod tests {
         let config: Config = json5::from_str(
             r#"{
                 up_streamer_config: { message_queue_size: 4 },
-                streamer_uuri: { authority: "authority-streamer", ue_id: 1, ue_version_major: 1 },
+                streamer_uuri: { authority: "authority-streamer", ue_id: 65537, ue_version_major: 1 },
                 usubscription_config: { mode: "static_file", file_path: "subscriptions.json" },
                 transports: {
                     zenoh: { config_file: "ZENOH_CONFIG.json5", endpoints: [] },

@@ -143,7 +143,7 @@ mod dedicated_predicate_tests {
         };
         streamer_flow_evidence::prepare_output_from_env().unwrap();
         let message = up_rust::UMessageBuilder::publish(
-            up_rust::UUri::try_from("//source/1234/1/8001").unwrap(),
+            up_rust::UUri::try_from("//source/1234/1/1/8001").unwrap(),
         )
         .build_with_payload(vec![1_u8, 2, 3], up_rust::PayloadEncoding::RAW)
         .unwrap();

@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn cloudevents_controller_rejects_changed_payload_even_with_rebound_event_hash() {
         let message = up_rust::UMessageBuilder::publish(
-            up_rust::UUri::try_from("//source/1234/1/8001").unwrap(),
+            up_rust::UUri::try_from("//source/1234/1/1/8001").unwrap(),
         )
         .build_with_payload(vec![0xff, 0, 0xfe], up_rust::PayloadEncoding::RAW)
         .unwrap();

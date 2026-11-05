@@ -57,7 +57,7 @@ fn serialized_roundtrip(event: &CloudEvent) -> Result<(UMessage, Vec<u8>), UStat
 }
 
 fn setup_controls() -> Result<(), UStatus> {
-    let topic = UUri::try_from("//cloudevents-control/1234/1/8001").map_err(invalid)?;
+    let topic = UUri::try_from("//cloudevents-control/1234/1/1/8001").map_err(invalid)?;
     let message = UMessageBuilder::publish(topic.clone())
         .build_with_payload(vec![0xff, 0, 0xfe], up_rust::PayloadEncoding::RAW)
         .map_err(invalid)?;
@@ -299,10 +299,10 @@ mod tests {
 
     #[test]
     fn actual_protobuf_events_preserve_all_four_message_roles() {
-        let source = UUri::try_from("//source/1234/1/8001").unwrap();
-        let destination = UUri::try_from("//sink/1234/1/0").unwrap();
-        let method = UUri::try_from("//sink/1234/1/1000").unwrap();
-        let reply = UUri::try_from("//source/1234/1/0").unwrap();
+        let source = UUri::try_from("//source/1234/1/1/8001").unwrap();
+        let destination = UUri::try_from("//sink/1234/1/1/0").unwrap();
+        let method = UUri::try_from("//sink/1234/1/1/1000").unwrap();
+        let reply = UUri::try_from("//source/1234/1/1/0").unwrap();
         let request = UMessageBuilder::request(method, reply, 1000)
             .build_with_payload(vec![0xff, 0, 0xfe], up_rust::PayloadEncoding::RAW)
             .unwrap();
@@ -314,7 +314,7 @@ mod tests {
                 .build_with_payload(Vec::<u8>::new(), up_rust::PayloadEncoding::RAW)
                 .unwrap(),
             UMessageBuilder::notification(
-                UUri::try_from("//source/1234/1/8000").unwrap(),
+                UUri::try_from("//source/1234/1/1/8000").unwrap(),
                 destination,
             )
             .build_with_payload(vec![3, 0, 4], up_rust::PayloadEncoding::RAW)
@@ -367,7 +367,7 @@ mod native_projection_tests {
         NATIVE
             .set(agreement)
             .expect("isolated native control agreement");
-        let topic = UUri::try_from("//source/1234/1/8001").unwrap();
+        let topic = UUri::try_from("//source/1234/1/1/8001").unwrap();
         let metadata = UFrameMetadata::publish(topic.clone())
             .with_native_payload_identity(identity)
             .build()

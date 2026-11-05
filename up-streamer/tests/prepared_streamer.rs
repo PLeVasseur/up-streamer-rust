@@ -124,8 +124,8 @@ fn native_config(endpoint: &str, listen: bool) -> zenoh_config::Config {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_native_bridge_preserves_opaque_metadata_order_presence_and_retained_storage() {
-    let source = UUri::try_from_parts("authority-a", 0x5BA0, 1, 0x8001).unwrap();
-    let subscriber = UUri::try_from_parts("authority-b", 0x5678, 1, 0).unwrap();
+    let source = UUri::try_from_parts("authority-a", 0x0001_5BA0, 1, 0x8001).unwrap();
+    let subscriber = UUri::try_from_parts("authority-b", 0x0001_5678, 1, 0).unwrap();
     let limits = RouteLimits {
         max_metadata_len: 3072,
         max_payload_len: 64,
@@ -188,7 +188,7 @@ async fn real_native_bridge_preserves_opaque_metadata_order_presence_and_retaine
     let output = Arc::new(
         ZenohPreparedCore::new(
             native_config(&endpoint, true),
-            "//bridge/4210/1/0",
+            "//bridge/4210/1/1/0",
             &catalog,
             setup(),
         )
@@ -198,7 +198,7 @@ async fn real_native_bridge_preserves_opaque_metadata_order_presence_and_retaine
     let receiver = Arc::new(
         ZenohPreparedCore::new(
             native_config(&endpoint, false),
-            "//receiver/4210/1/0",
+            "//receiver/4210/1/1/0",
             &[ZenohRouteReservation {
                 transmit: false,
                 ..catalog[0].clone()
@@ -428,8 +428,8 @@ async fn physical_islands_require_bridge_and_do_not_reflect(
 ) {
     use up_streamer::OwnedFrameEndpoint;
     use up_transport_iceoryx2_rust::{BenchmarkOwnedIceoryx2Core, Iceoryx2PubSub};
-    let source = UUri::try_from_parts("authority-a", 0x5BA0, 1, 0x8001).unwrap();
-    let target = UUri::try_from_parts("authority-b", 0x5678, 1, 0).unwrap();
+    let source = UUri::try_from_parts("authority-a", 0x0001_5BA0, 1, 0x8001).unwrap();
+    let target = UUri::try_from_parts("authority-b", 0x0001_5678, 1, 0).unwrap();
     let sink = notification.then_some(target.clone());
     let limits = RouteLimits {
         max_metadata_len: 3072,
@@ -669,8 +669,8 @@ async fn transported_equal_size_foreign_token_id_zero_is_rejected_before_typed_p
     let agreement = NativeProfileAgreement::new(profile.clone(), &profile).unwrap();
     let typed =
         RxAdmission::<CarriedExpected>::new(agreement.clone(), HeaderLimits::default()).unwrap();
-    let source = UUri::try_from_parts("authority-a", 0x5BA0, 1, 0x8001).unwrap();
-    let subscriber = UUri::try_from_parts("authority-b", 0x5678, 1, 0).unwrap();
+    let source = UUri::try_from_parts("authority-a", 0x0001_5BA0, 1, 0x8001).unwrap();
+    let subscriber = UUri::try_from_parts("authority-b", 0x0001_5678, 1, 0).unwrap();
     let limits = RouteLimits {
         max_metadata_len: 3072,
         max_payload_len: 8,
@@ -725,7 +725,7 @@ async fn transported_equal_size_foreign_token_id_zero_is_rejected_before_typed_p
     let output = Arc::new(
         ZenohPreparedCore::new(
             native_config(&endpoint, true),
-            "//bridge/4210/1/0",
+            "//bridge/4210/1/1/0",
             &catalog,
             setup(),
         )
@@ -735,7 +735,7 @@ async fn transported_equal_size_foreign_token_id_zero_is_rejected_before_typed_p
     let receiver = Arc::new(
         ZenohPreparedCore::new(
             native_config(&endpoint, false),
-            "//receiver/4210/1/0",
+            "//receiver/4210/1/1/0",
             &[ZenohRouteReservation {
                 transmit: false,
                 ..catalog[0].clone()

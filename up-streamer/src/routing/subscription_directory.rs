@@ -136,8 +136,8 @@ mod tests {
     #[tokio::test]
     async fn apply_snapshot_replaces_previous_cache_with_empty_snapshot() {
         let initial_cache = SubscriptionCache::new(vec![subscription(
-            "//authority-a/5BA0/1/8001",
-            "//authority-b/5678/1/1234",
+            "//authority-a/5BA0/1/1/8001",
+            "//authority-b/5678/1/1/1234",
         )])
         .expect("initial cache should build");
 
@@ -161,8 +161,8 @@ mod tests {
 
         directory
             .apply_snapshot(vec![subscription(
-                "//authority-a/5BA0/1/8001",
-                "//authority-b/5678/1/1234",
+                "//authority-a/5BA0/1/1/8001",
+                "//authority-b/5678/1/1/1234",
             )])
             .await
             .expect("first snapshot should apply");

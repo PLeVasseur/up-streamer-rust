@@ -581,8 +581,10 @@ mod tests {
         let recording_transport = Arc::new(RecordingTransport::default());
         let in_transport: Arc<dyn UTransport> = recording_transport.clone();
         let (out_sender, _) = tokio::sync::broadcast::channel(16);
-        let subscription_cache =
-            make_subscription_cache(&[("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234")]);
+        let subscription_cache = make_subscription_cache(&[(
+            "//authority-a/5BA0/1/1/8001",
+            "//authority-b/5678/1/1/1234",
+        )]);
         let subscription_directory = SubscriptionDirectory::new(subscription_cache);
 
         assert!(route_registry
@@ -608,8 +610,8 @@ mod tests {
 
         let request_source = authority_to_wildcard_filter("authority-a");
         let request_sink = authority_to_wildcard_filter("authority-b");
-        let publish_source =
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).expect("valid publish source");
+        let publish_source = UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
+            .expect("valid publish source");
 
         assert_eq!(
             recording_transport.register_call_count(&request_source, Some(&request_sink)),
@@ -635,8 +637,10 @@ mod tests {
         let recording_transport = Arc::new(RecordingTransport::default());
         let in_transport: Arc<dyn UTransport> = recording_transport.clone();
         let (out_sender, _) = tokio::sync::broadcast::channel(16);
-        let subscription_cache =
-            make_subscription_cache(&[("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234")]);
+        let subscription_cache = make_subscription_cache(&[(
+            "//authority-a/5BA0/1/1/8001",
+            "//authority-b/5678/1/1/1234",
+        )]);
         let subscription_directory = SubscriptionDirectory::new(subscription_cache);
 
         let first_register = route_registry
@@ -667,8 +671,8 @@ mod tests {
 
         let request_source = authority_to_wildcard_filter("authority-a");
         let request_sink = authority_to_wildcard_filter("authority-b");
-        let publish_source =
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).expect("valid publish source");
+        let publish_source = UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
+            .expect("valid publish source");
 
         assert_eq!(
             recording_transport.register_call_count(&request_source, Some(&request_sink)),
@@ -686,8 +690,10 @@ mod tests {
         let recording_transport = Arc::new(RecordingTransport::default());
         let in_transport: Arc<dyn UTransport> = recording_transport.clone();
         let (out_sender, _) = tokio::sync::broadcast::channel(16);
-        let subscription_cache =
-            make_subscription_cache(&[("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234")]);
+        let subscription_cache = make_subscription_cache(&[(
+            "//authority-a/5BA0/1/1/8001",
+            "//authority-b/5678/1/1/1234",
+        )]);
         let subscription_directory = SubscriptionDirectory::new(subscription_cache);
 
         route_registry
@@ -704,8 +710,8 @@ mod tests {
 
         subscription_directory
             .apply_snapshot(subscription_snapshot(&[(
-                "//authority-a/5BA1/1/8002",
-                "//authority-b/5678/1/1234",
+                "//authority-a/5BA1/1/1/8002",
+                "//authority-b/5678/1/1/1234",
             )]))
             .await
             .expect("snapshot update should succeed");
@@ -722,9 +728,10 @@ mod tests {
         let request_source = authority_to_wildcard_filter("authority-a");
         let request_sink = authority_to_wildcard_filter("authority-b");
         let registered_publish_source =
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).expect("valid publish source");
-        let updated_publish_source =
-            UUri::try_from_parts("authority-a", 0x5BA1, 0x1, 0x8002).expect("valid publish source");
+            UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
+                .expect("valid publish source");
+        let updated_publish_source = UUri::try_from_parts("authority-a", 0x0001_5BA1, 0x1, 0x8002)
+            .expect("valid publish source");
 
         assert_eq!(
             recording_transport.unregister_call_count(&request_source, Some(&request_sink)),
@@ -746,8 +753,10 @@ mod tests {
         let recording_transport = Arc::new(RecordingTransport::default());
         let in_transport: Arc<dyn UTransport> = recording_transport.clone();
         let (out_sender, _) = tokio::sync::broadcast::channel(16);
-        let subscription_cache =
-            make_subscription_cache(&[("//authority-a/5BA0/1/8001", "//authority-b/5678/1/1234")]);
+        let subscription_cache = make_subscription_cache(&[(
+            "//authority-a/5BA0/1/1/8001",
+            "//authority-b/5678/1/1/1234",
+        )]);
         let subscription_directory = SubscriptionDirectory::new(subscription_cache);
 
         route_registry
@@ -773,8 +782,8 @@ mod tests {
 
         subscription_directory
             .apply_snapshot(subscription_snapshot(&[(
-                "//authority-a/5BA1/1/8002",
-                "//authority-b/5678/1/1234",
+                "//authority-a/5BA1/1/1/8002",
+                "//authority-b/5678/1/1/1234",
             )]))
             .await
             .expect("snapshot update should succeed");
@@ -791,10 +800,10 @@ mod tests {
             .await
             .expect("second route register should succeed");
 
-        let first_publish_source =
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001).expect("valid publish source");
-        let second_publish_source =
-            UUri::try_from_parts("authority-a", 0x5BA1, 0x1, 0x8002).expect("valid publish source");
+        let first_publish_source = UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
+            .expect("valid publish source");
+        let second_publish_source = UUri::try_from_parts("authority-a", 0x0001_5BA1, 0x1, 0x8002)
+            .expect("valid publish source");
 
         assert_eq!(
             recording_transport.register_call_count(&first_publish_source, None),

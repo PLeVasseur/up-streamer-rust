@@ -2,7 +2,7 @@
   up_streamer_config: { message_queue_size: 32 },
   streamer_uuri: {
     authority: "authority-streamer",
-    ue_id: 78,
+    ue_id: 65614,
     ue_version_major: 1,
   },
   usubscription_config: {

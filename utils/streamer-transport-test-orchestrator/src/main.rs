@@ -48,7 +48,7 @@ use up_rust::StablePayload;
 
 const AUTHORITY_A: &str = "authority-a";
 const AUTHORITY_B: &str = "authority-b";
-const UE_ID: u32 = 0x5BA0;
+const UE_ID: u32 = 0x0001_5BA0;
 const UE_VERSION_MAJOR: u8 = 1;
 const TOPIC_RESOURCE_ID: u16 = 0x8001;
 const METHOD_RESOURCE_ID: u16 = 0x1000;
@@ -5525,7 +5525,7 @@ fn streamer_uuri_config(row: &MatrixRow) -> serde_json::Value {
             "ue_version_major": UE_VERSION_MAJOR,
         });
     }
-    json!({ "authority": "authority-streamer", "ue_id": 78, "ue_version_major": 1 })
+    json!({ "authority": "authority-streamer", "ue_id": 0x0001_004E, "ue_version_major": 1 })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -10916,8 +10916,11 @@ mod tests {
             let applications = config["applications"].as_array().unwrap();
             assert_eq!(
                 applications[0]["id"].as_str().unwrap().to_ascii_lowercase(),
-                source_entity.to_ascii_lowercase(),
-                "SOME/IP client identity must preserve the source entity: {}",
+                format!(
+                    "0x{:x}",
+                    u32::from_str_radix(source_entity.trim_start_matches("0x"), 16).unwrap() & 0xffff
+                ),
+                "SOME/IP client identity must preserve the source entity type: {}",
                 row.id
             );
             let ids: BTreeSet<_> = applications
@@ -11971,7 +11974,7 @@ mod owned_role_exit_tests {
             thread::sleep(Duration::from_millis(10));
         }
         let message = up_rust::UMessageBuilder::publish(
-            up_rust::UUri::try_from("//authority-a/5BA0/1/8001").unwrap(),
+            up_rust::UUri::try_from("//authority-a/5BA0/1/1/8001").unwrap(),
         )
         .with_message_id(MESSAGE_ID.parse().unwrap())
         .build_with_payload(vec![7_u8; 272], up_rust::PayloadEncoding::RAW)

@@ -112,7 +112,7 @@ struct Cli {
     local_authority: String,
     #[arg(long)]
     peer_authority: String,
-    #[arg(long, default_value_t = 0x5BA0)]
+    #[arg(long, default_value_t = 0x0001_5BA0)]
     ue_id: u32,
     #[arg(long, default_value_t = 1)]
     ue_version_major: u8,
@@ -1158,12 +1158,12 @@ fn local_uri(cli: &Cli) -> Result<UUri, UStatus> {
 }
 
 fn topic_uri(authority: &str, resource_id: u16) -> Result<UUri, UStatus> {
-    UUri::try_from_parts(authority, 0x5BA0, 1, resource_id)
+    UUri::try_from_parts(authority, 0x0001_5BA0, 1, resource_id)
         .map_err(|error| invalid_config(format!("invalid topic URI: {error:?}")))
 }
 
 fn endpoint_uri(authority: &str) -> Result<UUri, UStatus> {
-    UUri::try_from_parts(authority, 0x5BA0, 1, 0)
+    UUri::try_from_parts(authority, 0x0001_5BA0, 1, 0)
         .map_err(|error| invalid_config(format!("invalid endpoint URI: {error:?}")))
 }
 
@@ -1173,7 +1173,7 @@ fn endpoint_wildcard(authority: &str) -> Result<UUri, UStatus> {
 }
 
 fn method_uri(authority: &str, resource_id: u16) -> Result<UUri, UStatus> {
-    UUri::try_from_parts(authority, 0x5BA0, 1, resource_id)
+    UUri::try_from_parts(authority, 0x0001_5BA0, 1, resource_id)
         .map_err(|error| invalid_config(format!("invalid method URI: {error:?}")))
 }
 

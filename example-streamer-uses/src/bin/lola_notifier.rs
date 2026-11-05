@@ -25,7 +25,7 @@ struct Cli {
     local_authority: String,
     #[arg(long)]
     peer_authority: String,
-    #[arg(long, default_value_t = 0x5BA0)]
+    #[arg(long, default_value_t = 0x0001_5BA0)]
     ue_id: u32,
     #[arg(long, default_value_t = 1)]
     ue_version_major: u8,

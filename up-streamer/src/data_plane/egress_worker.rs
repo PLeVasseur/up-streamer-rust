@@ -223,7 +223,7 @@ mod tests {
 
     fn test_message() -> UMessage {
         UMessageBuilder::publish(
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001)
+            UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
                 .expect("test URI should build"),
         )
         .build()

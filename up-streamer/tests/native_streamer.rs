@@ -341,15 +341,15 @@ impl RequestHandler for EchoRequestHandler {
 }
 
 fn uri_provider(authority: &str) -> Arc<StaticUriProvider> {
-    Arc::new(StaticUriProvider::new(authority, 0x5BA0, 0x01).expect("uri provider"))
+    Arc::new(StaticUriProvider::new(authority, 0x0001_5BA0, 0x01).expect("uri provider"))
 }
 
 fn topic_uri() -> UUri {
-    UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8001).expect("topic")
+    UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x01, 0x8001).expect("topic")
 }
 
 fn subscriber_uri() -> UUri {
-    UUri::try_from_parts("authority-b", 0x5BA0, 0x01, 0x0000).expect("subscriber")
+    UUri::try_from_parts("authority-b", 0x0001_5BA0, 0x01, 0x0000).expect("subscriber")
 }
 
 fn seeded_publish_subscription() -> Arc<dyn USubscription> {
@@ -364,7 +364,7 @@ fn seeded_publish_subscription() -> Arc<dyn USubscription> {
 
 fn owned_payload_frame() -> UOwnedFrame {
     let message = UMessageBuilder::publish(
-        UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8001).expect("topic"),
+        UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x01, 0x8001).expect("topic"),
     )
     .build_with_payload(
         Bytes::from_static(b"protobuf-payload"),
@@ -377,7 +377,7 @@ fn owned_payload_frame() -> UOwnedFrame {
 
 fn custom_payload_frame() -> UOwnedFrame {
     let message = UMessageBuilder::publish(
-        UUri::try_from_parts("authority-a", 0x5BA0, 0x01, 0x8002).expect("topic"),
+        UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x01, 0x8002).expect("topic"),
     )
     .build()
     .expect("message");

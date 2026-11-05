@@ -132,7 +132,7 @@ mod tests {
     fn format_message_id_returns_uuid_when_present() {
         let message_id = UUID::build();
         let message = UMessageBuilder::publish(
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001)
+            UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
                 .expect("source URI should build"),
         )
         .with_message_id(message_id.clone())
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn format_message_type_returns_debug_variant() {
         let message = publish_message(
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001)
+            UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
                 .expect("source URI should build"),
         );
 
@@ -157,21 +157,21 @@ mod tests {
 
     #[test]
     fn format_sink_uri_returns_uri_when_present() {
-        let sink = UUri::try_from_parts("authority-b", 0x5678, 0x1, 0x1234)
+        let sink = UUri::try_from_parts("authority-b", 0x0001_5678, 0x1, 0x1234)
             .expect("sink URI should build");
-        let source =
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0).expect("source URI should build");
+        let source = UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0)
+            .expect("source URI should build");
         let message = UMessageBuilder::request(sink.clone(), source, 5_000)
             .build()
             .expect("request message should build");
 
-        assert_eq!(format_sink_uri(&message), "authority-b/5678/1/1234");
+        assert_eq!(format_sink_uri(&message), "authority-b/5678/1/1/1234");
     }
 
     #[test]
     fn format_sink_uri_returns_none_when_absent() {
         let message = publish_message(
-            UUri::try_from_parts("authority-a", 0x5BA0, 0x1, 0x8001)
+            UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
                 .expect("source URI should build"),
         );
 
@@ -180,11 +180,11 @@ mod tests {
 
     #[test]
     fn format_source_uri_is_stable_compact_path() {
-        let source = UUri::try_from_parts("authority-a", 0x5ba0, 0x1, 0x8001)
+        let source = UUri::try_from_parts("authority-a", 0x0001_5BA0, 0x1, 0x8001)
             .expect("source URI should build");
         let message = publish_message(source);
 
-        assert_eq!(format_source_uri(&message), "authority-a/5BA0/1/8001");
+        assert_eq!(format_source_uri(&message), "authority-a/5BA0/1/1/8001");
     }
 
     #[test]
