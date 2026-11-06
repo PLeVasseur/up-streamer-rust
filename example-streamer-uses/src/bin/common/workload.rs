@@ -391,7 +391,12 @@ impl<T: PreparedEndpoint> up_rust::FrameSink<<T::Core as PreparedTransportCore>:
         let guard = LoanGuard::new(self.listener.loans.clone(), false);
         let admitted = match self.session.admit(raw) {
             Ok(frame) => frame,
-            Err(_) => return,
+            Err(error) => {
+                self.listener.report_error(Err(failure(format!(
+                    "native workload admission rejected: {error}"
+                ))));
+                return;
+            }
         };
         let result = (|| {
             let header = admitted.header().map_err(failure)?;
@@ -402,7 +407,7 @@ impl<T: PreparedEndpoint> up_rust::FrameSink<<T::Core as PreparedTransportCore>:
                     _ => false,
                 }
             {
-                return Ok(());
+                return Err(failure("native workload receive address differs"));
             }
             let frame = self.session.decode_compatibility_frame(admitted)?;
             if frame.try_contiguous_payload().is_none() {
@@ -854,6 +859,7 @@ where
     #[cfg(not(feature = "payload-contract-large-fixtures"))]
     let _ = &mut message;
     let loans = Arc::new(Loans::default());
+    let final_transport = Arc::clone(&transport);
     let endpoint = NativeEndpoint {
         transport,
         native: native.clone(),
@@ -867,7 +873,17 @@ where
         source,
         filters,
         message,
-        || Ok(()),
+        move || {
+            let counters = final_transport.core().native_failure_counters();
+            if !counters.is_empty() {
+                let evidence: serde_json::Map<String, serde_json::Value> = counters
+                    .iter()
+                    .map(|(name, count)| ((*name).to_owned(), json!(count)))
+                    .collect();
+                streamer_flow_evidence::emit_json_or_fail("OP_TRANSPORT_HEALTH ", &evidence);
+            }
+            native_health_status(&counters)
+        },
         loans,
     )
     .await;
@@ -886,6 +902,15 @@ where
         }
     }
     outcome
+}
+
+fn native_health_status(counters: &[(&str, u64)]) -> Result<(), UStatus> {
+    if let Some((name, count)) = counters.iter().find(|(_, count)| *count != 0) {
+        return Err(failure(format!(
+            "native transport health error: {name}={count}"
+        )));
+    }
+    Ok(())
 }
 
 /// Records an RPC client's response as processed and releases it.
@@ -1117,6 +1142,21 @@ mod rpc_burst_tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
     use up_rust::{PayloadEncoding, UUID};
+
+    #[test]
+    fn native_health_rejects_each_binding_failure() {
+        let names = [
+            "zenoh_publish_failed",
+            "zenoh_rejected_non_shm",
+            "zenoh_rejected_layout",
+        ];
+        assert!(native_health_status(&[]).is_ok());
+        assert!(native_health_status(&names.map(|name| (name, 0))).is_ok());
+        for name in names {
+            let error = native_health_status(&[(name, 1)]).unwrap_err();
+            assert!(error.to_string().contains(name));
+        }
+    }
 
     /// Selects the child run; its value is the scratch directory.
     const BURST_CHILD: &str = "UPROTOCOL_TEST_RPC_BURST_CHILD";

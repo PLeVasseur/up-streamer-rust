@@ -67,6 +67,11 @@ struct SessionRoute<C: PreparedTransportCore> {
 /// This composes existing binding setup APIs without changing native capacities
 /// or sending warm-up traffic. It is separate from first-client RPC admission.
 pub trait NativeSetupReady: PreparedTransportCore {
+    /// Reports native rejection/failure counts, excluding successful traffic.
+    fn native_failure_counters(&self) -> Vec<(&'static str, u64)> {
+        Vec::new()
+    }
+
     /// Completes configured connection/matching checks for the reserved TX addresses.
     fn wait_native_ready(
         &self,
@@ -82,6 +87,16 @@ impl NativeSetupReady for up_transport_iceoryx2_rust::Iceoryx2PreparedCore {
 }
 #[cfg(feature = "zenoh-zero-copy")]
 impl NativeSetupReady for up_transport_zenoh::ZenohPreparedCore {
+    fn native_failure_counters(&self) -> Vec<(&'static str, u64)> {
+        let stats = self.stats();
+        let ordering = std::sync::atomic::Ordering::SeqCst;
+        vec![
+            ("zenoh_publish_failed", stats.publish_failed.load(ordering)),
+            ("zenoh_rejected_non_shm", stats.rejected_non_shm.load(ordering)),
+            ("zenoh_rejected_layout", stats.rejected_layout.load(ordering)),
+        ]
+    }
+
     async fn wait_native_ready(
         &self,
         addresses: &[(UUri, Option<UUri>)],
