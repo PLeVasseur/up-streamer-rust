@@ -9,79 +9,56 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-[workspace]
-resolver = "2"
-members = [
-    "example-streamer-uses",
-    "utils/hello-world-protos",
-    "utils/integration-test-utils",
-    "example-streamer-implementations",
-    "configurable-streamer",
-    "up-linux-streamer-plugin",
-    "up-streamer",
-    "subscription-cache",
-    "utils/usubscription-static-file",
+[lints]
+workspace = true
+
+[package]
+name = "up-streamer"
+description = "uProtocol message and prepared-frame routing"
+rust-version.workspace = true
+version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+edition.workspace = true
+keywords.workspace = true
+license.workspace = true
+
+[features]
+default = []
+flow-evidence = ["dep:streamer-flow-evidence", "dep:serde_json"]
+experimental-copy-minimized-routing = [
+    "up-rust/up-l2-zero-copy",
 ]
+owned-frame-transport = ["up-rust/owned-frame-transport", "up-rust/wire-implementer-api", "up-rust/transport-implementer-api", "dep:serde_json"]
 
-[workspace.package]
-rust-version = "1.88"
-version = "0.1.0"
-repository = "https://github.com/eclipse-uprotocol/up-streamer-rust"
-homepage = "https://github.com/eclipse-uprotocol"
-edition = "2021"
-keywords = ["uProtocol", "SDV", "routing", "streamer"]
-license = "Apache-2.0"
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[workspace.dependencies]
-async-std = { version = "1.12.0", features = ["attributes"] }
-async-trait = { version = "0.1" }
-clap = { version = "4.5" }
-env_logger = { version = "0.10.1" }
-futures = { version = "0.3.30" }
-lazy_static = { version = "1.5.0" }
-log = { version = "0.4.20" }
-json5 = { version = "0.4.1" }
-serde = { version = "1.0.154", features = ["derive"] }
-serde_json = { version = "1.0.94" }
-uuid = { version = "1.7.0" }
-tokio = { version = "1.44", default-features = false, features = [
-    "rt",
-    "rt-multi-thread",
-    "sync",
-    "time",
-    "macros",
-] }
-protobuf = { version = "3.7.2", features = ["with-bytes"] }
-up-rust = { version = "0.9", default-features = false }
-up-transport-zenoh = { version = "0.9.0" }
-up-transport-vsomeip = { git = "https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust", rev = "278ab26415559d6cb61f40facd21de822032cc83", default-features = false }
-up-transport-mqtt5 = { version = "0.4.0" }
-zenoh = { version = "1.2.1", features = [
-    "default",
-    "plugins",
-    "unstable",
-    "internal",
-] }
-zenoh-core = { version = "1.2.1" }
-zenoh-plugin-trait = { version = "1.2.1" }
-zenoh-result = { version = "1.2.1" }
-zenoh-util = { version = "1.2.1" }
+[dependencies]
+tokio = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+tracing = { workspace = true }
+serde_json = { workspace = true, optional = true }
+up-rust = { workspace = true, features = ["usubscription"] }
+protobuf = { version = "3.3", features = ["with-bytes"] }
+arc-swap = "1.7"
+streamer-flow-evidence = { version = "=0.1.0", path = "../utils/streamer-flow-evidence", optional = true }
 
-[profile.dev]
-debug = true
-opt-level = 0
+[dev-dependencies]
+clap = { workspace = true, features = ["derive"] }
+up-native-profile = { workspace = true }
+test-case = "3.3"
+async-broadcast = { version = "0.7.0" }
+chrono = { version = "0.4.31", features = [] }
+criterion = { version = "0.5.1", features = ["csv_output"] }
+futures = { workspace = true }
+integration-test-utils = { version = "=0.1.0", path = "../utils/integration-test-utils" }
+tokio-condvar = { version = "0.3.0" }
+up-rust = { workspace = true, features = ["test-util", "transport-implementer-api", "wire-implementer-api", "up-l2-zero-copy", "native-inventory"] }
+up-transport-iceoryx2-rust = { workspace = true, features = ["benchmark-owned"] }
+up-transport-zenoh = { workspace = true, features = ["zero-copy"] }
+usubscription-static-file = { version = "=0.1.0", path = "../utils/usubscription-static-file" }
 
-[profile.fast]
-inherits = "release"
-opt-level = 3
-debug = true
-debug-assertions = true
-overflow-checks = true
-lto = false
-
-[profile.release]
-debug = false     # If you want debug symbol in release mode, set the env variable: RUSTFLAGS=-g
-lto = "fat"
-codegen-units = 1
-opt-level = 3
-panic = "abort"
+[[bench]]
+name = "streamer_criterion"
+harness = false

@@ -1,67 +1,197 @@
-# up-streamer-rust: what is in this repository
-
-## up-streamer
+# up-streamer
 
 Generic, pluggable uStreamer that should be usable in most places we need
-to write a uStreamer application to bridge from one transport to another.
+to bridge from one transport to another.
 
-Reference its README.md for further details.
 
-## example-streamer-implementations
+## Overview
 
-Two concrete implementations of a uStreamer as a binary. These can be used out of the box either to try running different UStreamer setups or to directly use them in a project!
+Public handwritten APIs use `missing_docs = "deny"` and strict Rustdoc/doctests.
+The [endpoint and subscription guide](docs/endpoints-and-subscriptions.md) explains
+endpoint construction, route ownership and refresh-health observations.
 
-Reference the README.md there for more details.
+Native routes use complete deployment agreement and default to Table mode. See
+the [native route policy guide](docs/native_routes.md) and
+`examples/native_route_identity.rs` for distinct equal-sized application types,
+explicit SingleType/classic-hop opt-in, and unchanged validation requirements.
 
-## example-streamer-uses
+Implementation of the uProtocol's uStreamer specification in Rust.
 
-A number of UEntity examples for SOME/IP, Zenoh and MQTT5. These can be used together with the example streamer implementations to run basic setups of either a publisher and a subscriber, or a service and a client.
+### Visual Breakdown
 
-Reference the README.md there for more details.
+```mermaid
+sequenceDiagram 
+    participant main thread
+    participant TransportForwarder - Foo
+    participant TransportForwarder - Bar
+    participant UPClientFoo owned thread / task
+    participant UPClientBar owned thread / task
 
-## Building
+    main thread->>main thread: let utransport_foo: Arc<dyn UTransport> = Arc::new(UPClientFoo::new())
+    main thread->>main thread: let local_authority = ...
+    main thread->>main thread: let local_endpoint = Endpoint::new(local_authority.clone(), utransport_foo.clone())
 
-### Only `up-streamer`
+    main thread->>main thread: let utransport_bar: Arc<dyn UTransport> = Arc::new(UPClientBar::new())
+    main thread->>main thread: let remote_authority = ...
+    main thread->>main thread: let remote_endpoint = Endpoint::new(remote_authority.clone(), utransport_bar.clone())
+  
+    main thread->>main thread: let ustreamer = UStreamer::new()
 
-If you only want to compile the library itself, you can as normal:
+    main thread->>main thread: ustreamer.add_route(local_endpoint, remote_endpoint)
+    main thread->>TransportForwarder - Foo: launch TransportForwarder - Foo
+    activate TransportForwarder - Foo
+    main thread->>UPClientFoo owned thread / task: (within ustreamer.add_route()) <br> local_endpoint.transport.lock().await.register_listener <br> (uauthority_to_uuri(remote_endpoint.authority), forwarding_listener).await
+    activate UPClientFoo owned thread / task
 
+    main thread->>main thread: ustreamer.add_route(remote_endpoint, local_endpoint)
+    main thread->>TransportForwarder - Bar: launch TransportForwarder - Bar
+    activate TransportForwarder - Bar
+    main thread->>UPClientBar owned thread / task: (within ustreamer.add_route()) <br> remote_endpoint.transport.lock().await.register_listener <br> (uauthority_to_uuri(local_endpoint.authority), forwarding_listener).await
+    activate UPClientBar owned thread / task
+
+    loop Park the main thread, let background tasks run until closing UStreamer app
+
+        par UPClientFoo thread / task calls ForwardingListener.on_receive()
+
+            UPClientFoo owned thread / task->>UPClientFoo owned thread / task: forwarding_listener.on_receive(UMessage)
+            UPClientFoo owned thread / task-->>TransportForwarder - Foo: Send UMesssage over channel
+            TransportForwarder - Foo->>TransportForwarder - Foo: out_transport.send(UMessage) <br> (out_transport => utransport_bar in this case)
+
+        end
+
+        par UPClientBar thread / task calls ForwardingListener.on_receive()
+
+            UPClientBar owned thread / task->>UPClientBar owned thread / task: forwarding_listener.on_receive(UMessage)
+            UPClientBar owned thread / task-->>TransportForwarder - Bar: Send UMesssage over channel
+            TransportForwarder - Bar->>TransportForwarder - Bar: out_transport.send(UMessage) <br> (out_transport => utransport_foo in this case)
+
+        end
+
+        deactivate UPClientFoo owned thread / task
+        deactivate UPClientBar owned thread / task
+        deactivate TransportForwarder - Foo
+        deactivate TransportForwarder - Bar
+
+    end
 ```
-cargo build
-```
 
-### Also build the reference Zenoh, vsomeip streamer implementations
+### Generating cargo docs locally
 
-You'll need to use the feature flags `vsomeip-transport`, `zenoh-transport` or `mqtt-transport` depending on which implementation you want to build. You then also have the option of including your own vsomeip or using one bundled in `up-transport-vsomeip`.
-
-For the bundled option, you have two options to set environment variables needed.
-
-#### Using `config.toml`
-
-Set the following environment variables (for example in your .cargo/config.toml file):
-
-```toml
-[env]
-GENERIC_CPP_STDLIB_PATH=<path to your c++ stdlib (for example /usr/include/c++/13)>
-ARCH_SPECIFIC_CPP_STDLIB_PATH=<path to your c++ stdlib (for example /usr/include/x86_64-linux-gnu/c++/13)>
-```
+Documentation can be generated locally with:
 
 ```bash
-cargo build --features vsomeip-transport,bundled-vsomeip,zenoh-transport
+cargo doc --package up-streamer --open
 ```
 
-#### Using `build/envsetup.sh`
+which will open your browser to view the docs.
 
-Alternatively, you may run:
+## Getting Started
 
-```shell
-build/envsetup.sh
+### Working with the library
+
+`up-streamer-rust` is generic and pluggable and can serve your needs so long as
+* Each transport you want to bridge over has a `up-transport-foo-rust` library
+  and UPTransportFoo struct which has `impl`ed `UTransport`
+
+### Usage
+
+After following along with the [cargo docs](#generating-cargo-docs-locally) generated to add all your forwarding rules, you'll then need to keep the instantiated `UStreamer` around and then pause the main thread, so it will not exit, while the routing happens in the background threads spun up.
+
+## Implementation Status
+
+- [x] Routing of Request, Response, and Notification Messages
+- [ ] Routing of Publish messages (requires further development of uSubscription interface)
+- [x] Mechanism to retrieve messages received on and sent over transports
+
+## Route Copy Semantics
+
+`up-streamer` exposes route diagnostics so applications can distinguish route
+behavior instead of inferring it from the endpoint transport type.
+
+- `UTransport` routes are compatibility routes through `UMessage` listener/send
+  APIs. They do not preserve selected-wire native frame metadata.
+- Owned-frame routes are owned/copying compatibility routes. They forward
+  `UOwnedFrame` metadata and payload bytes directly to the egress owned
+  transport, but they still make no generic no-copy forwarding claim.
+- Copy-minimized routes are feature-gated one-copy routes. They borrow receive
+  payload slices and copy those bytes into an egress transmit loan, avoiding an
+  intermediate owned payload allocation but still copying payload bytes once.
+- Selected-wire copy-minimized routes require both endpoints to use the same
+  static selected wire `W` through `UWireTransport<_, W>`. Mismatched selected
+  wire metadata is rejected by the selected-wire transport adapter before the
+  Streamer route forwards the frame.
+- Stable-container payloads on copy-minimized routes are fail-safe: malformed
+  stable-container metadata, payload length mismatch, or insufficient egress
+  alignment rejects the frame before forwarding.
+
+The generic Streamer does not claim end-to-end no-copy forwarding. Even selected
+wire routes remain one-copy copy-minimized routing: frame metadata and payload
+presence are preserved, while payload bytes are copied once into the egress
+loan.
+
+Prepared native routes reserve their address/extent catalog at setup. Optional
+`PreparedForwardObserver` callbacks borrow actual egress-loan bytes and complete
+every admitted ingress observation, including an unreserved-address rejection.
+Failed publication still charges its completed payload copy. See
+[prepared routing](docs/prepared-routing.md) for admission, accounting and teardown.
+
+## Benchmark regression checks
+
+`up-streamer` uses a pinned Criterion harness (`criterion = 0.5.1`) at:
+
+- `up-streamer/benches/streamer_criterion.rs`
+
+The helper script runs the benchmarks and can invoke the Rust threshold checker:
+
+```bash
+export CRITERION_ARGS="--sample-size 60 --warm-up-time 3 --measurement-time 12 --noise-threshold 0.02"
+if command -v taskset >/dev/null; then export BENCH_PIN_PREFIX="taskset -c 2"; else export BENCH_PIN_PREFIX=""; fi
+
+scripts/bench_streamer_criterion.sh baseline
+scripts/bench_streamer_criterion.sh candidate ergonomics_candidate_slice_a
+scripts/bench_streamer_criterion.sh guardrail ergonomics_candidate_slice_a "$OPENCODE_CONFIG_DIR/reports/ergonomics-perf/bench-data/criterion-guardrail.json"
+scripts/bench_streamer_criterion.sh export
 ```
 
-to set the environment variables.
+Threshold pass/fail evaluation is handled only by the Rust CLI:
 
-The environment variables are necessary because of a workaround done in `up-transport-vsomeip` due to not being able to figure out another way to compile vsomeip without them. (If you can figure out how to avoid this, I'm all ears!)
+```bash
+cargo run -p criterion-guardrail -- \
+  --criterion-root target/criterion \
+  --baseline ergonomics_baseline \
+  --candidate ergonomics_candidate_slice_a \
+  --throughput-threshold-pct 3 \
+  --latency-threshold-pct 5 \
+  --alloc-proxy-threshold-pct 5 \
+  --report "$OPENCODE_CONFIG_DIR/reports/ergonomics-perf/bench-data/criterion-guardrail.json"
+```
+# Copy and ownership boundaries
 
-Please reference the documentation for [vsomeip-sys](https://github.com/eclipse-uprotocol/up-transport-vsomeip-rust/tree/main/vsomeip-sys) for more details on:
-* the build requirements for vsomeip in the linked documentation in the COVESA repo
-* the environment variables which must be set
+Native receive and typed borrowing retain binding-owned storage. Copy-minimized
+cross-backend routes currently copy once into an egress loan; they are not claimed
+end-to-end zero-copy. Opt-in flow evidence records actual copied bytes separately
+from payload identity and loan provenance. See [native routes](docs/native_routes.md).
 
+## Package dependencies
+
+Source dependencies have exact Git revisions and matching archive version
+requirements. The optional flow-evidence helper remains workspace-internal;
+offline extracted checks use the matching helper, SDK and binding sources. See
+[package dependency boundaries](docs/packaging.md) for archive normalization and
+the distinction from registry availability.
+
+
+Prepared native routes expose optional successful-handoff observations under the
+existing `flow-evidence` feature. Their scope and observer costs are described in
+[Optional flow observations](docs/prepared-routing.md#optional-flow-observations);
+physical copied-loan inspection and statistics remain separate APIs.
+
+The optional observations also cover owned/classic-to-native copying adapters,
+with the same successful API boundary and explicit observer cost scope.
+
+Optional native flow evidence also hashes the actual initialized egress-loan
+payload before native put and records completion, including failed puts. See
+[Optional flow observations](docs/prepared-routing.md#optional-flow-observations)
+for endpoint correlation, presence, cost and disabled-observer behavior.
+
+Native classic/frame bridge projection records follow successful SDK agreement validation and report the actual token addition or removal. They do not claim typed payload validation. See the [native route guide](docs/native_routes.md).
